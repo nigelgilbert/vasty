@@ -43,8 +43,8 @@ label has none.
   unreadable label returns `provider_error` and changes nothing.
 - `run` releases an auto-reserved box through `release_lease` when the job
   exits or SIGINT arrives, and also when the post-exit save or the SIGINT
-  wait raises. The attached result's `swept` includes the entries of the
-  release refresh.
+  wait raises. The `run` result's `swept` includes the entries of the
+  reserve wait and the release refresh, one per lease, `ok` and `error`.
 - `extend` reloads its targets from `leases.json` under the lock. A target
   with `destroy_pending` returns `lease_expired` and keeps its cache entry.
   Every other target then gets `check_writable` on the reloaded copy: a
@@ -61,7 +61,7 @@ it adopts an orphan. A lease whose label `miss` lists `watchdog` or
   calls follows `retry_delay`.
 - A successful probe reruns the adoption script when the box is an adopted
   orphan: the cache marks it `adopted`, the box holds the `adopted` marker
-  the script writes, or the box lacks both the guard file and
+  the script writes first, or the box lacks both the guard file and
   `startup.started`. A probe that finds the marker sets `adopted` in the
   cache, so a lost cache entry still gets reruns after a container restart.
   Boxes adopted before the marker existed rely on the cache flag. `onstart`
