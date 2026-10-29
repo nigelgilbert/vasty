@@ -147,14 +147,29 @@ def build_parser() -> Parser:
 
     p = sub.add_parser("config", parents=[out], help="show or change configuration")
     action = p.add_subparsers(dest="action", parser_class=Parser, required=True)
-    action.add_parser("show", parents=[out])
+    show = action.add_parser("show", parents=[out])
+    show.add_argument("--profile")
+    show.add_argument("--config", dest="config_stdin", metavar="-")
+    show.add_argument("--owner")
+    show.add_argument("--ttl")
+    show.add_argument("--startup", metavar="FILE|-")
+    show.add_argument("--gpu")
+    show.add_argument("--vram")
+    show.add_argument("--gpus")
+    show.add_argument("--disk")
+    show.add_argument("--image")
+    show.add_argument("--max-price", dest="max_price")
+    show.add_argument("--region")
+    show.add_argument("--ports")
     cset = action.add_parser("set", parents=[out])
     cset.add_argument("key")
     cset.add_argument("value")
     action.add_parser("profiles", parents=[out])
 
     p = sub.add_parser("completion", parents=[out], help="print a shell completion script")
-    p.add_argument("shell", choices=["bash", "zsh", "fish"])
+    p.add_argument("shell", nargs="?", choices=["bash", "zsh", "fish"])
+    p.add_argument("--list", dest="list_kind", choices=["leases", "groups", "profiles"],
+                   help=argparse.SUPPRESS)
     return root
 
 
