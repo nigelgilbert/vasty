@@ -38,7 +38,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         direction="push" if push else "pull",
         src=args.src,
         dest=args.dest,
-        warnings=lease_warnings(ctx, snap, lease, snap.now),
+        warnings=lease_warnings(ctx, snap, lease, ctx.clock.now()),
         swept=list(snap.swept),
     )
     if push:

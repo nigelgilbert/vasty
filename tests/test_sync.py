@@ -88,3 +88,16 @@ def test_sync_carries_lease_warnings(harness: Harness) -> None:
     code, data, _ = sync(harness, "ft", "pull", "a", "b")
     assert code == 0
     assert [w["code"] for w in data["warnings"]] == ["expiring_soon"]
+
+
+def test_sync_warnings_use_the_clock_after_transfer(harness: Harness, box: int) -> None:
+    real = harness.box.rsync
+
+    def slow(*args: Any) -> int:
+        harness.time.advance(2800)
+        return real(*args)
+
+    harness.box.rsync = slow  # type: ignore[method-assign]
+    code, data, _ = sync(harness, "ft", "pull", "a", "b")
+    assert code == 0
+    assert [w["code"] for w in data["warnings"]] == ["expiring_soon"]

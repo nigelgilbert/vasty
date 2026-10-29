@@ -2,8 +2,8 @@
 
 Without `--on`, `run` reserves a box with `run_ttl` (or `--ttl`), runs the
 command and releases the box when the command exits. `--detach` and `--name`
-leave the box alive. A failure before the job starts releases a box this call
-created. `--on LEASE` reuses a box and leaves it alive.
+leave the box alive. Any exception before the job is saved to the cache
+releases a box this call created. `--on LEASE` reuses a box and leaves it alive.
 
 Every job starts under tmux in `/workspace` and is recorded in the cache. An
 attached run streams the log to stdout in human mode and to stderr in JSON
@@ -100,22 +100,22 @@ def warn_if_expiring(ctx: Context, lease: CachedLease, now: int) -> None:
         ctx.warn(f"rig: lease {lease.lease} expires in {span(remaining)}. Extend it: {fix}")
 
 
-def _check_sync_dir(ctx: Context, directory: str) -> None:
+def _check_sync_dir(ctx: Context, directory: str) -> Path:
+    """Expand `~`, resolve against `ctx.cwd` and return the directory, else raise `invalid_arguments`."""
     path = Path(directory).expanduser()
     if not path.is_absolute():
         path = ctx.cwd / path
     if not path.is_dir():
         raise invalid(f"--sync {directory} is not a directory.", "Pass a local directory to --sync.")
+    return path
 
 
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     command = shlex.join(args.command)
-    sync_dir: str | None = args.sync_dir
     detach = bool(args.detach)
     auto = args.on is None
-    require_tools(ctx, "ssh", *(["rsync"] if sync_dir is not None else []))
-    if sync_dir is not None:
-        _check_sync_dir(ctx, sync_dir)
+    require_tools(ctx, "ssh", *(["rsync"] if args.sync_dir is not None else []))
+    sync_dir = _check_sync_dir(ctx, args.sync_dir) if args.sync_dir is not None else None
     ttl = auto_ttl(ctx) if auto else 0
 
     snap = engine.refresh(ctx)
@@ -135,16 +135,16 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     try:
         target = engine.ssh_target(lease)
         if sync_dir is not None:
-            push_dir(ctx, target, sync_dir)
+            push_dir(ctx, target, str(sync_dir))
         now = ctx.clock.now()
         warn_if_expiring(ctx, lease, now)
         job = Job(id=next_job_id(lease), cmd=command, started_at=None, exit=None, state="running")
         started = ctx.box.start_job(target, job, command)
-    except (RigError, KeyboardInterrupt):
+        save_lease(ctx, lease, lambda record: _put_job(record, started))
+    except BaseException:
         if created:
             release_quietly(ctx, lease)
         raise
-    save_lease(ctx, lease, lambda record: _put_job(record, started))
     warnings = merge_warnings(warnings, lease_warnings(ctx, snap, lease, now))
 
     if detach:

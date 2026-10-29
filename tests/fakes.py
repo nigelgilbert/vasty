@@ -202,6 +202,8 @@ class BoxState:
     signals: list[tuple[str, str]] = field(default_factory=list)
     execs: list[str] = field(default_factory=list)
     exec_results: dict[str, ExecResult] = field(default_factory=dict)
+    exec_errors: dict[str, BaseException] = field(default_factory=dict)
+    """Errors `exec` raises for a command that starts with the key."""
     unsupported: list[str] = field(default_factory=list)
 
 
@@ -298,6 +300,9 @@ class FakeBox:
     def exec(self, target: SshTarget, command: str, timeout: float | None = None) -> ExecResult:
         box = self._get(target)
         box.execs.append(command)
+        for prefix, error in box.exec_errors.items():
+            if command.startswith(prefix):
+                raise error
         for prefix, result in box.exec_results.items():
             if command.startswith(prefix):
                 return result

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from typing import Any
 
 import pytest
@@ -8,7 +9,7 @@ import pytest
 from fakes import FakeReserve, Harness, add_lease
 from rig.commands import serve
 from rig.models import Job
-from rig.remote import ExecResult, SshTarget
+from rig.remote import BoxUnreachableError, ExecResult, SshTarget
 
 QWEN = "Qwen/Qwen3-72B-Instruct"
 KEY = "rig-" + "ab" * 32
@@ -117,6 +118,42 @@ def test_serve_install_failure(harness: Harness, box: int, started: list[tuple[J
     assert started == []
 
 
+def _timed_out() -> BoxUnreachableError:
+    err = BoxUnreachableError("The box did not answer within 1800s.")
+    err.__cause__ = subprocess.TimeoutExpired("ssh", serve.INSTALL_TIMEOUT_S)
+    return err
+
+
+def test_serve_install_timeout_is_serve_failed(
+    harness: Harness, box: int, started: list[tuple[Job, str]]
+) -> None:
+    harness.box.state(box).exec_errors["V="] = _timed_out()
+    code, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
+    assert code == 2 and data["error"] == "serve_failed"
+    assert "did not finish within 1800s" in data["message"]
+    assert data["hint"] == serve.INSTALL_HINT
+    assert started == []
+
+
+def test_serve_install_lost_connection_stays_box_unreachable(harness: Harness, box: int) -> None:
+    harness.box.state(box).exec_errors["V="] = BoxUnreachableError()
+    code, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
+    assert code == 2 and data["error"] == "box_unreachable"
+
+
+def test_serve_warnings_use_the_clock_after_bring_up(harness: Harness, box: int) -> None:
+    real = harness.box.exec
+
+    def slow(target: SshTarget, command: str, timeout: float | None = None) -> ExecResult:
+        harness.time.advance(2800)
+        return real(target, command, timeout)
+
+    harness.box.exec = slow  # type: ignore[method-assign]
+    code, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
+    assert code == 0
+    assert [w["code"] for w in data["warnings"]] == ["expiring_with_running_job"]
+
+
 def test_serve_on_unknown_model_serves_path(
     harness: Harness, box: int, started: list[tuple[Job, str]]
 ) -> None:
@@ -215,6 +252,13 @@ def test_serve_failure_releases_reserved_box(harness: Harness, reserve: FakeRese
     harness.box.state(1001).exec_results["V="] = ExecResult(1, "", "pip exploded")
     code, data, _ = run_serve(harness, "--model", QWEN)
     assert code == 2 and data["error"] == "serve_failed"
+    assert harness.provider.destroyed == [1001]
+
+
+def test_serve_os_error_releases_reserved_box(harness: Harness, reserve: FakeReserve) -> None:
+    harness.box.state(1001).exec_errors["V="] = OSError("ssh: fork failed")
+    with pytest.raises(OSError):
+        run_serve(harness, "--model", QWEN)
     assert harness.provider.destroyed == [1001]
 
 

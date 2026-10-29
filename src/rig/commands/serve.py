@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import re
 import shlex
+import subprocess
 from dataclasses import dataclass
 
 from rig import engine
@@ -35,7 +36,7 @@ from rig.config import ModelEntry, resolve
 from rig.context import Context
 from rig.errors import RigError
 from rig.models import CachedLease, Job, ServeResult, WarningItem
-from rig.remote import SshTarget
+from rig.remote import BoxUnreachableError, SshTarget
 from rig.state import effective_expiry
 from rig.timeutil import iso
 
@@ -46,6 +47,7 @@ INSTALL_TIMEOUT_S = 1800.0
 READY_DEADLINE_S = 1800.0
 POLL_INTERVAL_S = 5.0
 HTTP_TIMEOUT_S = 5.0
+INSTALL_HINT = "Check the box with rig ssh LEASE, or pass --image with vLLM preinstalled."
 _TAG_VERSION = re.compile(r"v?([0-9]+(?:\.[0-9]+)*(?:\.post[0-9]+)?)")
 
 
@@ -150,13 +152,13 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
 
     try:
         result = _bring_up(ctx, snap, lease, plan)
-    except (RigError, KeyboardInterrupt):
+    except BaseException:
         if created:
             from rig.commands.run import release_quietly
 
             release_quietly(ctx, lease)
         raise
-    result.warnings = merge_warnings(warnings, lease_warnings(ctx, snap, lease, snap.now))
+    result.warnings = merge_warnings(warnings, lease_warnings(ctx, snap, lease, ctx.clock.now()))
     return Outcome(result, human=_human(result))
 
 
@@ -207,13 +209,29 @@ def _put_job(lease: CachedLease, job: Job) -> None:
 
 
 def _install(ctx: Context, target: SshTarget, pin: str) -> None:
-    done = ctx.box.exec(target, install_command(pin), timeout=INSTALL_TIMEOUT_S)
+    """Install the pinned vLLM. Raise `serve_failed` on a non-zero exit or a timeout.
+
+    `SshBox` reports a timeout as `BoxUnreachableError` caused by
+    `subprocess.TimeoutExpired`. A lost connection carries no such cause and
+    stays `box_unreachable`.
+    """
+    try:
+        done = ctx.box.exec(target, install_command(pin), timeout=INSTALL_TIMEOUT_S)
+    except BoxUnreachableError as err:
+        if not isinstance(err.__cause__, subprocess.TimeoutExpired):
+            raise
+        raise RigError(
+            "serve_failed",
+            f"Installing vllm=={pin} into {VENV} did not finish within {int(INSTALL_TIMEOUT_S)}s.",
+            INSTALL_HINT,
+            details={"timeout_s": int(INSTALL_TIMEOUT_S)},
+        ) from err
     if done.exit != 0:
         detail = (done.stderr.strip() or done.stdout.strip()).splitlines()[-5:]
         raise RigError(
             "serve_failed",
             f"Installing vllm=={pin} into {VENV} exited {done.exit}.",
-            "Check the box with rig ssh LEASE, or pass --image with vLLM preinstalled.",
+            INSTALL_HINT,
             details={"exit": done.exit, "output": detail},
         )
 

@@ -205,6 +205,41 @@ def test_sigint_keeps_named_box(harness: Harness, reserve: FakeReserve) -> None:
 # Auto-reserve.
 
 
+def test_os_error_before_job_releases_auto_box(harness: Harness, reserve: FakeReserve) -> None:
+    def broken(target: SshTarget, job: Job, command: str) -> Job:
+        raise OSError("ssh: fork failed")
+
+    harness.box.start_job = broken  # type: ignore[method-assign]
+    with pytest.raises(OSError):
+        run(harness, "--", "python", "train.py")
+    assert harness.provider.destroyed == [1001]
+
+
+def test_save_failure_after_job_start_releases_auto_box(
+    harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rig.commands import run as run_cmd
+
+    def broken(*args: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(run_cmd, "save_lease", broken)
+    with pytest.raises(OSError):
+        run(harness, "--", "python", "train.py")
+    assert harness.box.state(1001).jobs["j-1"].state == "running"
+    assert harness.provider.destroyed == [1001]
+
+
+def test_os_error_before_job_keeps_existing_box(harness: Harness, box: int) -> None:
+    def broken(target: SshTarget, job: Job, command: str) -> Job:
+        raise OSError("ssh: fork failed")
+
+    harness.box.start_job = broken  # type: ignore[method-assign]
+    with pytest.raises(OSError):
+        run(harness, "--on", "ft", "--", "ls")
+    assert harness.provider.destroyed == []
+
+
 def test_auto_run_uses_run_ttl_and_releases(harness: Harness, reserve: FakeReserve) -> None:
     code, data, _ = run(harness, "--", "python", "train.py")
     assert code == 0
@@ -326,7 +361,17 @@ def test_sync_relative_dir_resolves_from_cwd(harness: Harness, box: int) -> None
     (harness.home / "project" / "src").mkdir()
     code, _, _ = run(harness, "--on", "ft", "--sync", "src", "--", "ls")
     assert code == 0
-    assert harness.box.rsyncs[0][2] == "src/"
+    assert harness.box.rsyncs[0][2] == f"{harness.home}/project/src/"
+
+
+def test_sync_tilde_dir_pushes_the_expanded_path(
+    harness: Harness, box: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(harness.home))
+    (harness.home / "proj").mkdir()
+    code, _, _ = run(harness, "--on", "ft", "--sync", "~/proj", "--", "ls")
+    assert code == 0
+    assert harness.box.rsyncs[0][2] == f"{harness.home}/proj/"
 
 
 def test_sync_needs_rsync(harness: Harness, box: int, tmp_path: Path) -> None:
