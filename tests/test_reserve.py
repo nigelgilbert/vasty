@@ -381,6 +381,22 @@ def test_invalid_name(h: Harness) -> None:
     assert data["error"] == "invalid_arguments"
 
 
+@pytest.mark.parametrize("ttl", ["1h1h", "30m1h", "1h0m"])
+def test_ttl_uses_extend_duration_grammar(h: Harness, ttl: str) -> None:
+    code, data = run_json(h, "reserve", "--ttl", ttl)
+    assert (code, data["error"]) == (1, "invalid_arguments")
+    assert calls(h, "create") == []
+
+
+def test_ttl_accepts_chained_units(h: Harness) -> None:
+    code, data = run_json(h, "reserve", "--ttl", "1h30m")
+    assert code == 0, data
+    (request,) = h.provider.created
+    created = parse(request.label)
+    assert isinstance(created, Label)
+    assert created.ttl == 5400
+
+
 # Budget.
 
 

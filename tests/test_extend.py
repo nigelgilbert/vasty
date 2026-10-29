@@ -98,6 +98,17 @@ def test_extend_needs_exactly_one_flag(h: Harness, flags: list[str]) -> None:
     assert data["error"] == "invalid_arguments"
 
 
+@pytest.mark.parametrize("flag", ["--by", "--to"])
+@pytest.mark.parametrize("text", ["1h1h", "30m1h", "1h0m"])
+def test_extend_uses_reserve_ttl_grammar(h: Harness, flag: str, text: str) -> None:
+    row = add_lease(h, label={"expires": NOW + 600})
+    code, data = run_json(h, "extend", "l-0000a001", flag, text)
+    assert (code, data["error"]) == (1, "invalid_arguments")
+    assert label_of(h, row.id).expires == NOW + 600
+    code, data = run_json(h, "reserve", "--ttl", text)
+    assert (code, data["error"]) == (1, "invalid_arguments")
+
+
 def test_extend_to_past_points_at_release(h: Harness) -> None:
     row = add_lease(h, label={"expires": NOW + 600})
     code, data = run_json(h, "extend", "l-0000a001", "--until", "2026-10-29T00:30:00Z")

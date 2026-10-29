@@ -491,9 +491,20 @@ def test_duration_parse_and_format(text: str, seconds: int) -> None:
     assert format_duration(seconds) == text
 
 
-@pytest.mark.parametrize("text", ["0m", "30", "m", "1.5h", "-1h", "1w", ""])
+@pytest.mark.parametrize(
+    "text",
+    ["0m", "0s", "0", "30", "m", "1.5h", "-1h", "1w", "", "1h1h", "30m1h", "1h0m", "0h30m"],
+)
 def test_duration_rejects(text: str) -> None:
     assert parse_duration(text) is None
+
+
+@pytest.mark.parametrize("text", ["1h1h", "30m1h", "1h0m"])
+def test_config_file_duration_uses_flag_grammar(cfg: Env, text: str) -> None:
+    cfg.user(f'[defaults]\nttl = "{text}"\n')
+    err = cfg.error()
+    assert err.code == "invalid_config"
+    assert "ttl" in err.message
 
 
 # `config show`.
@@ -562,6 +573,13 @@ def test_config_set_preserves_other_values(harness: Harness) -> None:
         "profiles": {"big": {"gpu": "A100", "vram": 80}},
         "models": {"Qwen/Qwen3-72B-Instruct": {"quant": "awq"}},
     }
+
+
+def test_config_set_drops_comments(harness: Harness) -> None:
+    path = write(user_config_path(harness.home), '# note\n[defaults]\nttl = "1h"\n')
+    assert harness.run("config", "set", "defaults.disk", "80")[0] == 0
+    assert "#" not in path.read_text()
+    assert read_user(harness) == {"defaults": {"ttl": "1h", "disk": 80}}
 
 
 @pytest.mark.parametrize(

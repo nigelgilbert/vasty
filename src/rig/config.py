@@ -10,7 +10,7 @@ values raise `invalid_config`. An unknown `--profile` name raises
 setting: the highest layer that sets either wins, and one table setting both
 raises `invalid_config`.
 
-This module imports only the standard library and `rig.errors`.
+This module imports only the standard library, `rig.errors` and `rig.timeutil`.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from rig import timeutil
 from rig.errors import RigError
 
 SOURCES = ("flag", "stdin", "profile", "env", "project", "user", "default")
@@ -78,9 +79,6 @@ BUILTIN_MODELS: dict[str, dict[str, Any]] = {
 }
 
 _OWNER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}")
-_DURATION = re.compile(r"(?:\d+[smhd])+")
-_DURATION_PART = re.compile(r"(\d+)([smhd])")
-_UNITS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
 _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 
 
@@ -157,11 +155,14 @@ class _Origin:
 
 
 def parse_duration(text: str) -> int | None:
-    """Return seconds for `30m`, `1h30m` or `2d`, or None when the text is no duration."""
-    if not _DURATION.fullmatch(text):
+    """Return seconds for `30m`, `1h30m` or `2d`, or None when the text is no duration.
+
+    The grammar is `timeutil.parse_duration`'s, so config values and flags agree.
+    """
+    try:
+        return timeutil.parse_duration(text)
+    except RigError:
         return None
-    total = sum(int(n) * _UNITS[u] for n, u in _DURATION_PART.findall(text))
-    return total if total > 0 else None
 
 
 def format_duration(seconds: int) -> str:
@@ -169,7 +170,7 @@ def format_duration(seconds: int) -> str:
     if seconds <= 0:
         return "0s"
     parts = []
-    for unit, size in _UNITS.items():
+    for unit, size in timeutil.UNITS.items():
         count, seconds = divmod(seconds, size)
         if count:
             parts.append(f"{count}{unit}")
