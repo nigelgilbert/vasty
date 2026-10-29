@@ -98,7 +98,16 @@ def test_parse_http_date(value: str) -> None:
     assert parse_http_date(value) == 1793235840.0
 
 
-@pytest.mark.parametrize("value", [None, "", "garbage", "Thu, 99 Oct 2026 01:04:00 GMT"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        "",
+        "garbage",
+        "Thu, 99 Oct 2026 01:04:00 GMT",
+        "Mon, 01 Jan 100000000000000000000 00:00:00 GMT",
+    ],
+)
 def test_parse_http_date_unparsable(value: str | None) -> None:
     assert parse_http_date(value) is None
 

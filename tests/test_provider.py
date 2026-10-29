@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import pytest
@@ -20,7 +21,6 @@ from rig.provider import (
     gpu_name_filter,
     normalize_ports,
     parse_charges,
-    parse_date_header,
 )
 
 DATE = "Thu, 29 Oct 2026 01:00:00 GMT"
@@ -409,11 +409,24 @@ def test_transport_and_shape_errors_map_to_provider_error() -> None:
 # Date header.
 
 
-def test_parse_date_header() -> None:
-    assert parse_date_header(DATE) == DATE_EPOCH
-    assert parse_date_header(None) is None
-    assert parse_date_header("") is None
-    assert parse_date_header("yesterday-ish") is None
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({"Date": DATE}, (DATE_EPOCH, 7.0)),
+        ({"Date": None}, None),
+        ({"Date": ""}, None),
+        ({"Date": "yesterday-ish"}, None),
+        ({"Date": 1_793_235_600}, None),
+        ({"Date": "Mon, 01 Jan 100000000000000000000 00:00:00 GMT"}, None),
+        ({}, None),
+        (None, None),
+    ],
+)
+def test_record_reads_date_header(headers: dict[str, Any] | None,
+                                  expected: tuple[float, float] | None) -> None:
+    provider = VastProvider("test-key", client_factory=lambda retry: None, monotonic=lambda: 7.0)
+    provider._record(SimpleNamespace(headers=headers))
+    assert provider.last_date() == expected
 
 
 def test_last_date_tracks_latest_response() -> None:

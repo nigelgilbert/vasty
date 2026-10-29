@@ -39,10 +39,10 @@ import math
 import re
 import time
 from contextlib import contextmanager
-from datetime import timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterator, Protocol
 
+from rig import timeutil
 from rig.errors import RigError
 from rig.models import Charges, CreateRequest, Instance, Offer, OfferQuery, SshKey
 
@@ -324,21 +324,6 @@ def normalize_ssh_keys(data: object) -> list[SshKey]:
     return out
 
 
-def parse_date_header(value: object) -> float | None:
-    """Parse an HTTP `Date` header into epoch seconds, or None when missing or unparsable."""
-    if not isinstance(value, str) or not value.strip():
-        return None
-    from email.utils import parsedate_to_datetime
-
-    try:
-        parsed = parsedate_to_datetime(value)
-    except (TypeError, ValueError, IndexError):
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.timestamp()
-
-
 class _Recorder:
     """Forward calls to an HTTP client and report each response."""
 
@@ -406,7 +391,7 @@ class VastProvider:
     def _record(self, response: Any) -> None:
         headers = getattr(response, "headers", None)
         value = headers.get("Date") if headers is not None else None
-        epoch = parse_date_header(value)
+        epoch = timeutil.parse_http_date(value if isinstance(value, str) else None)
         self._date = None if epoch is None else (epoch, self._monotonic())
 
     def search_offers(self, query: OfferQuery) -> list[Offer]:
