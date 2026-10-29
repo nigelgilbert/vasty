@@ -1,9 +1,9 @@
 """`rig serve` (spec §4.7, §5.1).
 
 `serve` maps `--model` to hardware through the `[models."NAME"]` tables.
-Without `--on` it copies the entry's `vram`, `gpu` and `image` into the flag
-layer before settings resolve, so flags the user gave win, then reserves a
-box with `run_ttl` (or `--ttl`). A model with no entry needs `--vram` and
+Without `--on` it resolves settings with the entry's `vram`, `gpu` and
+`image` as the `model` layer, below flags the user gave, then reserves a box
+with `run_ttl` (or `--ttl`). A model with no entry needs `--vram` and
 `--image` to auto-reserve. With `--on` any model name or box path serves.
 
 On the box, `serve` installs the pinned vLLM into `/workspace/.rig/venv` when
@@ -62,13 +62,12 @@ def model_entry(ctx: Context, model: str) -> ModelEntry | None:
     return settings.models.get(model)
 
 
-def apply_overrides(ctx: Context, entry: ModelEntry | None) -> None:
-    """Copy the entry's `vram`, `gpu` and `image` into `ctx.flags` where the user gave none."""
-    if entry is None:
-        return
-    for key, value in (("vram", entry.vram), ("gpu", entry.gpu), ("image", entry.image)):
-        if value is not None and ctx.flags.get(key) is None:
-            ctx.flags[key] = value
+def resolve_with_model(ctx: Context, model: str) -> None:
+    """Fix `ctx.settings` with the model's entry as the `model` layer below the flags."""
+    ctx._settings = resolve(
+        ctx.flags, ctx.stdin_json, ctx.profile, ctx.env, ctx.cwd, ctx.home,
+        stdin_text=ctx.stdin.read, model=model,
+    )
 
 
 def vllm_pin(entry: ModelEntry | None) -> str:
@@ -131,7 +130,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
                 f"Model {args.model!r} has no [models] entry.",
                 f'Pass --vram GB and --image IMAGE, or add [models."{args.model}"] to config.',
             )
-        apply_overrides(ctx, entry)
+        resolve_with_model(ctx, args.model)
     quant = args.quant if args.quant is not None else (entry.quant if entry else None)
     plan = _Plan(args.model, quant, entry, bool(args.bind_local))
     require_tools(ctx, "ssh")

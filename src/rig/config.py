@@ -52,6 +52,8 @@ DEFAULT_KEYS: dict[str, str] = {
 PROFILE_KEYS: dict[str, str] = {k: v for k, v in DEFAULT_KEYS.items() if k != "daily_budget"}
 TOP_KEYS: dict[str, str] = {"api_key_env": "str", "owner": "owner", "ssh_key": "path"}
 MODEL_KEYS: dict[str, str] = {"vram": "number", "quant": "str", "image": "str", "gpu": "str"}
+# Model-entry keys `serve` applies as reservation settings.
+MODEL_LAYER_KEYS: dict[str, str] = {k: MODEL_KEYS[k] for k in ("vram", "gpu", "image")}
 TABLE_KEYS = ("defaults", "profiles", "models")
 FLAG_KEYS: dict[str, str] = {**PROFILE_KEYS, "owner": "owner"}
 
@@ -445,10 +447,13 @@ def resolve(
     cwd: Path,
     home: Path,
     stdin_text: Callable[[], str] | None = None,
+    model: str | None = None,
 ) -> Settings:
     """Merge every layer into `Settings`. Raise `invalid_config` on unknown keys or bad types.
 
-    `stdin_text` returns stdin for `--startup -`.
+    `stdin_text` returns stdin for `--startup -`. `model` names a `[models]`
+    entry whose `vram`, `gpu` and `image` form the `model` layer. That layer
+    sits below flags and above stdin, so `serve --vram` beats the entry.
     """
     user = _load(user_config_path(home), "user", home)
     project_files = [_load(p, "project", home) for p in project_config_paths(cwd)]
@@ -482,8 +487,15 @@ def resolve(
         origin = _Origin("stdin", "--config - JSON", cwd)
         stdin_layer = _convert_table(stdin_json, PROFILE_KEYS, origin, "", home)
 
+    model_layer: dict[str, Any] = {}
+    if model is not None and model in models:
+        origin = _Origin("model", f'[models."{model}"]', cwd)
+        entry = {k: v for k, v in models[model].items() if k in MODEL_LAYER_KEYS}
+        model_layer = _convert_table(entry, MODEL_LAYER_KEYS, origin, "", home)
+
     layers: list[tuple[str, Mapping[str, Any]]] = [
         ("flag", _flag_layer(flags, cwd, home)),
+        ("model", model_layer),
         ("stdin", stdin_layer),
         ("profile", selected),
         ("env", _env_layer(env, cwd, home)),

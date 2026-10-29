@@ -236,6 +236,18 @@ def test_serve_user_flags_beat_entry(harness: Harness, reserve: FakeReserve) -> 
     )
 
 
+def test_serve_name_reuse_checks_only_given_flags(harness: Harness, box: int) -> None:
+    code, data, _ = run_serve(harness, "--model", QWEN, "--name", "ft")
+    assert code == 0
+    assert data["lease"] == "l-0000a001"
+    assert not [w for w in data.get("warnings", []) if w["code"] == "flag_mismatch"]
+    code, data, _ = run_serve(harness, "--model", QWEN, "--name", "ft", "--vram", "48")
+    assert code == 0
+    mismatch = [w for w in data["warnings"] if w["code"] == "flag_mismatch"]
+    assert len(mismatch) == 1
+    assert mismatch[0]["message"].endswith("differs from --vram")
+
+
 def test_serve_unknown_model_needs_vram_and_image(
     harness: Harness, reserve: FakeReserve
 ) -> None:

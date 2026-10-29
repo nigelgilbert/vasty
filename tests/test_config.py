@@ -49,10 +49,11 @@ class Env:
         stdin_json: dict[str, Any] | None = None,
         profile: str | None = None,
         stdin_text: str | None = None,
+        model: str | None = None,
     ) -> Settings:
         reader = (lambda: stdin_text) if stdin_text is not None else None
         return resolve(flags or {}, stdin_json, profile, self.env, self.cwd, self.home,
-                       stdin_text=reader)
+                       stdin_text=reader, model=model)
 
     def error(self, **kw: Any) -> RigError:
         with pytest.raises(RigError) as exc:
@@ -463,6 +464,37 @@ def test_config_models_add_and_override(cfg: Env) -> None:
                                              gpu="4090")
 
 
+def test_model_layer_sources(cfg: Env) -> None:
+    cfg.env["RIG_VRAM"] = "24"
+    s = cfg.resolve(model="Qwen/Qwen3-72B-Instruct")
+    assert (s.vram, s.image) == (80.0, "vllm/vllm-openai:v0.6.3")
+    assert (s.sources["vram"], s.sources["image"]) == ("model", "model")
+    assert s.sources["gpu"] == "default"
+
+
+def test_flag_beats_model_layer(cfg: Env) -> None:
+    s = cfg.resolve(flags={"vram": "48", "image": "my/img"}, model="Qwen/Qwen3-72B-Instruct")
+    assert (s.vram, s.image) == (48.0, "my/img")
+    assert (s.sources["vram"], s.sources["image"]) == ("flag", "flag")
+
+
+def test_model_layer_beats_lower_layers(cfg: Env) -> None:
+    cfg.user('[defaults]\ngpu = "H100"\n[profiles.small]\nvram = 24\n'
+             '[models."org/small"]\nvram = 40\ngpu = "4090"\nquant = "awq"\n')
+    cfg.project('[defaults]\nimage = "proj/img"\n')
+    s = cfg.resolve(stdin_json={"gpu": "L40S"}, profile="small", model="org/small")
+    assert (s.vram, s.gpu, s.image) == (40.0, "4090", "proj/img")
+    assert (s.sources["vram"], s.sources["gpu"], s.sources["image"]) == (
+        "model", "model", "project")
+
+
+def test_model_layer_empty_for_unknown_or_absent_model(cfg: Env) -> None:
+    for model in (None, "org/mystery"):
+        s = cfg.resolve(model=model)
+        assert s.vram is None and s.image == "rig/base:cuda12.4"
+        assert "model" not in s.sources.values()
+
+
 # SSH key.
 
 
@@ -520,6 +552,15 @@ def test_config_show_json(harness: Harness) -> None:
     assert values["max_price"] == {"value": 0.6, "source": "default"}
     assert values["owner"] == {"value": "claude", "source": "env"}
     assert values["gpu"] == {"value": None, "source": "default"}
+
+
+def test_config_show_never_reports_model_source(harness: Harness) -> None:
+    write(user_config_path(harness.home), '[models."org/small"]\nvram = 24\nimage = "a/b"\n')
+    code, out, _ = harness.run("config", "show")
+    assert code == 0
+    values = json.loads(out)["values"]
+    assert values["vram"] == {"value": None, "source": "default"}
+    assert "model" not in {v["source"] for v in values.values()}
 
 
 def test_config_show_profile(harness: Harness) -> None:
