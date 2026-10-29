@@ -33,7 +33,14 @@ destroy and a list call still shows.
   a list call no longer shows the row.
 - The probe skips leases with `destroy_pending`. `release` on a history lease
   whose row is still listed sends the destroy again and returns
-  `provider_error` when the call fails.
+  `provider_error` when the call fails. A `release` whose re-read finds an
+  unreadable label returns `provider_error` and changes nothing.
+- `run` releases an auto-reserved box through `release_lease` when the job
+  exits or SIGINT arrives, and also when the post-exit save or the SIGINT
+  wait raises.
+- `extend` reloads its targets from `leases.json` under the lock. A target
+  in history or with `destroy_pending` returns `lease_expired` and keeps its
+  cache entry.
 
 Adoption retries (spec §4.5). `tag` writes `miss` with every guard layer when
 it adopts an orphan. A lease whose label `miss` lists `watchdog` or
