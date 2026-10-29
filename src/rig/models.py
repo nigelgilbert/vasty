@@ -142,6 +142,8 @@ class ProbeResult:
     startup_exit: int | None
     alive_mtime: int | None
     jobs: list[Job] = field(default_factory=list)
+    unsupported: list[str] = field(default_factory=list)
+    """What a custom image lacks (`bash`, `root`, `apt-get`); non-empty maps to `image_unsupported`."""
 
 
 LeaseState = Literal[
