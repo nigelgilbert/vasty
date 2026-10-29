@@ -19,6 +19,7 @@ from decimal import Decimal
 
 from rig import budget, engine, ids, labels, views
 from rig.cli import Outcome
+from rig.commands._common import taken_ids
 from rig.context import Context
 from rig.errors import RigError, invalid
 from rig.ids import orphan_id
@@ -181,15 +182,6 @@ def _write_failed(lease: CachedLease, written: list[str], why: str) -> RigError:
     )
 
 
-def _taken(snap: engine.Snapshot) -> set[str]:
-    taken = set(snap.leases)
-    for inst in snap.instances:
-        parsed = labels.parse(inst.label)
-        if isinstance(parsed, Label):
-            taken.add(parsed.lease)
-    return taken
-
-
 def adopt(
     ctx: Context, snap: engine.Snapshot, inst: Instance, setters: Setters, ttl: int | None
 ) -> tuple[CachedLease, list[WarningItem]]:
@@ -207,7 +199,7 @@ def adopt(
     if ttl is None:
         raise invalid(f"{ref} is an orphan and needs --ttl.", f"rig tag {ref} --ttl 30m")
     owner = setters.owner or ctx.settings.owner
-    lease_id = ids.new_lease_id(ctx.random_hex, _taken(snap))
+    lease_id = ids.new_lease_id(ctx.random_hex, taken_ids(snap))
     now = ctx.clock.now()
     label = Label(
         lease=lease_id, owner=owner, created=now, ttl=ttl,

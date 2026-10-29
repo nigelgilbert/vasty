@@ -26,10 +26,12 @@ from rig.cli import Outcome
 from rig.commands._common import (
     DEFAULT_EXCLUDES,
     WORKDIR,
+    finish_job,
     lease_warnings,
     merge_warnings,
     next_job_id,
     pick_lease,
+    put_job,
     require_tools,
     save_lease,
 )
@@ -140,7 +142,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         warn_if_expiring(ctx, lease, now)
         job = Job(id=next_job_id(lease), cmd=command, started_at=None, exit=None, state="running")
         started = ctx.box.start_job(target, job, command)
-        save_lease(ctx, lease, lambda record: _put_job(record, started))
+        save_lease(ctx, lease, lambda record: put_job(record, started))
     except BaseException:
         if created:
             release_quietly(ctx, lease)
@@ -165,18 +167,6 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     return _attach(ctx, snap, lease, target, started, release_on_exit, warnings)
 
 
-def _put_job(lease: CachedLease, job: Job) -> None:
-    lease.jobs = [j for j in lease.jobs if j.id != job.id] + [job]
-
-
-def _finish_job(lease: CachedLease, job_id: str, exit_code: int | None, finished: int) -> None:
-    for job in lease.jobs:
-        if job.id == job_id:
-            job.exit = exit_code
-            job.state = "exited"
-            job.finished_at = finished
-
-
 def _attach(
     ctx: Context,
     snap: Snapshot,
@@ -196,7 +186,7 @@ def _attach(
     duration = max(0, now - started_at)
     if code is None:
         return _lost(ctx, lease, job, duration, warnings, snap)
-    save_lease(ctx, lease, lambda record: _finish_job(record, job.id, code, now))
+    save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, now))
     released = release_quietly(ctx, lease) if release_on_exit else False
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=code, duration_s=duration, released=released,
@@ -261,7 +251,7 @@ def _interrupted(
     now = ctx.clock.now()
     if exit_code is not None:
         code = exit_code
-        save_lease(ctx, lease, lambda record: _finish_job(record, job.id, code, now))
+        save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, now))
     released = release_quietly(ctx, lease) if release_on_exit else False
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=exit_code, duration_s=max(0, now - started_at),

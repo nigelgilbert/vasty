@@ -1,9 +1,10 @@
-"""Helpers shared by `release`, `run`, `serve`, `sync` and `ssh`.
+"""Helpers shared by `release`, `reserve`, `run`, `serve`, `sync`, `ssh` and `tag`.
 
 `pick_lease` resolves the single LEASE that `run --on`, `serve --on`, `sync`
 and `ssh` act on and raises the §7 code for a lease they cannot use.
 `save_lease` applies one change to a lease in the snapshot and in
 `leases.json`. Job ids count up from the highest `j-N` the lease has seen.
+`taken_ids` lists the lease ids a new lease id avoids.
 """
 
 from __future__ import annotations
@@ -11,8 +12,9 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Callable
 
+from rig import labels
 from rig.errors import RigError
-from rig.models import HISTORY_STATES, CachedLease, Instance, WarningItem
+from rig.models import HISTORY_STATES, CachedLease, Instance, Job, Label, WarningItem
 from rig.targeting import resolve_lease
 from rig.views import warnings_for
 
@@ -71,6 +73,30 @@ def next_job_id(lease: CachedLease) -> str:
         if match is not None:
             highest = max(highest, int(match.group(1)))
     return f"j-{highest + 1}"
+
+
+def put_job(lease: CachedLease, job: Job) -> None:
+    """Add `job` to the lease, replacing any job with the same id."""
+    lease.jobs = [j for j in lease.jobs if j.id != job.id] + [job]
+
+
+def finish_job(lease: CachedLease, job_id: str, exit_code: int | None, finished: int | None) -> None:
+    """Mark job `job_id` exited with `exit_code` at `finished`."""
+    for job in lease.jobs:
+        if job.id == job_id:
+            job.exit = exit_code
+            job.state = "exited"
+            job.finished_at = finished
+
+
+def taken_ids(snap: Snapshot) -> set[str]:
+    """Return the lease ids in the snapshot's leases and in its instances' `rig:` labels."""
+    taken = set(snap.leases)
+    for inst in snap.instances:
+        parsed = labels.parse(inst.label)
+        if isinstance(parsed, Label):
+            taken.add(parsed.lease)
+    return taken
 
 
 def save_lease(ctx: Context, lease: CachedLease, change: Callable[[CachedLease], None]) -> None:

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, TypeVar
 
 from rig import budget, engine, ids, labels, onstart, views
 from rig.cli import Outcome
+from rig.commands._common import taken_ids
 from rig.context import Context
 from rig.errors import RigError, invalid
 from rig.models import (
@@ -109,7 +110,7 @@ def reserve_lease(
             if low is not None:
                 warnings.append(low)
             register_key(ctx)
-            taken = _taken_ids(snap)
+            taken = taken_ids(snap)
             lease_id = ids.new_lease_id(ctx.random_hex, taken)
             now = ctx.clock.now()
             label = Label(lease=lease_id, owner=owner, created=now, ttl=ttl, name=name, group=group)
@@ -299,15 +300,6 @@ def register_key(ctx: Context) -> None:
     if any(_key_body(k.public_key) == body for k in ctx.provider.list_ssh_keys()):
         return
     ctx.provider.attach_ssh_key(key)
-
-
-def _taken_ids(snap: Snapshot) -> set[str]:
-    taken = set(snap.leases)
-    for inst in snap.instances:
-        parsed = labels.parse(inst.label)
-        if isinstance(parsed, Label):
-            taken.add(parsed.lease)
-    return taken
 
 
 def _rows_for(instances: list[Instance], lease_id: str) -> list[Instance]:

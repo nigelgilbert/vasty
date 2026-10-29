@@ -25,10 +25,12 @@ from dataclasses import dataclass
 from rig import engine
 from rig.cli import Outcome
 from rig.commands._common import (
+    finish_job,
     lease_warnings,
     merge_warnings,
     next_job_id,
     pick_lease,
+    put_job,
     require_tools,
     save_lease,
 )
@@ -189,7 +191,7 @@ def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Pl
         kind="serve", port=PORT,
     )
     started = ctx.box.start_job(target, job, command)
-    save_lease(ctx, lease, lambda record: _put_job(record, started))
+    save_lease(ctx, lease, lambda record: put_job(record, started))
     _wait_ready(ctx, target, lease, started.id, url, key, plan.bind_local)
     return ServeResult(
         lease=lease.lease,
@@ -201,10 +203,6 @@ def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Pl
         warnings=[],
         swept=list(snap.swept),
     )
-
-
-def _put_job(lease: CachedLease, job: Job) -> None:
-    lease.jobs = [j for j in lease.jobs if j.id != job.id] + [job]
 
 
 def _install(ctx: Context, target: SshTarget, pin: str) -> None:
@@ -260,7 +258,7 @@ def _wait_ready(
         status = ctx.box.job_status(target, job_id)
         if status.exit is not None or status.state == "exited":
             code = status.exit
-            save_lease(ctx, lease, lambda record: _record_exit(record, job_id, code, status.finished_at))
+            save_lease(ctx, lease, lambda record: finish_job(record, job_id, code, status.finished_at))
             raise RigError(
                 "serve_failed",
                 f"vLLM exited {code} before /v1/models answered.",
@@ -278,14 +276,6 @@ def _wait_ready(
                 log_hint,
             )
         ctx.sleep(POLL_INTERVAL_S)
-
-
-def _record_exit(lease: CachedLease, job_id: str, code: int | None, finished: int | None) -> None:
-    for job in lease.jobs:
-        if job.id == job_id:
-            job.exit = code
-            job.state = "exited"
-            job.finished_at = finished
 
 
 def _human(result: ServeResult) -> str:
