@@ -142,6 +142,8 @@ class ProbeResult:
     startup_exit: int | None
     alive_mtime: int | None
     jobs: list[Job] = field(default_factory=list)
+    startup_interrupted: bool = False
+    """Set when the hook started, the container restarted, and no exit marker exists."""
 
 
 LeaseState = Literal[
@@ -177,6 +179,7 @@ class CachedLease:
     history_since: int | None = None
     expired_at: int | None = None
     last_provider_error: str | None = None
+    startup_interrupted: bool = False
 
 
 # Output shapes.
