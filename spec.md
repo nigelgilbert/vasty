@@ -331,6 +331,7 @@ Executes a command on a box.
 - `--detach`: start the job under a supervisor on the box (tmux), return a job id immediately, log to a file on the box. `status LEASE` reports the job; `rig ssh` or `sync pull` fetches logs. A foreground `run` also starts its job under tmux.
 - Working directory on the box is `/workspace`. `run` does not sync code; pair it with `sync push` or use `--sync DIR` as sugar for push-then-run.
 - On SIGINT, `run` forwards SIGINT to the remote job, waits up to 10s, then exits 130. An auto-reserved box is released. Named and `--on` boxes stay alive. Detached jobs continue after the client exits.
+- **Losing the attach keeps the box.** After the job starts, an SSH drop or an error while streaming output leaves the box up and the job running within its clock. `run` prints the lease, the job id, the expiry, `rig status LEASE` and `rig release LEASE` on stderr when stderr still works. No client is attached, so the box stays up after the job exits until `release` or the clock ends. SIGINT is the one way to cancel from the client.
 
 Errors before the job starts use §7 codes. After the job starts, `run` exits with the remote exit code, and the result object carries `exit` or `error` so a job's `2` differs from a provider error. `--detach` exits 0 once the job starts. A job killed with its box returns `lease_expired`, exit 2. A dropped connection returns `box_unreachable`, exit 2.
 
@@ -608,7 +609,7 @@ For mess, rig shows the state and gives the one-line fix.
 | Two owners `reserve --name ft` at the same time | Names are per owner, so two boxes. On one machine the lock makes the second call return the first lease. Two machines can create two; a later command naming it returns `ambiguous_target`. |
 | Bulk extend would cross the daily budget | See §4.0. |
 | Expiry guard could not be fully set | Lease is `guard: partial` with the missing layers listed. Warning on every `status` until fixed or released. |
-| Agent crashes mid-`run` on an auto-reserved box | The job keeps running until it exits or the clock runs out. Next `status` shows it with the job state and warns as expiry nears; the agent can `release`, `extend`, read the log with `rig ssh`, or let it finish. |
+| Agent crashes or loses its attach mid-`run` on an auto-reserved box | See §4.6. The job keeps running until it exits or the clock runs out, and the box stays up after the job exits. Next `status` shows it with the job state and warns as expiry nears; the agent can `release`, `extend`, read the log with `rig ssh`, or let it finish. |
 | `release --all` from an agent on a shared account | Only that owner's leases. The human's `scratch` box survives unless `--everyone` was passed. |
 
 ## 9. Workflows

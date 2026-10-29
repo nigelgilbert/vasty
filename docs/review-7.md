@@ -6,7 +6,7 @@ Range: `305b32a7fbfeca5e50322a639fbd2b79adf9437b..cb1ee1fdbfd14e9dcffb7f97e12d42
 
 ## Billing impact
 
-- Leaves a box billing: finding 1. The box stays up until its `run_ttl` clock, then the watchdog or the sweep destroys it.
+- Leaves a box billing without telling the user: finding 1. The box stays up until `release` or its `run_ttl` clock, as §4.6 requires, and `run` prints nothing.
 - Misleads the user: findings 2, 3 and 4 drop or misreport a destroy. Finding 6 repeats one failed destroy in `swept`. Finding 11 gives no fix for a failed duplicate destroy.
 - Cleanup: findings 5, 7, 8, 9 and 10.
 
@@ -14,20 +14,14 @@ Range: `305b32a7fbfeca5e50322a639fbd2b79adf9437b..cb1ee1fdbfd14e9dcffb7f97e12d42
 
 ### Gaps
 
-1. **An `attach_job` error leaves the auto-reserved box running**
+1. **An `attach_job` error leaves the auto-reserved box running silently**
    - Location: `src/rig/commands/run.py:209-212` (`_attach`). Predates the range.
-   - Problem: `_attach` catches only `KeyboardInterrupt` and runs outside the `_release_on_error` block in `execute`. Any other exception, such as `BrokenPipeError` from `out.write` in `subprocess_runner` stream mode (`src/rig/remote.py:150-153`), skips the release and prints no stderr line.
-   - Evidence: a harness auto run whose `attach_job` raised `BrokenPipeError` ended with `destroyed []` and the lease `running`.
+   - Problem: `_attach` catches only `KeyboardInterrupt`. Any other exception, such as `BrokenPipeError` from `out.write` in `subprocess_runner` stream mode (`src/rig/remote.py:150-153`), propagates with no stderr line. The box stays up, which spec §4.6 requires, but the user gets no lease, job id, expiry or recovery command.
+   - Evidence: a harness auto run whose `attach_job` raised `BrokenPipeError` ended with `destroyed []`, the lease `running` and empty stderr.
    - Fix:
-     - After `except KeyboardInterrupt: return _interrupted(...)`, add:
-       ```python
-       except Exception:
-           if release_on_exit:
-               release_quietly(ctx, lease)
-           raise
-       ```
-     - Add a `tests/test_run.py` test: an auto run whose `attach_job` raises `OSError` propagates the error and destroys the box.
-   - Settled: exchange 1.
+     - After `except KeyboardInterrupt: return _interrupted(...)`, add `except Exception:` that writes the lease, job id, expiry, `rig status LEASE` and `rig release LEASE` to `ctx.stderr` through the same helper `_lost` uses, then re-raises. Wrap the write so a broken stderr does not mask the original error.
+     - Add a `tests/test_run.py` test: an auto run whose `attach_job` raises `OSError` propagates the error, leaves the box up, and prints the recovery commands.
+   - Settled: spec §4.6 (decision on 2026-10-29, option B: a lost attach keeps the box). The earlier proposal to release the box is withdrawn.
 
 2. **`serve` drops the `swept` entries of the reserve wait**
    - Location: `src/rig/commands/serve.py:195` (`_bring_up`), with `execute` at `:131-153`. Code review 7 finding 1. Predates the range.
