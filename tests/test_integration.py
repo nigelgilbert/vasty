@@ -1,0 +1,146 @@
+"""End-to-end flows through the real `reserve_lease`, against the fakes."""
+
+from __future__ import annotations
+
+import json
+from decimal import Decimal
+from typing import Any
+
+import pytest
+
+from fakes import NOW, Harness, make_offer
+from rig.labels import parse
+from rig.models import CreateRequest, Instance, Label
+
+
+def boot(harness: Harness, inst: Instance, request: CreateRequest) -> None:
+    """Give the created box a clock file the way onstart does."""
+    label = parse(request.label)
+    assert isinstance(label, Label)
+    harness.box.state(inst.id).clock = int(harness.time.wall_now) + label.ttl
+
+
+@pytest.fixture
+def h(harness: Harness) -> Harness:
+    harness.provider.covered_through = NOW
+    harness.provider.offers = [make_offer(1), make_offer(2, gpu_name="A100 SXM4", gpu_ram_gb=80.0, dph_total=Decimal("1.20"))]
+    harness.provider.on_create = lambda inst, req: boot(harness, inst, req)
+    harness.hex_values = [f"{i:08x}" for i in range(1, 50)]
+    return harness
+
+
+def run_json(harness: Harness, *argv: str) -> tuple[int, dict[str, Any]]:
+    code, out, _ = harness.run(*argv)
+    data: dict[str, Any] = json.loads(out)
+    return code, data
+
+
+def test_auto_reserved_run_releases_the_box(h: Harness) -> None:
+    code, data = run_json(h, "run", "--", "python", "train.py")
+    assert code == 0, data
+    assert data["exit"] == 0
+    assert data["released"] is True
+    assert h.provider.instances == {}
+    assert len(h.provider.created) == 1
+    label = parse(h.provider.created[0].label)
+    assert isinstance(label, Label)
+    assert label.ttl == 7200
+
+
+def test_auto_reserved_run_passes_remote_exit_code(h: Harness) -> None:
+    h.provider.on_create = lambda inst, req: (boot(h, inst, req), setattr(h.box.state(inst.id), "job_exit", 2))  # type: ignore[func-returns-value]
+    code, data = run_json(h, "run", "--", "false")
+    assert code == 2
+    assert data["exit"] == 2
+    assert data["error"] is None
+
+
+def test_detached_run_leaves_the_box_alive(h: Harness) -> None:
+    code, data = run_json(h, "run", "--detach", "--", "sleep", "100")
+    assert code == 0, data
+    assert data["job"] == "j-1"
+    assert len(h.provider.instances) == 1
+    code, status = run_json(h, "status", data["lease"])
+    assert code == 0
+    assert status["leases"][0]["jobs"][0]["id"] == "j-1"
+
+
+def test_auto_reserved_serve_returns_endpoint(h: Harness) -> None:
+    code, data = run_json(h, "serve", "--model", "Qwen/Qwen3-72B-Instruct", "--max-price", "2")
+    assert code == 0, data
+    assert data["url"].startswith("http://198.51.100.7:")
+    assert data["url"].endswith("/v1")
+    assert data["api_key"].startswith("rig-")
+    assert h.provider.created[0].image == "vllm/vllm-openai:v0.6.3"
+    assert len(h.provider.instances) == 1
+
+
+def test_serve_failure_releases_reserved_box(h: Harness) -> None:
+    h.http_status = 500
+    code, data = run_json(h, "serve", "--model", "Qwen/Qwen3-72B-Instruct", "--max-price", "2")
+    assert code == 2
+    assert data["error"] == "serve_failed"
+    assert h.provider.instances == {}
+
+
+def test_auto_reserve_runs_budget_check_with_run_ttl(h: Harness) -> None:
+    h.env["RIG_DAILY_BUDGET"] = "0.50"
+    code, data = run_json(h, "run", "--", "true")
+    assert code == 3
+    assert data["error"] == "budget_exceeded"
+    assert h.provider.created == []
+
+
+def test_post_training_workflow(h: Harness, tmp_path: Any) -> None:
+    """Spec §9.1 with a named box."""
+    code, res = run_json(h, "reserve", "--name", "ft", "--ttl", "3h")
+    assert code == 0, res
+    src = tmp_path / "project" / "code"
+    src.mkdir()
+    code, sync = run_json(h, "sync", "ft", "push", str(src) + "/", "/workspace/")
+    assert code == 0, sync
+    code, job = run_json(h, "run", "--on", "ft", "--detach", "--", "python", "train.py")
+    assert code == 0, job
+    code, ext = run_json(h, "extend", "ft", "--by", "1h")
+    assert code == 0, ext
+    assert ext["ttl_remaining_s"] == 4 * 3600
+    code, rel = run_json(h, "release", "ft")
+    assert code == 0, rel
+    assert rel["jobs"][0]["id"] == "j-1"
+    assert h.provider.instances == {}
+
+
+def test_group_workflow(h: Harness) -> None:
+    """Spec §9.4: reserve a group, align clocks, release together."""
+    for i in range(3):
+        code, res = run_json(h, "reserve", "--name", f"eval-{i}", "--group", "exp42", "--ttl", "1h")
+        assert code == 0, res
+    code, ext = run_json(h, "extend", "--group", "exp42", "--to", "2h")
+    assert code == 0, ext
+    expiries = {r["expires_at"] for r in ext["results"]}
+    assert len(expiries) == 1
+    code, rel = run_json(h, "release", "--group", "exp42")
+    assert code == 0, rel
+    assert len(rel["results"]) == 3
+    assert h.provider.instances == {}
+
+
+def test_reserve_name_reuse_through_run(h: Harness) -> None:
+    code, first = run_json(h, "reserve", "--name", "ft")
+    assert code == 0
+    code, data = run_json(h, "run", "--name", "ft", "--", "true")
+    assert code == 0, data
+    assert data["lease"] == first["lease"]
+    assert data["released"] is False
+    assert len(h.provider.created) == 1
+
+
+def test_expired_box_is_swept_by_next_command(h: Harness) -> None:
+    code, res = run_json(h, "reserve", "--name", "short", "--ttl", "10m")
+    assert code == 0
+    h.time.advance(11 * 60)
+    code, status = run_json(h, "status")
+    assert code == 0
+    assert [s["lease"] for s in status["swept"]] == [res["lease"]]
+    assert h.provider.instances == {}
+    assert Decimal(str(status["totals"]["burn_per_hr"])) == 0
