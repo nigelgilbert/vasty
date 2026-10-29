@@ -46,7 +46,7 @@ from rig.models import (
     WarningItem,
 )
 from rig.remote import SshTarget
-from rig.state import effective_expiry, fix_for, span
+from rig.state import effective_expiry, fix_for
 from rig.timeutil import format_duration, iso
 
 if TYPE_CHECKING:
@@ -99,7 +99,7 @@ def warn_if_expiring(ctx: Context, lease: CachedLease, now: int) -> None:
     remaining = effective_expiry(lease.label) - now
     if remaining < ctx.settings.warn_before_expiry:
         fix = fix_for("expiring_soon", lease.lease)
-        ctx.warn(f"rig: lease {lease.lease} expires in {span(remaining)}. Extend it: {fix}")
+        ctx.warn(f"rig: lease {lease.lease} expires in {format_duration(remaining)}. Extend it: {fix}")
 
 
 def _check_sync_dir(ctx: Context, directory: str) -> Path:

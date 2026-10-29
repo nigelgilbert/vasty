@@ -13,9 +13,9 @@ from rig.state import (
     lease_warnings,
     make_warning,
     resolve_state,
-    span,
     ttl_remaining,
 )
+from rig.timeutil import format_duration
 
 NOW = 1_793_235_600
 WARN = 300
@@ -113,10 +113,13 @@ def test_guard(missing: list[str], expected: tuple[str, list[str]]) -> None:
 
 @pytest.mark.parametrize(
     "seconds, text",
-    [(0, "0s"), (45, "45s"), (60, "1m"), (180, "3m"), (359, "5m"), (4320, "1h12m"), (7260, "2h01m"), (-5, "0s")],
+    [
+        (0, "0s"), (45, "45s"), (60, "1m"), (180, "3m"), (359, "5m"), (4320, "1h12m"),
+        (7260, "2h1m"), (90000, "1d1h"), (-5, "0s"),
+    ],
 )
-def test_span(seconds: int, text: str) -> None:
-    assert span(seconds) == text
+def test_warning_durations(seconds: int, text: str) -> None:
+    assert format_duration(seconds) == text
 
 
 def codes(items: list[Any]) -> list[str]:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import shlex
 
 from rig.models import HISTORY_STATES, CachedLease, Label, LeaseState, ProbeResult, WarningItem
+from rig.timeutil import format_duration
 
 GUARD_LAYERS: tuple[str, ...] = ("watchdog", "destroy_key", "clock_file")
 LIVE_JOB_STATES: frozenset[str] = frozenset({"running", "serving"})
@@ -112,18 +113,6 @@ def make_warning(code: str, lease: str | None, message: str) -> WarningItem:
     return WarningItem(code=code, lease=lease, message=message, fix=fix_for(code, lease))
 
 
-def span(seconds: int) -> str:
-    """Format seconds for warning messages as `45s`, `3m` or `1h12m`."""
-    seconds = max(0, seconds)
-    if seconds < 60:
-        return f"{seconds}s"
-    hours, rest = divmod(seconds, 3600)
-    minutes = rest // 60
-    if hours:
-        return f"{hours}h{minutes:02d}m"
-    return f"{minutes}m"
-
-
 def live_jobs(lease: CachedLease) -> list[str]:
     """Return the ids of cached jobs in `running` or `serving` state."""
     return [job.id for job in lease.jobs if job.state in LIVE_JOB_STATES]
@@ -159,15 +148,15 @@ def lease_warnings(lease: CachedLease, now: int, warn_before_expiry: int) -> lis
     remaining = ttl_remaining(lease.label, now)
     if lease.state == "running" and 0 < remaining <= warn_before_expiry:
         if jobs:
-            message = f"{span(remaining)} left, {', '.join(jobs)} running"
+            message = f"{format_duration(remaining)} left, {', '.join(jobs)} running"
             out.append(make_warning("expiring_with_running_job", target, message))
         else:
-            out.append(make_warning("expiring_soon", target, f"{span(remaining)} left"))
+            out.append(make_warning("expiring_soon", target, f"{format_duration(remaining)} left"))
     if lease.state == "unreachable":
         if lease.reachable_at is None:
             message = "no answer"
         else:
-            message = f"no answer for {span(now - lease.reachable_at)}"
+            message = f"no answer for {format_duration(now - lease.reachable_at)}"
         out.append(make_warning("box_unreachable", target, message))
     level, missing = guard(lease)
     observed = lease.reachable_at is not None or bool(lease.label.miss) or lease.adopted
