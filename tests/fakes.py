@@ -208,6 +208,8 @@ class BoxState:
     exec_errors: dict[str, BaseException] = field(default_factory=dict)
     """Errors `exec` raises for a command that starts with the key."""
     unsupported: list[str] = field(default_factory=list)
+    guard_file: bool = False
+    """Set when `onstart` or `adopt` has written the guard file."""
 
 
 @dataclass
@@ -252,6 +254,7 @@ class FakeBox:
             alive_mtime=box.alive_mtime,
             jobs=[Job(**vars(j)) for j in box.jobs.values()],
             unsupported=list(box.unsupported),
+            guard_file=box.guard_file,
         )
 
     def write_clock(self, target: SshTarget, expires: int) -> None:
@@ -266,6 +269,7 @@ class FakeBox:
         box = self._get(target)
         self.adopts.append(target.instance_id)
         box.clock = expires
+        box.guard_file = True
         box.startup_started = True
         if box.startup_exit is None:
             box.startup_exit = 0

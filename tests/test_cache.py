@@ -47,6 +47,9 @@ def full_lease() -> CachedLease:
         history_since=1793240000,
         expired_at=1793247000,
         last_provider_error="HTTP 500",
+        adopted=True,
+        adopt_attempts=2,
+        adopt_at=1793236400,
     )
 
 
@@ -101,6 +104,7 @@ def test_defaults_fill_absent_fields(cache: Cache) -> None:
         lease="l-1", instance_id=7, state="pending",
         label=Label(lease="l-1", owner="o", created=1, ttl=60),
     )
+    assert (data.leases["l-1"].adopt_attempts, data.leases["l-1"].adopt_at) == (0, None)
 
 
 @pytest.mark.parametrize(

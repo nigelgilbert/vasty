@@ -546,6 +546,30 @@ def test_adopted_lease_retries_guard_steps(harness: Harness) -> None:
     assert label_of(harness, row.id).miss == []
 
 
+def test_adoption_rerun_backs_off_while_a_layer_stays_missing(harness: Harness) -> None:
+    row = add_lease(harness)
+    box = harness.box.state(row.id)
+    box.guard_missing = ["watchdog"]
+    refresh(harness)
+    edit_cache(harness, "l-0000a001", adopted=True)
+    box.adopt_missing = ["watchdog"]
+    counts = []
+    for step in (0, 0, 5, 5, 5, 10):
+        harness.time.advance(step)
+        refresh(harness)
+        counts.append(len(harness.box.adopts))
+    assert counts == [1, 1, 2, 2, 3, 3]
+    lease = refresh(harness).leases["l-0000a001"]
+    assert (lease.adopt_attempts, lease.adopt_at) == (3, NOW + 15)
+    box.adopt_missing = []
+    harness.time.advance(10)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert len(harness.box.adopts) == 4
+    assert (lease.adopt_attempts, lease.adopt_at, lease.guard_missing) == (0, None, [])
+    refresh(harness)
+    assert len(harness.box.adopts) == 4
+
+
 PUB = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample test@host"
 ALL_LAYERS = ["watchdog", "destroy_key", "clock_file"]
 
@@ -641,6 +665,17 @@ def test_reserve_lease_with_missing_layers_skips_adoption_retries(harness: Harne
     refresh(harness)
     assert harness.box.adopts == []
     assert harness.provider.attached == []
+
+
+def test_reserve_box_between_guard_file_and_startup_skips_adoption(harness: Harness) -> None:
+    row = add_lease(harness)
+    box = harness.box.state(row.id)
+    box.startup_started, box.startup_exit, box.guard_file = False, None, True
+    box.guard_missing = ["watchdog", "destroy_key"]
+    lease = refresh(harness).leases["l-0000a001"]
+    assert harness.box.adopts == []
+    assert lease.adopted is False
+    assert lease.guard_missing == ["watchdog", "destroy_key"]
 
 
 # SSH endpoint.
@@ -791,6 +826,24 @@ def test_rebuilt_lease_keeps_every_layer_missing_when_the_probe_fails(harness: H
     lease = snap.leases["l-0000a001"]
     assert lease.reachable_at is None
     assert lease.guard_missing == ["watchdog", "destroy_key", "clock_file"]
+
+
+@pytest.mark.parametrize("status, probe", [("running", True), ("running", False), ("loading", True)])
+def test_legacy_unprobed_entry_turns_every_layer_missing(
+    harness: Harness, status: str, probe: bool
+) -> None:
+    add_lease(harness, reachable=False, actual_status=status)
+    refresh(harness)
+    edit_cache(harness, "l-0000a001", guard_missing=[])
+    lease = refresh(harness, probe=probe).leases["l-0000a001"]
+    assert lease.guard_missing == ["watchdog", "destroy_key", "clock_file"]
+
+
+def test_legacy_entry_keeps_observed_layers(harness: Harness) -> None:
+    add_lease(harness, reachable=False)
+    refresh(harness)
+    edit_cache(harness, "l-0000a001", guard_missing=[], adopted=True)
+    assert refresh(harness).leases["l-0000a001"].guard_missing == []
 
 
 def test_write_label_checks_expires(harness: Harness) -> None:

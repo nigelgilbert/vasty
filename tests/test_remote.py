@@ -386,6 +386,16 @@ def test_probe_guard_layers(tmp_path: Path, kw: dict[str, str], missing: list[st
     assert fake_box(tmp_path, runner).probe(TARGET, 2000).guard_missing == missing
 
 
+@pytest.mark.parametrize("kw, guard_file", [
+    ({}, True),
+    ({"guard_file": "<absent>"}, False),
+    ({"guard_file": "0"}, False),
+])
+def test_probe_reports_the_guard_file(tmp_path: Path, kw: dict[str, str], guard_file: bool) -> None:
+    runner = FakeRunner([ExecResult(0, probe_output(**kw), "")])
+    assert fake_box(tmp_path, runner).probe(TARGET, 2000).guard_file is guard_file
+
+
 def test_probe_reports_unsupported_and_interrupted_startup(tmp_path: Path) -> None:
     out = probe_output(unsupported="apt-get root ", startup_exit="-1")
     result = fake_box(tmp_path, FakeRunner([ExecResult(0, out, "")])).probe(TARGET, None)

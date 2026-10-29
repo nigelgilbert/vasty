@@ -43,9 +43,13 @@ it adopts an orphan. A lease whose label `miss` lists `watchdog` or
   pool, while the cache records no SSH answer for the lease. The wait between
   calls follows `retry_delay`.
 - A successful probe reruns the adoption script when the box is an adopted
-  orphan: the cache marks it `adopted`, or the box lacks `startup.started`.
-  `onstart` writes that marker on every box `reserve` makes, so the script
-  skips `reserve` boxes.
+  orphan: the cache marks it `adopted`, or the box lacks both the guard file
+  and `startup.started`. `onstart` writes the guard file and then that marker
+  on every box `reserve` makes, so the script skips `reserve` boxes. A probe
+  between the two writes sees the guard file.
+- The rerun runs over SSH inside the probe pool. The wait between reruns
+  follows `retry_delay`, counted by `adopt_attempts` from `adopt_at`. The
+  count resets once the probe finds `watchdog` and `destroy_key` in place.
 """
 
 from __future__ import annotations
@@ -410,14 +414,21 @@ def _adoption_listed(names: list[str]) -> bool:
     return any(layer in ADOPT_LAYERS for layer in names)
 
 
-def _reruns_adoption(lease: CachedLease, result: ProbeResult) -> bool:
-    """Return True when this probe reruns the adoption script on the box."""
+def _reruns_adoption(lease: CachedLease, result: ProbeResult, now: int) -> bool:
+    """Return True when this probe reruns the adoption script on the box.
+
+    A box with the guard file or `startup.started` came from `reserve` unless
+    the cache marks it `adopted`. Reruns wait `retry_delay(adopt_attempts)`
+    after the last one.
+    """
     if not _adoption_listed(lease.label.miss + result.guard_missing):
         return False
-    return lease.adopted or not result.startup_started
+    if lease.adopt_at is not None and now - lease.adopt_at < retry_delay(lease.adopt_attempts):
+        return False
+    return lease.adopted or not (result.startup_started or result.guard_file)
 
 
-def _probe_one(ctx: Context, lease: CachedLease) -> _Probed:
+def _probe_one(ctx: Context, lease: CachedLease, now: int) -> _Probed:
     try:
         target = ssh_target(lease)
         result = ctx.box.probe(target, lease.label.expires, timeout=PROBE_TIMEOUT_S)
@@ -426,7 +437,7 @@ def _probe_one(ctx: Context, lease: CachedLease) -> _Probed:
     if result.startup_exit == STARTUP_INTERRUPTED:
         result = dataclasses.replace(result, startup_interrupted=True)
     probed = _Probed(result)
-    if _reruns_adoption(lease, result):
+    if _reruns_adoption(lease, result, now):
         probed.adopt_ran = True
         try:
             probed.adopt_missing = _layers(ctx.box.adopt(target, effective_expiry(lease.label)))
@@ -461,6 +472,23 @@ def _layers(names: list[str]) -> list[str]:
     return [layer for layer in GUARD_LAYERS if layer in present]
 
 
+def _unprobed_guard(lease: CachedLease) -> None:
+    """Set every guard layer missing on a lease with no observed layers.
+
+    A lease has observed layers once a probe answered, a label `miss` exists
+    or `tag` adopted it. Older caches hold an empty `guard_missing` for leases
+    without any of these.
+    """
+    if lease.reachable_at is None and not lease.label.miss and not lease.adopted:
+        lease.guard_missing = list(GUARD_LAYERS)
+
+
+def _keep_guard(lease: CachedLease) -> None:
+    """Keep the cached guard layers through a failed or skipped probe."""
+    lease.guard_missing = _layers(lease.guard_missing + lease.label.miss)
+    _unprobed_guard(lease)
+
+
 def _merge_jobs(cached: list[Job], fresh: list[Job]) -> list[Job]:
     by_id = {job.id: job for job in cached}
     for job in fresh:
@@ -473,7 +501,7 @@ def _apply_probe(ctx: Context, lease: CachedLease, probed: _Probed, now: int) ->
     derived = derive_state(lease.actual_status, result, lease.reachable_at is not None)
     lease.state = resolve_state(lease.state, derived)
     if result is None:
-        lease.guard_missing = _layers(lease.guard_missing + lease.label.miss)
+        _keep_guard(lease)
         return
     lease.reachable_at = now
     lease.key_attempts = 0
@@ -492,6 +520,11 @@ def _apply_probe(ctx: Context, lease: CachedLease, probed: _Probed, now: int) ->
         missing = _layers(result.guard_missing)
     if probed.adopt_ran:
         lease.adopted = True
+        lease.adopt_attempts += 1
+        lease.adopt_at = now
+    if not _adoption_listed(missing):
+        lease.adopt_attempts = 0
+        lease.adopt_at = None
     lease.guard_missing = missing
     wanted = dataclasses.replace(label, miss=list(missing))
     if label.expires is None and result.clock_expires is not None:
@@ -514,7 +547,7 @@ def _probe_all(ctx: Context, leases: list[CachedLease], now: int) -> None:
     if not leases:
         return
     with ThreadPoolExecutor(max_workers=min(MAX_PROBE_THREADS, len(leases))) as pool:
-        results = list(pool.map(lambda lease: _probe_one(ctx, lease), leases))
+        results = list(pool.map(lambda lease: _probe_one(ctx, lease, now), leases))
     for lease, probed in zip(leases, results):
         if probed.result is None and _key_retry_due(lease, now):
             _retry_key(ctx, lease, now)
@@ -572,7 +605,7 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
             if running and probe:
                 to_probe.append(lease)
             elif running:
-                lease.guard_missing = _layers(lease.guard_missing + lease.label.miss)
+                _keep_guard(lease)
             else:
                 _apply_probe(ctx, lease, _Probed(None), now)
         _probe_all(ctx, to_probe, now)
@@ -606,6 +639,8 @@ def cached_snapshot(ctx: Context) -> Snapshot:
     """
     data = ctx.cache.load()
     now = ctx.clock.now()
+    for lease in data.leases.values():
+        _unprobed_guard(lease)
     rows = classify(data.instances)
     warnings = [unreadable_warning(inst, reason) for inst, reason in rows.unreadable]
     if data.rebuilt:

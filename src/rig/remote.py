@@ -326,7 +326,8 @@ def parse_probe(stdout: str, label_expires: int | None, root: str) -> ProbeResul
     clock = _int(values.get("clock"))
     alive = _int(values.get("alive"))
     startup_started = values.get("startup_started") == "1"
-    onstart_done = values.get("guard_file") == "1" or startup_started
+    guard_file = values.get("guard_file") == "1"
+    onstart_done = guard_file or startup_started
     file_layers = values.get("guard", "").split()
 
     missing: list[str] = []
@@ -356,6 +357,7 @@ def parse_probe(stdout: str, label_expires: int | None, root: str) -> ProbeResul
         alive_mtime=alive,
         jobs=jobs,
         unsupported=values.get("unsupported", "").split(),
+        guard_file=guard_file,
     )
 
 

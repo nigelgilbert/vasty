@@ -252,6 +252,21 @@ def test_status_cached_ages_with_local_clock(account: Harness) -> None:
     assert row["ttl_remaining_s"] == 60
 
 
+def test_status_cached_reads_legacy_unprobed_entry_as_partial(harness: Harness) -> None:
+    add_lease(harness, reachable=False)
+    status(harness)
+    ctx = harness.context()
+    data = ctx.cache.load()
+    data.leases["l-0000a001"].guard_missing = []
+    ctx.cache.save(data)
+    cached = status(harness, "--cached")
+    row = by_lease(cached)["l-0000a001"]
+    assert (row["guard"], row["guard_missing"]) == (
+        "partial", ["watchdog", "destroy_key", "clock_file"]
+    )
+    assert ("guard_partial", "l-0000a001") not in codes(cached)
+
+
 def test_status_human_table(account: Harness) -> None:
     code, out, _ = account.run("status", "--plain")
     assert code == 0

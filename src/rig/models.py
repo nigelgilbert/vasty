@@ -146,6 +146,8 @@ class ProbeResult:
     """What a custom image lacks (`bash`, `root`, `apt-get`); non-empty maps to `image_unsupported`."""
     startup_interrupted: bool = False
     """Set when the hook started, the container restarted, and no exit marker exists."""
+    guard_file: bool = False
+    """Set when `onstart` or the adoption script has written the guard file."""
 
 
 LeaseState = Literal[
@@ -193,6 +195,10 @@ class CachedLease:
     """Key attach retries sent since the lease last answered SSH; sets the retry backoff."""
     key_attach_at: int | None = None
     """When the last key attach retry was sent."""
+    adopt_attempts: int = 0
+    """Adoption reruns since the lease last had every adoption layer; sets the rerun backoff."""
+    adopt_at: int | None = None
+    """When the last adoption rerun ran."""
     unsupported: list[str] = field(default_factory=list)
     """What the last probe found missing from a custom image; non-empty maps to `image_unsupported`."""
 
