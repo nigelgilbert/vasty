@@ -12,7 +12,7 @@ no longer lists its row. While the row is listed, `release` sends the destroy
 again and keeps the history state. An orphan or unreadable row released by
 instance id needs `--yes` or a TTY confirmation. Before destroying, `release`
 re-reads the row and aborts with `provider_error` when its `expires` moved
-(spec §6).
+(spec §6) or its label became unreadable.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import argparse
 from decimal import Decimal
 from typing import Any
 
-from rig import engine, views
+from rig import engine, labels, views
 from rig.cli import Outcome
 from rig.commands._common import save_lease
 from rig.context import Context
@@ -34,6 +34,7 @@ from rig.models import (
     BulkResult,
     CachedLease,
     Instance,
+    Label,
     ReleaseAbsent,
     ReleaseJob,
     ReleaseSummary,
@@ -90,8 +91,8 @@ def release_lease(ctx: Context, snap: Snapshot, lease: CachedLease) -> ReleaseSu
     A lease in history whose row Vast no longer lists, or one whose row
     vanished, returns its summary with `already_absent`. A lease in history
     whose row is still listed gets the destroy again. Raise `provider_error`
-    when the destroy call fails or the row's `expires` moved since `lease` was
-    read.
+    when the destroy call fails, the row's `expires` moved since `lease` was
+    read, or the re-read label is unreadable.
     """
     in_history = lease.state in HISTORY_STATES or lease.destroy_pending
     if in_history and snap.instance(lease.instance_id) is None:
@@ -99,7 +100,14 @@ def release_lease(ctx: Context, snap: Snapshot, lease: CachedLease) -> ReleaseSu
     with ctx.cache.lock():
         destroyed = engine.destroy_checked(ctx, lease.instance_id, lease.label.expires)
         if not destroyed:
-            if ctx.provider.get_instance(lease.instance_id) is not None:
+            row = ctx.provider.get_instance(lease.instance_id)
+            if row is not None and not isinstance(labels.parse(row.label), Label):
+                raise RigError(
+                    "provider_error",
+                    f"Lease {lease.lease}'s label is unreadable.",
+                    f"rig release {orphan_id(lease.instance_id)} --yes",
+                )
+            if row is not None:
                 raise RigError(
                     "provider_error",
                     f"Lease {lease.lease} changed while releasing: its expiry moved.",

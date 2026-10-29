@@ -169,6 +169,26 @@ def test_release_aborts_when_expires_moved(harness: Harness) -> None:
     assert row.id in harness.provider.instances
 
 
+def test_release_reports_unreadable_label_on_reread(harness: Harness) -> None:
+    row = add_lease(harness)
+    real_get = harness.provider.get_instance
+
+    def garbled(instance_id: int) -> Instance | None:
+        harness.provider.instances[instance_id].label = "rig:v9;garbage"
+        return real_get(instance_id)
+
+    harness.provider.get_instance = garbled  # type: ignore[method-assign]
+    code, data, _ = release(harness, "l-0000a001")
+    assert code == 2
+    assert data["error"] == "provider_error"
+    assert data["message"] == "Lease l-0000a001's label is unreadable."
+    assert data["hint"] == f"rig release i-{row.id} --yes"
+    assert harness.provider.destroyed == []
+    code, data, _ = release(harness, f"i-{row.id}", "--yes")
+    assert code == 0
+    assert harness.provider.destroyed == [row.id]
+
+
 def test_release_by_instance_id_of_managed_lease(harness: Harness) -> None:
     row = add_lease(harness)
     code, data, _ = release(harness, f"i-{row.id}")
