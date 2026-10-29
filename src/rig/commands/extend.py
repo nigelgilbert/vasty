@@ -7,6 +7,11 @@ lengthening, label then clock file when shortening. A failed second write
 restores the first and returns `provider_error`; the lease shows
 `guard: partial` with `clock_file` missing until the next probe.
 
+Under the `leases.json` lock, `extend` reloads each target from the file and
+computes the new expiry and the budget from that copy. A target another local
+process released since `refresh` returns `lease_expired` and keeps its cache
+entry.
+
 A lease is writable when the refresh's probe reached it. A `pending` lease
 that SSH has never answered returns `lease_pending`. An `unreachable` or
 `stopped` lease returns `box_unreachable` and changes nothing.
@@ -17,6 +22,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import shlex
+from collections.abc import Mapping
 
 from rig import budget, engine, labels, views
 from rig.cli import Outcome
@@ -97,13 +103,17 @@ def _release_hint(args: argparse.Namespace | None, lease: str | None) -> str:
     return shlex.join(argv)
 
 
+def _expired(lease: CachedLease) -> RigError:
+    state = lease.state if lease.state in HISTORY_STATES else "being destroyed"
+    return RigError(
+        "lease_expired", f"Lease {lease.lease} is {state}.", "Run rig reserve for a new box."
+    )
+
+
 def check_writable(lease: CachedLease) -> None:
     """Raise `lease_expired`, `lease_pending` or `box_unreachable` for a lease extend cannot write."""
     if lease.state in HISTORY_STATES:
-        raise RigError(
-            "lease_expired", f"Lease {lease.lease} is {lease.state}.",
-            "Run rig reserve for a new box.",
-        )
+        raise _expired(lease)
     if lease.state == "pending" and lease.reachable_at is None:
         raise RigError(
             "lease_pending", f"Lease {lease.lease} does not answer SSH yet.",
@@ -115,6 +125,19 @@ def check_writable(lease: CachedLease) -> None:
             f"Lease {lease.lease} is {lease.state}; its clock file cannot be reached.",
             shlex.join(["rig", "release", lease.lease]),
         )
+
+
+def _reload(cached: Mapping[str, CachedLease], lease: CachedLease) -> CachedLease:
+    """Return the copy of `lease` in `cached`, or `lease` when `cached` lacks it.
+
+    Pass the leases from `leases.json` read under its lock, so a release or
+    extend by another local process since `refresh` counts. Raise
+    `lease_expired` when that copy is in history or has `destroy_pending`.
+    """
+    found = cached.get(lease.lease, lease)
+    if found.state in HISTORY_STATES or found.destroy_pending:
+        raise _expired(found)
+    return found
 
 
 def _mark_partial(lease: CachedLease) -> None:
@@ -244,10 +267,11 @@ def _single(
 ) -> Outcome:
     now = snap.now
     check_writable(lease)
-    expires = new_expiry(lease, change)
-    if expires <= now:
-        raise invalid("The new expiry is at or before now.", _release_hint(None, lease.lease))
     with ctx.cache.lock():
+        lease = _reload(ctx.cache.load().leases, lease)
+        expires = new_expiry(lease, change)
+        if expires <= now:
+            raise invalid("The new expiry is at or before now.", _release_hint(None, lease.lease))
         projected, daily = engine.budget_check(
             ctx, snap, hint=EXTEND_BUDGET_HINT, replace={lease.lease: expires},
             leases=engine.locked_active(ctx, snap),
@@ -280,20 +304,31 @@ def _bulk(
     change: Change,
 ) -> Outcome:
     now = snap.now
+    leases = list(leases)
     errors: dict[str, RigError] = {}
     targets: dict[str, int] = {}
     for lease in leases:
         try:
             check_writable(lease)
-            expires = new_expiry(lease, change)
-            if expires <= now:
-                raise invalid("The new expiry is at or before now.", _release_hint(args, lease.lease))
-            targets[lease.lease] = expires
         except RigError as err:
             errors[lease.lease] = err
     warnings: list[WarningItem] = []
     entries: list[BulkEntry] = []
     with ctx.cache.lock():
+        cached = ctx.cache.load().leases
+        for index, lease in enumerate(leases):
+            if lease.lease in errors:
+                continue
+            try:
+                leases[index] = lease = _reload(cached, lease)
+                expires = new_expiry(lease, change)
+                if expires <= now:
+                    raise invalid(
+                        "The new expiry is at or before now.", _release_hint(args, lease.lease)
+                    )
+                targets[lease.lease] = expires
+            except RigError as err:
+                errors[lease.lease] = err
         if targets:
             projected, daily = engine.budget_check(
                 ctx, snap, hint=EXTEND_BUDGET_HINT, replace=targets,

@@ -319,22 +319,29 @@ def test_shortening_passes_over_budget(h: Harness) -> None:
     assert label_of(h, row.id).expires == NOW + 3600
 
 
+def run_after_refresh(h: Harness, monkeypatch: pytest.MonkeyPatch, *argv: str) -> None:
+    """Run `argv` as a second local rig command right after the next refresh returns."""
+    from rig import engine
+
+    real = engine.refresh
+
+    def refresh_then_run(ctx: Any, probe: bool = True) -> engine.Snapshot:
+        snap = real(ctx, probe)
+        monkeypatch.setattr(engine, "refresh", real)
+        code, out, _ = h.run(*argv)
+        assert code == 0, out
+        return snap
+
+    monkeypatch.setattr(engine, "refresh", refresh_then_run)
+
+
 def reserve_after_refresh(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     """Run a second local `reserve --no-wait` right after the next refresh returns."""
     from fakes import make_offer
-    from rig import engine
 
     h.provider.offers = [make_offer(1)]
-    real = engine.refresh
-
-    def refresh_then_reserve(ctx: Any, probe: bool = True) -> engine.Snapshot:
-        snap = real(ctx, probe)
-        monkeypatch.setattr(engine, "refresh", real)
-        h.hex_values = ["0000b001"]
-        assert h.run("reserve", "--ttl", "1h", "--no-wait")[0] == 0
-        return snap
-
-    monkeypatch.setattr(engine, "refresh", refresh_then_reserve)
+    h.hex_values = ["0000b001"]
+    run_after_refresh(h, monkeypatch, "reserve", "--ttl", "1h", "--no-wait")
 
 
 def test_budget_counts_local_reserve_between_refresh_and_lock(
@@ -347,6 +354,49 @@ def test_budget_counts_local_reserve_between_refresh_and_lock(
     assert code == 3
     assert data["details"] == {"projected": 1.13, "remaining": 0.12, "daily_budget": 1.0}
     assert label_of(h, row.id).expires == NOW + 3600
+
+
+def test_budget_counts_local_extend_between_refresh_and_lock(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h.env["RIG_DAILY_BUDGET"] = "1.60"
+    row = add_lease(h, "l-0000a001", label={"expires": NOW + 1800}, dph_total=Decimal("0.50"))
+    add_lease(h, "l-0000a002", label={"expires": NOW + 1800}, dph_total=Decimal("0.50"))
+    run_after_refresh(h, monkeypatch, "extend", "l-0000a002", "--by", "2h")
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert code == 3, data
+    assert data["error"] == "budget_exceeded"
+    assert data["details"] == {"projected": 1.75, "remaining": 0.1, "daily_budget": 1.6}
+    assert label_of(h, row.id).expires == NOW + 1800
+    assert h.box.state(row.id).clock == NOW + 1800
+
+
+def test_extend_stacks_on_local_extend_between_refresh_and_lock(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = add_lease(h, label={"expires": NOW + 600})
+    run_after_refresh(h, monkeypatch, "extend", "l-0000a001", "--by", "1h")
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert code == 0, data
+    assert label_of(h, row.id).expires == NOW + 6000
+    assert h.box.state(row.id).clock == NOW + 6000
+    assert cached(h, "l-0000a001").label.expires == NOW + 6000
+
+
+def test_release_between_refresh_and_lock_is_expired(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h.provider.keep_rows = True
+    row = add_lease(h, label={"expires": NOW + 600})
+    run_after_refresh(h, monkeypatch, "release", "l-0000a001")
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert (code, data["error"]) == (1, "lease_expired")
+    lease = cached(h, "l-0000a001")
+    assert lease.state == "released"
+    assert lease.released_here and lease.destroy_pending
+    assert label_of(h, row.id).expires == NOW + 600
+    assert [c for c in h.provider.calls if c[0] == "set_label"] == []
+    assert h.box.clock_writes == []
 
 
 # Bulk.
@@ -385,6 +435,29 @@ def test_bulk_budget_counts_local_reserve_between_refresh_and_lock(
     assert code == 3
     assert data["error"] == "budget_exceeded"
     assert data["details"] == {"projected": 1.13, "remaining": 0.37, "daily_budget": 1.0}
+
+
+def test_bulk_release_between_refresh_and_lock_is_expired(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h.provider.keep_rows = True
+    a = add_lease(h, "l-0000a001", label={"group": "exp", "expires": NOW + 600})
+    b = add_lease(h, "l-0000a002", label={"group": "exp", "expires": NOW + 600})
+    run_after_refresh(h, monkeypatch, "release", "l-0000a002")
+    code, data = run_json(h, "extend", "--group", "exp", "--by", "30m")
+    assert code == 1
+    assert data["results"] == [
+        {"lease": "l-0000a001", "ok": True, "error": None, "expires_at": "2026-10-29T01:40:00Z"},
+        {"lease": "l-0000a002", "ok": False, "error": "lease_expired",
+         "expires_at": "2026-10-29T01:10:00Z"},
+    ]
+    lease = cached(h, "l-0000a002")
+    assert lease.state == "released"
+    assert lease.released_here and lease.destroy_pending
+    assert label_of(h, a.id).expires == NOW + 2400
+    assert label_of(h, b.id).expires == NOW + 600
+    assert [c[1][0] for c in h.provider.calls if c[0] == "set_label"] == [a.id]
+    assert h.box.clock_writes == [(a.id, NOW + 2400)]
 
 
 def test_bulk_budget_is_atomic(h: Harness) -> None:
