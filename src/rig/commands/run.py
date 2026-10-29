@@ -10,7 +10,9 @@ attached run streams the log to stdout in human mode and to stderr in JSON
 mode, then exits with the remote exit code. A lost attach refreshes the
 account: a lease now in history returns `lease_expired`, anything else
 `box_unreachable`, both with exit 2. SIGINT forwards `INT` to the job, waits
-up to 10s for it to exit, and exits 130.
+up to 10s for it to exit, and exits 130. After the job exits or SIGINT
+arrives, an auto-reserved box is released even when saving the job or the
+10s wait raises, and the exception then propagates.
 """
 
 from __future__ import annotations
@@ -186,7 +188,12 @@ def _attach(
     duration = max(0, now - started_at)
     if code is None:
         return _lost(ctx, lease, job, duration, warnings, snap)
-    save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, now))
+    try:
+        save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, now))
+    except BaseException:
+        if release_on_exit:
+            release_quietly(ctx, lease)
+        raise
     released = release_quietly(ctx, lease) if release_on_exit else False
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=code, duration_s=duration, released=released,
@@ -236,22 +243,27 @@ def _interrupted(
 ) -> Outcome:
     exit_code: int | None = None
     try:
-        ctx.box.signal_job(target, job.id, "INT")
-        deadline = ctx.mono() + INTERRUPT_WAIT_S
-        while True:
-            status = ctx.box.job_status(target, job.id)
-            if status.exit is not None:
-                exit_code = status.exit
-                break
-            if ctx.mono() >= deadline:
-                break
-            ctx.sleep(INTERRUPT_POLL_S)
-    except RigError as err:
-        ctx.warn(f"rig: could not stop {job.id} on {lease.lease}: {err.message}")
-    now = ctx.clock.now()
-    if exit_code is not None:
-        code = exit_code
-        save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, now))
+        try:
+            ctx.box.signal_job(target, job.id, "INT")
+            deadline = ctx.mono() + INTERRUPT_WAIT_S
+            while True:
+                status = ctx.box.job_status(target, job.id)
+                if status.exit is not None:
+                    exit_code = status.exit
+                    break
+                if ctx.mono() >= deadline:
+                    break
+                ctx.sleep(INTERRUPT_POLL_S)
+        except RigError as err:
+            ctx.warn(f"rig: could not stop {job.id} on {lease.lease}: {err.message}")
+        now = ctx.clock.now()
+        if exit_code is not None:
+            code = exit_code
+            save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, now))
+    except BaseException:
+        if release_on_exit:
+            release_quietly(ctx, lease)
+        raise
     released = release_quietly(ctx, lease) if release_on_exit else False
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=exit_code, duration_s=max(0, now - started_at),

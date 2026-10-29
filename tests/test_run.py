@@ -202,6 +202,33 @@ def test_sigint_keeps_named_box(harness: Harness, reserve: FakeReserve) -> None:
     assert harness.provider.destroyed == []
 
 
+def _second_interrupt(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    def interrupted(seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    harness.box.attach_job = lambda t, j, o: (_ for _ in ()).throw(KeyboardInterrupt)  # type: ignore[method-assign,assignment,return-value]
+    monkeypatch.setattr(harness.time, "sleep", interrupted)
+
+
+def test_second_sigint_releases_auto_reserved_box(
+    harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _second_interrupt(harness, monkeypatch)
+    with pytest.raises(KeyboardInterrupt):
+        run(harness, "--", "python", "train.py")
+    assert harness.box.state(1001).signals == [("j-1", "INT")]
+    assert harness.provider.destroyed == [1001]
+
+
+def test_second_sigint_keeps_existing_box(
+    harness: Harness, box: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _second_interrupt(harness, monkeypatch)
+    with pytest.raises(KeyboardInterrupt):
+        run(harness, "--on", "ft", "--", "python", "train.py")
+    assert harness.provider.destroyed == []
+
+
 # Auto-reserve.
 
 
@@ -228,6 +255,40 @@ def test_save_failure_after_job_start_releases_auto_box(
         run(harness, "--", "python", "train.py")
     assert harness.box.state(1001).jobs["j-1"].state == "running"
     assert harness.provider.destroyed == [1001]
+
+
+def _fail_finish_save(monkeypatch: pytest.MonkeyPatch) -> None:
+    from rig.commands import run as run_cmd
+
+    real = run_cmd.save_lease
+    calls: list[int] = []
+
+    def flaky(*args: Any) -> Any:
+        calls.append(1)
+        if len(calls) > 1:
+            raise OSError("disk full")
+        return real(*args)
+
+    monkeypatch.setattr(run_cmd, "save_lease", flaky)
+
+
+def test_save_failure_after_job_exit_releases_auto_box(
+    harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fail_finish_save(monkeypatch)
+    with pytest.raises(OSError, match="disk full"):
+        run(harness, "--", "python", "train.py")
+    assert harness.box.state(1001).jobs["j-1"].state == "exited"
+    assert harness.provider.destroyed == [1001]
+
+
+def test_save_failure_after_job_exit_keeps_existing_box(
+    harness: Harness, box: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fail_finish_save(monkeypatch)
+    with pytest.raises(OSError, match="disk full"):
+        run(harness, "--on", "ft", "--", "python", "train.py")
+    assert harness.provider.destroyed == []
 
 
 def test_os_error_before_job_keeps_existing_box(harness: Harness, box: int) -> None:
