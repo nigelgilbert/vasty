@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 from dataclasses import replace
 from typing import Any
@@ -135,3 +136,24 @@ def test_reserve_wait_error_reports_failed_sweep_on_stderr(harness: Harness) -> 
     assert code == 1
     assert json.loads(out)["error"] == "image_unsupported"
     assert FAILED_SWEEP in err.splitlines()
+
+
+def test_failing_run_with_closed_stderr_keeps_json_error(harness: Harness) -> None:
+    from rig import cli
+
+    add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
+    _fail_next_destroy(harness)
+    made: list[Context] = []
+
+    def make(ns: Any) -> Context:
+        ctx = harness.context()
+        cli.configure(ctx, ns)
+        ctx.stderr.close()
+        made.append(ctx)
+        return ctx
+
+    code = cli.run(["run", "--on", "nope", "--", "ls"], make)
+    out = made[0].stdout
+    assert isinstance(out, io.StringIO)
+    assert code == 1
+    assert json.loads(out.getvalue())["error"] == "lease_not_found"

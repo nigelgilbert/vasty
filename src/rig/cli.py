@@ -303,8 +303,11 @@ def _report_swept(ctx: Context) -> None:
     from rig.commands._common import merge_swept
     from rig.commands.status import swept_lines
 
-    for line in swept_lines(merge_swept(ctx.swept)):
-        print(f"rig: {line}", file=ctx.stderr)
+    try:
+        for line in swept_lines(merge_swept(ctx.swept)):
+            print(f"rig: {line}", file=ctx.stderr)
+    except Exception:
+        pass
 
 
 def _guess_mode(argv: Sequence[str], tty: bool) -> str:

@@ -9,7 +9,6 @@ import pytest
 
 from fakes import NOW, FakeReserve, Harness, add_lease
 from rig import engine
-from rig.context import Context
 from rig.errors import RigError
 from rig.models import Job
 from rig.remote import SshTarget
@@ -482,33 +481,20 @@ def test_auto_run_dropped_connection_keeps_box(harness: Harness, reserve: FakeRe
     assert harness.provider.destroyed == []
 
 
-def _contexts(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> list[Context]:
-    made: list[Context] = []
-    real = harness.context
-
-    def context(stdin: str = "", tty: bool = False) -> Context:
-        ctx = real(stdin=stdin, tty=tty)
-        made.append(ctx)
-        return ctx
-
-    monkeypatch.setattr(harness, "context", context)
-    return made
-
-
 def _broken_attach(target: SshTarget, job_id: str, out: TextIO) -> int | None:
     raise OSError("broken pipe")
 
 
 def test_auto_run_attach_error_keeps_box_and_prints_recovery(
-    harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
+    harness: Harness, reserve: FakeReserve
 ) -> None:
-    made = _contexts(harness, monkeypatch)
     harness.box.attach_job = _broken_attach  # type: ignore[method-assign]
     with pytest.raises(OSError, match="broken pipe"):
         run(harness, "--", "python", "train.py")
     assert harness.provider.destroyed == []
     assert harness.box.state(1001).jobs["j-1"].state == "running"
-    err = made[0].stderr
+    assert harness.last_ctx is not None
+    err = harness.last_ctx.stderr
     assert isinstance(err, io.StringIO)
     text = err.getvalue()
     assert "j-1 on l-0000b001" in text
@@ -517,18 +503,43 @@ def test_auto_run_attach_error_keeps_box_and_prints_recovery(
 
 
 def test_auto_run_attach_error_survives_broken_stderr(
-    harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
+    harness: Harness, reserve: FakeReserve
 ) -> None:
-    made = _contexts(harness, monkeypatch)
-
     def attach(target: SshTarget, job_id: str, out: TextIO) -> int | None:
-        made[0].stderr.close()
+        assert harness.last_ctx is not None
+        harness.last_ctx.stderr.close()
         raise OSError("broken pipe")
 
     harness.box.attach_job = attach  # type: ignore[method-assign]
     with pytest.raises(OSError, match="broken pipe"):
         run(harness, "--", "python", "train.py")
     assert harness.provider.destroyed == []
+
+
+def test_attach_error_reports_sweep_on_stderr(harness: Harness, reserve: FakeReserve) -> None:
+    add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
+    harness.box.attach_job = _broken_attach  # type: ignore[method-assign]
+    with pytest.raises(OSError, match="broken pipe"):
+        run(harness, "--", "python", "train.py")
+    assert harness.last_ctx is not None
+    err = harness.last_ctx.stderr
+    assert isinstance(err, io.StringIO)
+    assert "rig: SWEPT  l-0000a009 old" in err.getvalue()
+
+
+def test_attach_error_with_sweep_survives_broken_stderr(
+    harness: Harness, reserve: FakeReserve
+) -> None:
+    add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
+
+    def attach(target: SshTarget, job_id: str, out: TextIO) -> int | None:
+        assert harness.last_ctx is not None
+        harness.last_ctx.stderr.close()
+        raise OSError("broken pipe")
+
+    harness.box.attach_job = attach  # type: ignore[method-assign]
+    with pytest.raises(OSError, match="broken pipe"):
+        run(harness, "--", "python", "train.py")
 
 
 def test_auto_run_reports_box_the_release_refresh_swept_as_released(
