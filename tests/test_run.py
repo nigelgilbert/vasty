@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 from typing import Any, TextIO
@@ -8,6 +9,7 @@ import pytest
 
 from fakes import NOW, FakeReserve, Harness, add_lease
 from rig import engine
+from rig.context import Context
 from rig.errors import RigError
 from rig.models import Job
 from rig.remote import SshTarget
@@ -478,6 +480,101 @@ def test_auto_run_dropped_connection_keeps_box(harness: Harness, reserve: FakeRe
     assert code == 2 and data["error"] == "box_unreachable"
     assert data["released"] is False
     assert harness.provider.destroyed == []
+
+
+def _contexts(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> list[Context]:
+    made: list[Context] = []
+    real = harness.context
+
+    def context(stdin: str = "", tty: bool = False) -> Context:
+        ctx = real(stdin=stdin, tty=tty)
+        made.append(ctx)
+        return ctx
+
+    monkeypatch.setattr(harness, "context", context)
+    return made
+
+
+def _broken_attach(target: SshTarget, job_id: str, out: TextIO) -> int | None:
+    raise OSError("broken pipe")
+
+
+def test_auto_run_attach_error_keeps_box_and_prints_recovery(
+    harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    made = _contexts(harness, monkeypatch)
+    harness.box.attach_job = _broken_attach  # type: ignore[method-assign]
+    with pytest.raises(OSError, match="broken pipe"):
+        run(harness, "--", "python", "train.py")
+    assert harness.provider.destroyed == []
+    assert harness.box.state(1001).jobs["j-1"].state == "running"
+    err = made[0].stderr
+    assert isinstance(err, io.StringIO)
+    text = err.getvalue()
+    assert "j-1 on l-0000b001" in text
+    assert "2026-10-29T03:00:00Z" in text
+    assert "rig status l-0000b001" in text and "rig release l-0000b001" in text
+
+
+def test_auto_run_attach_error_survives_broken_stderr(
+    harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    made = _contexts(harness, monkeypatch)
+
+    def attach(target: SshTarget, job_id: str, out: TextIO) -> int | None:
+        made[0].stderr.close()
+        raise OSError("broken pipe")
+
+    harness.box.attach_job = attach  # type: ignore[method-assign]
+    with pytest.raises(OSError, match="broken pipe"):
+        run(harness, "--", "python", "train.py")
+    assert harness.provider.destroyed == []
+
+
+def test_auto_run_reports_box_the_release_refresh_swept_as_released(
+    harness: Harness, reserve: FakeReserve
+) -> None:
+    real = harness.box.attach_job
+
+    def attach(target: SshTarget, job_id: str, out: TextIO) -> int | None:
+        harness.time.advance(7300)
+        return real(target, job_id, out)
+
+    harness.box.attach_job = attach  # type: ignore[method-assign]
+    code, data, _ = run(harness, "--", "python", "train.py")
+    assert code == 0
+    assert [(s["lease"], s["ok"]) for s in data["swept"]] == [("l-0000b001", True)]
+    assert data["released"] is True
+    assert harness.provider.destroyed == [1001]
+
+
+def test_lost_attach_reports_wait_and_lost_refresh_sweeps(
+    harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _expire_other_lease_during_wait(harness, reserve, monkeypatch)
+
+    def attach(target: SshTarget, job_id: str, out: TextIO) -> int | None:
+        add_lease(harness, "l-0000a00b", label={"name": "older", "expires": NOW - 10})
+        return None
+
+    harness.box.attach_job = attach  # type: ignore[method-assign]
+    code, data, _ = run(harness, "--", "python", "train.py")
+    assert code == 2 and data["error"] == "box_unreachable"
+    assert [(s["lease"], s["ok"]) for s in data["swept"]] == [
+        ("l-0000a009", True), ("l-0000a00b", True)
+    ]
+    assert harness.provider.destroyed == [1001, 1003]
+
+
+def test_sigint_reports_reserve_wait_sweep(
+    harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _expire_other_lease_during_wait(harness, reserve, monkeypatch)
+    harness.box.attach_job = lambda t, j, o: (_ for _ in ()).throw(KeyboardInterrupt)  # type: ignore[method-assign,assignment,return-value]
+    code, data, _ = run(harness, "--", "python", "train.py")
+    assert code == 130 and data["released"] is True
+    assert [(s["lease"], s["ok"]) for s in data["swept"]] == [("l-0000a009", True)]
+    assert sorted(harness.provider.destroyed) == [1001, 1002]
 
 
 # --sync.

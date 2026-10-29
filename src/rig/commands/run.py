@@ -9,13 +9,14 @@ Every job starts under tmux in `/workspace` and is recorded in the cache. An
 attached run streams the log to stdout in human mode and to stderr in JSON
 mode, then exits with the remote exit code. A lost attach refreshes the
 account: a lease now in history returns `lease_expired`, anything else
-`box_unreachable`, both with exit 2. SIGINT forwards `INT` to the job, waits
+`box_unreachable`, both with exit 2. An exception from the attach prints
+the lease, job id, expiry and recovery commands on stderr, leaves the box up
+and propagates. SIGINT forwards `INT` to the job, waits
 up to 10s for it to exit, and exits 130. After the job exits or SIGINT
 arrives, an auto-reserved box is released even when saving the job or the
 10s wait raises, and the exception then propagates. `swept` lists the
 entries of every refresh this call made: the first one, the reserve wait, and
-the lost-attach or release refresh. `merge_swept` keeps one entry per lease,
-`ok` and `error`.
+the lost-attach or release refresh.
 """
 
 from __future__ import annotations
@@ -87,7 +88,7 @@ def release_quietly(ctx: Context, lease: CachedLease) -> tuple[bool, list[SweptE
     except RigError as err:
         ctx.warn(f"rig: could not release {lease.lease}: {err.message} Run rig release {lease.lease}.")
         return False, swept
-    return not summary.already_absent, swept
+    return not summary.already_absent or any(e.lease == lease.lease and e.ok for e in swept), swept
 
 
 @contextmanager
@@ -210,6 +211,9 @@ def _attach(
         code = ctx.box.attach_job(target, job.id, out)
     except KeyboardInterrupt:
         return _interrupted(ctx, lease, target, job, release_on_exit, warnings, swept, started_at)
+    except Exception:
+        _warn_attach_lost(ctx, lease, job)
+        raise
     now = ctx.clock.now()
     duration = max(0, now - started_at)
     if code is None:
@@ -222,6 +226,16 @@ def _attach(
         warnings=warnings, swept=swept,
     )
     return Outcome(result, exit_code=code, human=_human(result))
+
+
+def _warn_attach_lost(ctx: Context, lease: CachedLease, job: Job) -> None:
+    """Print the lease, job id, expiry and recovery commands on stderr, ignoring a broken stderr."""
+    expires = iso(effective_expiry(lease.label))
+    try:
+        ctx.warn(f"rig: lost the attach to {job.id} on {lease.lease}; the box stays up until {expires}. "
+                 f"Check it with rig status {lease.lease}. Release it with rig release {lease.lease}.")
+    except Exception:
+        pass
 
 
 def _lost(
