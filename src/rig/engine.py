@@ -28,9 +28,10 @@ label has none.
   starts at 5s and doubles per call up to 60s (spec §6). A failed call sets
   `last_provider_error` and adds an `ok: false` entry to `swept`; an accepted
   one clears it. The entry's `expired_at` is the earlier of now and the
-  label's effective expiry. A retry whose re-read finds the row gone or `expires` moved
-  sends nothing and leaves `destroy_attempts`, `destroy_at` and
-  `last_provider_error` unchanged. The retry runs before the probe pool starts.
+  label's effective expiry. A retry whose re-read finds the row gone or
+  `expires` moved sends nothing and leaves `destroy_attempts`, `destroy_at`
+  and `last_provider_error` unchanged. The retry runs before the probe pool
+  starts.
 - A swept lease whose label is no longer past its clock drops
   `destroy_pending` and turns active again. A `released_here` lease keeps
   retrying.
@@ -42,10 +43,14 @@ label has none.
   unreadable label returns `provider_error` and changes nothing.
 - `run` releases an auto-reserved box through `release_lease` when the job
   exits or SIGINT arrives, and also when the post-exit save or the SIGINT
-  wait raises.
+  wait raises. The attached result's `swept` includes the entries of the
+  release refresh.
 - `extend` reloads its targets from `leases.json` under the lock. A target
-  in history or with `destroy_pending` returns `lease_expired` and keeps its
-  cache entry.
+  with `destroy_pending` returns `lease_expired` and keeps its cache entry.
+  Every other target then gets `check_writable` on the reloaded copy: a
+  history lease returns `lease_expired`, an `unreachable` or `stopped` lease
+  returns `box_unreachable`, and a `pending` lease with no SSH answer returns
+  `lease_pending`. None of them get a label or clock write.
 
 Adoption retries (spec §4.5). `tag` writes `miss` with every guard layer when
 it adopts an orphan. A lease whose label `miss` lists `watchdog` or
