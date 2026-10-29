@@ -144,6 +144,8 @@ class ProbeResult:
     jobs: list[Job] = field(default_factory=list)
     unsupported: list[str] = field(default_factory=list)
     """What a custom image lacks (`bash`, `root`, `apt-get`); non-empty maps to `image_unsupported`."""
+    startup_interrupted: bool = False
+    """Set when the hook started, the container restarted, and no exit marker exists."""
 
 
 LeaseState = Literal[
@@ -179,6 +181,7 @@ class CachedLease:
     history_since: int | None = None
     expired_at: int | None = None
     last_provider_error: str | None = None
+    startup_interrupted: bool = False
 
 
 # Output shapes.
