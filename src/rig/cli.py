@@ -262,7 +262,6 @@ def configure(ctx: Context, ns: argparse.Namespace) -> None:
     """Fill the parsed flags, output mode and stdin JSON into a context."""
     ctx.flags = setting_flags(ns)
     ctx.profile = getattr(ns, "profile", None)
-    ctx.verbose = bool(ns.verbose)
     if ns.json:
         ctx.mode = "json"
     elif ns.plain:

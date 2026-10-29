@@ -42,8 +42,6 @@ from rig.state import (
 )
 from rig.timeutil import iso
 
-ZERO = Decimal("0")
-
 
 def uptime_end(lease: CachedLease, now: int) -> int:
     """Return when the box stopped billing: now for active leases, else when rig saw it go."""

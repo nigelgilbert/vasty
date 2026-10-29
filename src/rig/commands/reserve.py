@@ -145,12 +145,11 @@ def reserve_lease(
 def request_ports(extra: list[int]) -> list[int]:
     """Return the default ports plus `extra`, deduplicated in order.
 
-    Raise `invalid_arguments` for a port outside 1-65535 or more than 64 ports.
+    `config` checks each port's type and range. Raise `invalid_arguments` for
+    more than 64 ports.
     """
     out: list[int] = []
     for port in (*DEFAULT_PORTS, *extra):
-        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
-            raise invalid(f"Port {port!r} is outside 1-65535.", "Pass --ports N[,N...] with TCP ports.")
         if port not in out:
             out.append(port)
     if len(out) > MAX_PORTS:
@@ -357,8 +356,6 @@ def _new_cached(
         lease = engine.lease_from_row(row, label)
     else:
         lease = CachedLease(lease=label.lease, instance_id=row, label=label, state="pending")
-    lease.label = label
-    lease.state = "pending"
     lease.guard_missing = list(GUARD_LAYERS)
     if lease.gpu is None:
         lease.gpu = offer.gpu_name

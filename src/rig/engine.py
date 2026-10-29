@@ -248,7 +248,7 @@ def _copy_row(lease: CachedLease, inst: Instance, label: Label) -> None:
     lease.ssh_host, lease.ssh_port = found if found is not None else (None, None)
 
 
-def _new_lease(inst: Instance, label: Label) -> CachedLease:
+def lease_from_row(inst: Instance, label: Label) -> CachedLease:
     """Return a `pending` lease for a row this machine has not cached.
 
     No probe has answered on this machine, so every guard layer starts
@@ -260,11 +260,6 @@ def _new_lease(inst: Instance, label: Label) -> CachedLease:
     observed = [layer for layer in GUARD_LAYERS if layer in label.miss]
     lease.guard_missing = observed if label.miss else list(GUARD_LAYERS)
     return lease
-
-
-def lease_from_row(inst: Instance, label: Label) -> CachedLease:
-    """Return a `pending` cached lease built from an instance row and its label."""
-    return _new_lease(inst, label)
 
 
 def store_lease(ctx: Context, lease: CachedLease) -> None:
@@ -355,7 +350,7 @@ def _sweep(
             ctx.provider.destroy(inst.id)
         except RigError as err:
             error = err.code
-        lease = cached if cached is not None else _new_lease(inst, label)
+        lease = cached if cached is not None else lease_from_row(inst, label)
         _copy_row(lease, inst, label)
         lease.state = "expired"
         lease.expired_at = effective_expiry(label)
@@ -547,7 +542,7 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
         for inst, label in rows.managed:
             found = leases.get(label.lease)
             if found is None:
-                found = _new_lease(inst, label)
+                found = lease_from_row(inst, label)
                 leases[label.lease] = found
             else:
                 _copy_row(found, inst, label)

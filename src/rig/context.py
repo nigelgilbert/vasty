@@ -46,7 +46,6 @@ class Context:
     profile: str | None = None
     stdin_json: dict[str, Any] | None = None
     mode: str = "json"
-    verbose: bool = False
     env: Mapping[str, str] = field(default_factory=lambda: dict(os.environ))
     cwd: Path = field(default_factory=Path.cwd)
     home: Path = field(default_factory=Path.home)

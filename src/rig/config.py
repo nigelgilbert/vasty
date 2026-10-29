@@ -30,8 +30,6 @@ from typing import Any, Callable, Mapping
 from rig import timeutil
 from rig.errors import RigError
 
-SOURCES = ("flag", "stdin", "profile", "env", "project", "user", "default")
-
 # Value kinds for every key a config table accepts.
 DEFAULT_KEYS: dict[str, str] = {
     "ttl": "duration",

@@ -40,7 +40,6 @@ _FIXES: dict[str, list[str]] = {
     "clock_unverified": ["rig", "status"],
     "cache_rebuilt": ["rig", "status"],
 }
-WARNING_CODES: frozenset[str] = frozenset(_FIXES)
 
 
 def effective_expiry(label: Label) -> int:
