@@ -356,9 +356,18 @@ def _new_cached(
 _E = TypeVar("_E", bound=BaseException)
 
 
+def _row_expires(ctx: Context, instance_id: int) -> int | None:
+    """Return `expires` from the row's label, or None when the row or the value is missing."""
+    row = ctx.provider.get_instance(instance_id)
+    parsed = labels.parse(row.label) if row is not None else None
+    return parsed.expires if isinstance(parsed, Label) else None
+
+
 def _give_up(ctx: Context, lease: CachedLease, created: bool, err: _E) -> _E:
     """Destroy a box this call created and return `err` to raise.
 
+    A stored label without `expires` takes the value from the row, since a
+    probe may have written the clock to the label before the wait stopped.
     The lease turns `released` only when Vast accepts the destroy or the row
     is already gone. Otherwise it stays active and a stderr line names the
     `rig release` fix.
@@ -367,7 +376,10 @@ def _give_up(ctx: Context, lease: CachedLease, created: bool, err: _E) -> _E:
         return err
     fix = f"Run rig release {lease.lease}."
     try:
-        destroyed = engine.destroy_checked(ctx, lease.instance_id, lease.label.expires)
+        expires = lease.label.expires
+        if expires is None:
+            expires = _row_expires(ctx, lease.instance_id)
+        destroyed = engine.destroy_checked(ctx, lease.instance_id, expires)
         if not destroyed and ctx.provider.get_instance(lease.instance_id) is not None:
             ctx.warn(f"rig: {lease.lease} changed before it could be destroyed. {fix}")
             return err

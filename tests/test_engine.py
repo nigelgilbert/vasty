@@ -192,6 +192,51 @@ def test_failed_retry_records_error_and_backs_off(harness: Harness) -> None:
     assert lease.last_provider_error is None
 
 
+def test_failed_retry_on_a_later_refresh_is_reported_in_swept(harness: Harness) -> None:
+    row = add_lease(harness, label={"name": "ft", "expires": NOW - 10})
+    harness.provider.fail["destroy"] = [RigError("provider_error", "boom", "retry") for _ in range(2)]
+    first = refresh(harness)
+    assert [(e.lease, e.ok, e.error) for e in first.swept] == [("l-0000a001", False, "provider_error")]
+    assert refresh(harness).swept == []
+    harness.time.advance(5)
+    snap = refresh(harness)
+    assert len(snap.swept) == 1
+    entry = snap.swept[0]
+    assert (entry.lease, entry.name, entry.ok, entry.error) == ("l-0000a001", "ft", False, "provider_error")
+    assert entry.expired_at == "2026-10-29T00:59:50Z"
+    assert row.id in harness.provider.instances
+    assert snap.leases["l-0000a001"].destroy_attempts == 2
+    harness.time.advance(10)
+    assert refresh(harness).swept == []
+    assert harness.provider.destroyed == [row.id]
+
+
+def test_skipped_retry_leaves_attempts_and_error_unchanged(harness: Harness) -> None:
+    harness.provider.keep_rows = True
+    row = add_lease(harness)
+    refresh(harness)
+    release_in_cache(harness)
+    edit_cache(harness, "l-0000a001", last_provider_error="destroy failed: provider_error")
+    real_get = harness.provider.get_instance
+
+    def get_instance(instance_id: int) -> Instance | None:
+        harness.provider.instances[instance_id].label = lease_label(expires=NOW + 7200)
+        return real_get(instance_id)
+
+    harness.provider.get_instance = get_instance  # type: ignore[method-assign]
+    harness.time.advance(5)
+    snap = refresh(harness)
+    assert harness.provider.destroyed == []
+    assert snap.swept == []
+    lease = snap.leases["l-0000a001"]
+    assert (lease.state, lease.destroy_pending) == ("released", True)
+    assert (lease.destroy_attempts, lease.destroy_at) == (1, NOW)
+    assert lease.last_provider_error == "destroy failed: provider_error"
+    harness.provider.get_instance = real_get  # type: ignore[method-assign]
+    refresh(harness)
+    assert harness.provider.destroyed == [row.id]
+
+
 def test_released_lease_listed_without_pending_is_destroyed(harness: Harness) -> None:
     harness.provider.keep_rows = True
     row = add_lease(harness)

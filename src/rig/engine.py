@@ -14,14 +14,18 @@ destroy and a list call still shows.
 
 - `release` and the `reserve` give-up path set it with `released_here` and
   state `released` once Vast accepts the destroy call. A give-up whose destroy
-  fails or finds the row changed leaves the lease active.
+  fails or finds the row changed leaves the lease active. When the stored
+  label has no `expires`, the give-up reads `expires` from the row and passes
+  that value to the destroy re-read.
 - The sweep sets it with state `expired` when it sends a destroy, whether Vast
   accepts the call or fails it.
 - `refresh` resends the destroy while the row stays listed, and sets
   `destroy_pending` again on a listed `released` lease. The wait between calls
   starts at 5s and doubles per call up to 60s (spec §6). A failed call sets
-  `last_provider_error`; an accepted one clears it. The retry runs before the
-  probe pool starts.
+  `last_provider_error` and adds an `ok: false` entry to `swept`; an accepted
+  one clears it. A retry whose re-read finds the row gone or `expires` moved
+  sends nothing and leaves `destroy_attempts`, `destroy_at` and
+  `last_provider_error` unchanged. The retry runs before the probe pool starts.
 - A swept lease whose label is no longer past its clock drops
   `destroy_pending` and turns active again. A `released_here` lease keeps
   retrying.
@@ -303,19 +307,30 @@ def retry_delay(attempts: int) -> int:
     return min(DESTROY_RETRY_CAP_S, DESTROY_RETRY_BASE_S << (attempts - 1))
 
 
-def _retry_destroy(ctx: Context, lease: CachedLease, inst: Instance, label: Label, now: int) -> None:
+def _retry_destroy(
+    ctx: Context, lease: CachedLease, inst: Instance, label: Label, now: int
+) -> SweptEntry | None:
+    """Resend the destroy for a `destroy_pending` or `released` lease when its backoff allows.
+
+    Return a failed `SweptEntry` when Vast rejects the call, and None when the
+    call is accepted, skipped by the re-read or held back by the backoff.
+    """
     if not lease.released_here and not past_clock(label, now):
         _clear_destroy(lease)
-        return
+        return None
     lease.destroy_pending = True
     if lease.destroy_at is not None and now - lease.destroy_at < retry_delay(lease.destroy_attempts):
-        return
+        return None
     error = None
     try:
-        destroy_checked(ctx, inst.id, label.expires)
+        if not destroy_checked(ctx, inst.id, label.expires):
+            return None
     except RigError as err:
         error = err.code
     mark_destroy_sent(lease, now, error)
+    if error is None:
+        return None
+    return SweptEntry(lease.lease, label.name, iso(effective_expiry(label)), False, error)
 
 
 def _sweep(
@@ -323,9 +338,9 @@ def _sweep(
 ) -> tuple[list[SweptEntry], dict[int, Instance | None], set[int]]:
     """Destroy managed rows past their clock and retry pending destroys.
 
-    Return the swept entries, the rows to replace in the listing and the ids
-    destroyed this call. A replacement is None for a vanished row and the
-    re-read row when `expires` moved.
+    Return the swept entries with any failed retries, the rows to replace in
+    the listing and the ids destroyed this call. A replacement is None for a
+    vanished row and the re-read row when `expires` moved.
     """
     swept: list[SweptEntry] = []
     replaced: dict[int, Instance | None] = {}
@@ -333,7 +348,9 @@ def _sweep(
     for inst, label in rows.managed:
         cached = leases.get(label.lease)
         if cached is not None and (cached.destroy_pending or cached.state == "released"):
-            _retry_destroy(ctx, cached, inst, label, now)
+            failed = _retry_destroy(ctx, cached, inst, label, now)
+            if failed is not None:
+                swept.append(failed)
             continue
         if not past_clock(label, now):
             continue

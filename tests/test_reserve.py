@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import io
 import json
 import os
+from dataclasses import replace
 from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from fakes import NOW, Harness, add_lease, make_offer, timeout_error
+from rig import engine
 from rig.commands import reserve
+from rig.context import Context
 from rig.errors import RigError
-from rig.labels import parse
+from rig.labels import format_label, parse
 from rig.models import CreateRequest, Instance, Label
 from rig.onstart import decode_onstart
 
@@ -412,6 +416,91 @@ def test_ctrl_c_during_wait_destroys_box(h: Harness, monkeypatch: pytest.MonkeyP
     assert h.provider.instances == {}
     lease = cached_lease(h)
     assert (lease.state, lease.released_here, lease.destroy_pending) == ("released", True, True)
+
+
+def interrupt_after_probe(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Raise Ctrl-C inside the first refresh that probes, after the probe writes the label."""
+    real_probe_all = engine._probe_all
+
+    def probe_all(ctx: Any, leases: list[Any], *args: Any) -> None:
+        real_probe_all(ctx, leases, *args)
+        if leases:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("rig.engine._probe_all", probe_all)
+
+
+def test_ctrl_c_after_probe_writes_expires_destroys_box(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    interrupt_after_probe(h, monkeypatch)
+    with pytest.raises(KeyboardInterrupt):
+        h.run("reserve")
+    assert h.provider.destroyed == [1001]
+    assert h.provider.instances == {}
+    lease = cached_lease(h)
+    assert (lease.state, lease.released_here, lease.destroy_pending) == ("released", True, True)
+
+
+def test_give_up_skips_destroy_when_expires_moves_after_row_read(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    interrupt_after_probe(h, monkeypatch)
+    real_row_expires = reserve._row_expires
+
+    def row_expires(ctx: Any, iid: int) -> int | None:
+        value = real_row_expires(ctx, iid)
+        assert value is not None
+        moved = replace(label_of(h, iid), expires=value + 600)
+        h.provider.instances[iid].label = format_label(moved)
+        return value
+
+    monkeypatch.setattr(reserve, "_row_expires", row_expires)
+    contexts: list[Context] = []
+    real_context = h.context
+
+    def context(stdin: str = "", tty: bool = False) -> Context:
+        contexts.append(real_context(stdin, tty))
+        return contexts[-1]
+
+    monkeypatch.setattr(h, "context", context)
+    with pytest.raises(KeyboardInterrupt):
+        h.run("reserve")
+    monkeypatch.setattr(h, "context", real_context)
+    assert h.provider.destroyed == []
+    assert list(h.provider.instances) == [1001]
+    err = contexts[0].stderr
+    assert isinstance(err, io.StringIO)
+    assert "rig: l-abababab changed before it could be destroyed. Run rig release l-abababab." in (
+        err.getvalue())
+    lease = cached_lease(h)
+    assert (lease.released_here, lease.destroy_pending) == (False, False)
+
+
+def test_give_up_keeps_stored_expires_when_row_differs(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unsupported_image(h)
+    real_refresh = engine.refresh
+
+    def refresh(ctx: Any, probe: bool = True) -> Any:
+        snap = real_refresh(ctx, probe)
+        for iid in h.provider.instances:
+            label = label_of(h, iid)
+            if label.expires is not None:
+                h.provider.instances[iid].label = format_label(replace(label, expires=label.expires + 600))
+        return snap
+
+    def no_row_read(ctx: Any, iid: int) -> int | None:
+        raise AssertionError("stored expires is set")
+
+    monkeypatch.setattr("rig.engine.refresh", refresh)
+    monkeypatch.setattr(reserve, "_row_expires", no_row_read)
+    code, out, err = h.run("reserve", "--image", "alpine:3")
+    assert code == 1
+    assert json.loads(out)["error"] == "image_unsupported"
+    assert "rig: l-abababab changed before it could be destroyed. Run rig release l-abababab." in err
+    assert h.provider.destroyed == []
 
 
 def test_refresh_error_during_wait_destroys_box(
