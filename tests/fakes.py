@@ -358,7 +358,7 @@ class Harness:
     missing_tools: set[str] = field(default_factory=set)
     """Tool names `which` reports as absent."""
     last_ctx: Context | None = None
-    """The context the outermost `run` built, kept when an exception escapes."""
+    """The context the latest `run` built, kept when an exception escapes."""
 
     def __post_init__(self) -> None:
         self.provider = FakeProvider(time=self.time)
@@ -407,11 +407,7 @@ class Harness:
             return ctx
 
         early_out, early_err = io.StringIO(), io.StringIO()
-        try:
-            code = run(list(argv), make, early_out, early_err)
-        finally:
-            # Restore this run's context after a nested `run` inside a hook.
-            self.last_ctx = holder[0] if holder else None
+        code = run(list(argv), make, early_out, early_err)
         if not holder:
             return code, early_out.getvalue(), early_err.getvalue()
         out = holder[0].stdout
