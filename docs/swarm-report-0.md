@@ -17,7 +17,7 @@ Result on the final commit: 898 passed, 1 skipped. mypy strict reports no issues
 ## Layout
 
 - `src/rig/` holds the package. `provider.py` is the only file that imports `vastai`.
-- `tests/fakes.py` holds `FakeProvider`, `FakeBox` and `Harness`. Every test runs against them. No test makes a network call.
+- `tests/fakes.py` holds `FakeProvider`, `FakeBox` and `Harness`. No test makes a network call. Provider tests stub the HTTP session.
 
 ## Per item
 
