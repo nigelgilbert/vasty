@@ -23,7 +23,6 @@ if TYPE_CHECKING:
     from rig.engine import Snapshot
 
 DEFAULT_EXCLUDES: tuple[str, ...] = (".git", "__pycache__", ".venv", "node_modules")
-WORKDIR = "/workspace"
 _JOB_NUMBER = re.compile(r"j-([0-9]+)")
 
 

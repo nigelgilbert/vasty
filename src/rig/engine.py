@@ -67,6 +67,7 @@ from rig.models import (
     SweptEntry,
     WarningItem,
 )
+from rig.onstart import STARTUP_INTERRUPTED
 from rig.state import GUARD_LAYERS, derive_state, effective_expiry, make_warning, resolve_state
 from rig.timeutil import iso
 
@@ -78,11 +79,9 @@ if TYPE_CHECKING:
 HISTORY_KEEP_S = 86_400
 PROBE_TIMEOUT_S = 5.0
 MAX_PROBE_THREADS = 16
-ZERO = Decimal("0")
 DESTROY_RETRY_BASE_S = 5
 DESTROY_RETRY_CAP_S = 60
 ADOPT_LAYERS = ("watchdog", "destroy_key")
-BUDGET_HINT = "Run rig status to see today's spend, then release a lease or shorten the TTL."
 
 
 @dataclass
@@ -406,7 +405,7 @@ def _probe_one(ctx: Context, lease: CachedLease) -> _Probed:
         result = ctx.box.probe(target, lease.label.expires, timeout=PROBE_TIMEOUT_S)
     except (RigError, OSError):
         return _Probed(None)
-    if result.startup_exit == -1:
+    if result.startup_exit == STARTUP_INTERRUPTED:
         result = dataclasses.replace(result, startup_interrupted=True)
     probed = _Probed(result)
     if _reruns_adoption(lease, result):
@@ -466,7 +465,7 @@ def _apply_probe(ctx: Context, lease: CachedLease, probed: _Probed, now: int) ->
     lease.unsupported = list(result.unsupported)
     lease.startup_started = result.startup_started
     lease.startup_interrupted = result.startup_interrupted
-    lease.startup_exit = None if result.startup_exit == -1 else result.startup_exit
+    lease.startup_exit = None if result.startup_exit == STARTUP_INTERRUPTED else result.startup_exit
     lease.jobs = _merge_jobs(lease.jobs, result.jobs)
     label = lease.label
     if probed.adopt_missing is not None:
@@ -644,9 +643,9 @@ def spend_from(charges: Charges | None, snap: Snapshot) -> tuple[Decimal | None,
     if spent is None:
         return None, None
     estimate = spent - charges.total
-    if estimate == ZERO:
+    if estimate == budget.ZERO:
         return spent, "billing"
-    if charges.total == ZERO:
+    if charges.total == budget.ZERO:
         return spent, "estimated"
     return spent, "mixed"
 
@@ -682,7 +681,7 @@ def locked_active(ctx: Context, snap: Snapshot) -> list[CachedLease]:
 def projection_for(
     ctx: Context,
     snap: Snapshot,
-    extra: Decimal = ZERO,
+    extra: Decimal = budget.ZERO,
     replace: Mapping[str, int] | None = None,
     leases: Iterable[CachedLease] | None = None,
 ) -> tuple[Decimal, Decimal]:
@@ -698,7 +697,7 @@ def projection_for(
     pool = snap.active() if leases is None else list(leases)
     base = budget.lease_commitments(pool)
     changed = budget.lease_commitments(pool, replace)
-    without = budget.projection(spent, base, snap.now, ZERO)
+    without = budget.projection(spent, base, snap.now, budget.ZERO)
     projected = budget.projection(spent, changed, snap.now, extra)
     return projected, without
 
@@ -706,8 +705,8 @@ def projection_for(
 def budget_check(
     ctx: Context,
     snap: Snapshot,
-    extra: Decimal = ZERO,
-    hint: str = BUDGET_HINT,
+    extra: Decimal = budget.ZERO,
+    hint: str = budget.BUDGET_HINT,
     replace: Mapping[str, int] | None = None,
     leases: Iterable[CachedLease] | None = None,
 ) -> tuple[Decimal, Decimal]:

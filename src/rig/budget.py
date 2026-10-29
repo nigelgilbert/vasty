@@ -19,6 +19,7 @@ HOUR = Decimal(3600)
 BILLING_FRESH_S = 60
 LOW_FRACTION = Decimal("0.9")
 ZERO = Decimal("0")
+BUDGET_HINT = "Run rig status to see today's spend, then release a lease or shorten the TTL."
 
 
 def day_start(now: int) -> int:
@@ -105,7 +106,7 @@ def check(
     projected: Decimal,
     without_action: Decimal,
     daily_budget: Decimal,
-    hint: str = "Run rig status to see today's spend, then release a lease or shorten the TTL.",
+    hint: str = BUDGET_HINT,
 ) -> None:
     """Raise `budget_exceeded` with `details` when `projected` passes `daily_budget`.
 

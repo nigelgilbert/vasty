@@ -21,8 +21,8 @@ from rig import ids
 from rig.cli import Outcome, build_parser
 from rig.context import Context
 from rig.errors import RigError, invalid
+from rig.models import HISTORY_STATES
 
-HISTORY = frozenset({"expired", "released", "gone"})
 LEASE_VERBS = ("extend", "release", "status", "tag", "sync", "ssh")
 GROUP_OPTS = ("--group", "--set-group")
 LEASE_OPTS = ("--on",)
@@ -94,7 +94,7 @@ def cached_names(path: Path, kind: str) -> list[str]:
     """
     out: list[str] = []
     for lease_id, entry in _read_cache(path).items():
-        if not isinstance(entry, dict) or entry.get("state") in HISTORY:
+        if not isinstance(entry, dict) or entry.get("state") in HISTORY_STATES:
             continue
         label = entry.get("label")
         label = label if isinstance(label, dict) else {}

@@ -37,12 +37,11 @@ from rig.commands._common import (
 from rig.config import ModelEntry, resolve
 from rig.context import Context
 from rig.errors import RigError
-from rig.models import CachedLease, Job, ServeResult, WarningItem
+from rig.models import SERVE_PORT, CachedLease, Job, ServeResult, WarningItem
 from rig.remote import BoxUnreachableError, SshTarget
 from rig.state import effective_expiry
 from rig.timeutil import iso
 
-PORT = 8000
 VENV = "/workspace/.rig/venv"
 DEFAULT_VLLM = "0.6.3"
 INSTALL_TIMEOUT_S = 1800.0
@@ -99,7 +98,7 @@ def server_argv(model: str, quant: str | None, host: str, key: str | None) -> li
     argv = [f"{VENV}/bin/vllm", "serve", model]
     if key is not None:
         argv += ["--api-key", key]
-    argv += ["--host", host, "--port", str(PORT)]
+    argv += ["--host", host, "--port", str(SERVE_PORT)]
     if quant:
         argv += ["--quantization", quant]
     return argv
@@ -107,7 +106,7 @@ def server_argv(model: str, quant: str | None, host: str, key: str | None) -> li
 
 def probe_command(key: str) -> str:
     """Return the curl command that prints the HTTP status of the box-local `/v1/models`."""
-    url = f"http://127.0.0.1:{PORT}/v1/models"
+    url = f"http://127.0.0.1:{SERVE_PORT}/v1/models"
     return (
         f"curl -s -o /dev/null -m {int(HTTP_TIMEOUT_S)} -w '%{{http_code}}' "
         f"-H {shlex.quote('Authorization: Bearer ' + key)} {url}"
@@ -166,11 +165,11 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
 def _public_url(ctx: Context, snap: engine.Snapshot, lease: CachedLease) -> str:
     row = snap.instance(lease.instance_id) or ctx.provider.get_instance(lease.instance_id)
     host = row.public_ipaddr if row is not None else None
-    port = (row.ports if row is not None else lease.ports).get(PORT) or lease.ports.get(PORT)
+    port = (row.ports if row is not None else lease.ports).get(SERVE_PORT) or lease.ports.get(SERVE_PORT)
     if not host or not port:
         raise RigError(
             "port_mapping_missing",
-            f"Lease {lease.lease} has no public mapping for port {PORT}.",
+            f"Lease {lease.lease} has no public mapping for port {SERVE_PORT}.",
             f"Serve on a box reserved by rig, or tunnel: rig serve --on {lease.lease} "
             f"--model MODEL --bind-local.",
         )
@@ -179,7 +178,7 @@ def _public_url(ctx: Context, snap: engine.Snapshot, lease: CachedLease) -> str:
 
 def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Plan) -> ServeResult:
     target = engine.ssh_target(lease)
-    url = f"http://127.0.0.1:{PORT}/v1" if plan.bind_local else _public_url(ctx, snap, lease)
+    url = f"http://127.0.0.1:{SERVE_PORT}/v1" if plan.bind_local else _public_url(ctx, snap, lease)
     _install(ctx, target, vllm_pin(plan.entry))
 
     key = "rig-" + ctx.random_hex(32)
@@ -188,7 +187,7 @@ def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Pl
     shown = shlex.join(server_argv(plan.model, plan.quant, host, None))
     job = Job(
         id=next_job_id(lease), cmd=shown, started_at=None, exit=None, state="serving",
-        kind="serve", port=PORT,
+        kind="serve", port=SERVE_PORT,
     )
     started = ctx.box.start_job(target, job, command)
     save_lease(ctx, lease, lambda record: put_job(record, started))

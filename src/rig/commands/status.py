@@ -25,6 +25,7 @@ from rig.context import Context
 from rig.errors import RigError
 from rig.models import (
     HISTORY_STATES,
+    SERVE_PORT,
     CachedLease,
     JobView,
     LeaseView,
@@ -43,7 +44,6 @@ DASH = "—"
 WARN_MARK = "⚠ "
 EXPIRING_CODES = frozenset({"expiring_soon", "expiring_with_running_job"})
 SHORT_SKIP = frozenset({"python", "python3", "uv", "uvx", "run", "bash", "sh", "exec", "env"})
-DEFAULT_SERVE_PORT = 8000
 
 
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
@@ -170,7 +170,7 @@ def _job_parts(view: JobView, lease: CachedLease | None) -> tuple[str, str]:
         for job in lease.jobs:
             if job.id == view.id:
                 kind, port = job.kind, job.port
-    return short_cmd(view.cmd, kind), str(port or DEFAULT_SERVE_PORT)
+    return short_cmd(view.cmd, kind), str(port or SERVE_PORT)
 
 
 def _shown_jobs(view: LeaseView) -> list[JobView]:

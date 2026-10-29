@@ -81,7 +81,6 @@ def reserve_lease(
         ids.validate_value("name", name)
     if group is not None:
         ids.validate_value("group", group)
-    ids.validate_value("owner", owner)
     ports = request_ports(settings.ports)
     warnings: list[WarningItem] = []
     swept = list(snap.swept)

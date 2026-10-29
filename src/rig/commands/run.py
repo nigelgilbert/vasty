@@ -25,7 +25,6 @@ from rig import engine
 from rig.cli import Outcome
 from rig.commands._common import (
     DEFAULT_EXCLUDES,
-    WORKDIR,
     finish_job,
     lease_warnings,
     merge_warnings,
@@ -45,6 +44,7 @@ from rig.models import (
     RunDetachedResult,
     WarningItem,
 )
+from rig.onstart import WORKDIR
 from rig.remote import SshTarget
 from rig.state import effective_expiry, fix_for
 from rig.timeutil import format_duration, iso

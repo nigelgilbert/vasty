@@ -10,7 +10,7 @@ values raise `invalid_config`. An unknown `--profile` name raises
 setting: the highest layer that sets either wins, and one table setting both
 raises `invalid_config`.
 
-This module imports only the standard library, `rig.errors` and `rig.timeutil`.
+This module imports only the standard library, `rig.errors`, `rig.ids` and `rig.timeutil`.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from typing import Any, Callable, Mapping
 
 from rig import timeutil
 from rig.errors import RigError
+from rig.ids import VALUE
 
 # Value kinds for every key a config table accepts.
 DEFAULT_KEYS: dict[str, str] = {
@@ -78,7 +79,6 @@ BUILTIN_MODELS: dict[str, dict[str, Any]] = {
     },
 }
 
-_OWNER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}")
 _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 
 
@@ -276,7 +276,7 @@ def _convert(kind: str, key: str, value: Any, origin: _Origin, home: Path) -> An
         return value
     if not value.strip():
         raise origin.fail(key, "takes a non-empty string")
-    if kind == "owner" and not _OWNER.fullmatch(value):
+    if kind == "owner" and not VALUE.fullmatch(value):
         raise origin.fail(key, "takes 1-63 characters from A-Z, a-z, 0-9, '.', '_' and '-'")
     if kind == "path":
         return _path(value, origin.base, home)
@@ -515,7 +515,7 @@ def resolve(
     if owner is None:
         owner = env.get("USER", "")
         sources["owner"] = "env"
-        if not _OWNER.fullmatch(owner):
+        if not VALUE.fullmatch(owner):
             raise RigError("invalid_config", f"No usable owner: $USER is {owner!r}.",
                            "Export RIG_OWNER=NAME.")
 

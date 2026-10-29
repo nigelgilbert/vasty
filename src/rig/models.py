@@ -152,6 +152,7 @@ LeaseState = Literal[
     "pending", "running", "unreachable", "stopped", "expired", "released", "gone", "orphan"
 ]
 HISTORY_STATES: frozenset[str] = frozenset({"expired", "released", "gone"})
+SERVE_PORT = 8000
 
 
 @dataclass
