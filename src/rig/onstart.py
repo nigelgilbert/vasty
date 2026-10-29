@@ -104,13 +104,21 @@ def _env_part(proc_environ: str) -> str:
 
 
 def _installer(apt: str, essentials: tuple[tuple[str, str], ...]) -> str:
-    """Install missing essentials with apt-get and record what the image lacks."""
+    """Install missing essentials with apt-get and record what the image lacks.
+
+    When `python3` is an essential, also install `python3-venv` if `python3`
+    cannot import `ensurepip` and `venv`, since `serve` runs `python3 -m venv`.
+    """
     pairs = " ".join(f"{cmd}:{pkg}" for cmd, pkg in essentials)
     a = shlex.quote(apt)
+    venv = ""
+    if any(cmd == "python3" for cmd, _ in essentials):
+        venv = "python3 -c 'import ensurepip,venv'>/dev/null 2>&1||p=\"$p python3-venv\"\n"
     return (
         f"u=;p=;for e in {pairs};do c=${{e%%:*}};"
         'command -v $c>/dev/null||[ -x /usr/sbin/$c ]||p="$p ${e#*:}";done\n'
-        '[ "$(id -u)" = 0 ]||u="$u root"\n'
+        + venv
+        + '[ "$(id -u)" = 0 ]||u="$u root"\n'
         f'if [ -n "$p" ];then if command -v {a}>/dev/null;then '
         f"export DEBIAN_FRONTEND=noninteractive;{a} update -qq>>\"$R/install.log\" 2>&1;"
         f"{a} install -y -qq --no-install-recommends $p>>\"$R/install.log\" 2>&1||"
