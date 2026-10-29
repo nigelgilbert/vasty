@@ -608,6 +608,7 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
         rows = classify(instances)
         leases = data.leases
         swept, replaced, destroyed = _sweep(ctx, rows, leases, now)
+        ctx.swept.extend(swept)
         instances = [
             row for row in (replaced.get(inst.id, inst) for inst in instances) if row is not None
         ]
@@ -655,7 +656,6 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
         data.cached_at = now
         data.rebuilt = False
         ctx.cache.save(data)
-        ctx.swept.extend(swept)
         return Snapshot(
             now=now,
             instances=instances,

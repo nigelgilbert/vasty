@@ -212,6 +212,21 @@ def test_failed_retry_on_a_later_refresh_is_reported_in_swept(harness: Harness) 
     assert harness.provider.destroyed == [row.id]
 
 
+def test_refresh_records_sweep_before_a_failing_save(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
+    ctx = harness.context()
+
+    def fail(data: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ctx.cache, "save", fail)
+    with pytest.raises(OSError, match="disk full"):
+        engine.refresh(ctx)
+    assert [(e.lease, e.ok) for e in ctx.swept] == [("l-0000a009", True)]
+
+
 def test_skipped_retry_leaves_attempts_and_error_unchanged(harness: Harness) -> None:
     harness.provider.keep_rows = True
     row = add_lease(harness)
