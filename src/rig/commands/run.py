@@ -12,8 +12,10 @@ account: a lease now in history returns `lease_expired`, anything else
 `box_unreachable`, both with exit 2. SIGINT forwards `INT` to the job, waits
 up to 10s for it to exit, and exits 130. After the job exits or SIGINT
 arrives, an auto-reserved box is released even when saving the job or the
-10s wait raises, and the exception then propagates. The attached result's
-`swept` includes the entries of the release refresh.
+10s wait raises, and the exception then propagates. `swept` lists the
+entries of every refresh this call made: the first one, the reserve wait, and
+the lost-attach or release refresh. `merge_swept` keeps one entry per lease,
+`ok` and `error`.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, TextIO
+from typing import TextIO
 
 from rig import engine
 from rig.cli import Outcome
@@ -32,6 +34,7 @@ from rig.commands._common import (
     DEFAULT_EXCLUDES,
     finish_job,
     lease_warnings,
+    merge_swept,
     merge_warnings,
     next_job_id,
     pick_lease,
@@ -54,9 +57,6 @@ from rig.onstart import WORKDIR
 from rig.remote import SshTarget
 from rig.state import effective_expiry, fix_for
 from rig.timeutil import format_duration, iso
-
-if TYPE_CHECKING:
-    from rig.engine import Snapshot
 
 INTERRUPT_WAIT_S = 10.0
 INTERRUPT_POLL_S = 0.5
@@ -108,7 +108,7 @@ def _released_swept(
     if not release_on_exit:
         return False, swept
     released, more = release_quietly(ctx, lease)
-    return released, swept + [entry for entry in more if entry not in swept]
+    return released, merge_swept(swept, more)
 
 
 def push_dir(ctx: Context, target: SshTarget, directory: str) -> None:
@@ -159,9 +159,11 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         reserved = reserve.reserve_lease(ctx, args, snap, ttl=ttl, wait=True)
         lease = reserved.lease
         warnings = list(reserved.result.warnings)
+        swept = merge_swept(list(snap.swept), reserved.result.swept)
         created = not reserved.result.reused
     else:
         lease = pick_lease(ctx, snap, args.on)
+        swept = list(snap.swept)
     release_on_exit = auto and args.name is None and not detach and created
 
     with _release_on_error(ctx, lease, created):
@@ -183,38 +185,38 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
             log_path=log_path,
             expires_at=iso(effective_expiry(lease.label)),
             warnings=warnings,
-            swept=list(snap.swept),
+            swept=swept,
         )
         human = (
             f"Started {started.id} on {lease.lease}. Log: {log_path}\n"
             f"Follow it with: rig ssh {lease.lease} -- tail -f {log_path}"
         )
         return Outcome(detached, human=human)
-    return _attach(ctx, snap, lease, target, started, release_on_exit, warnings)
+    return _attach(ctx, lease, target, started, release_on_exit, warnings, swept)
 
 
 def _attach(
     ctx: Context,
-    snap: Snapshot,
     lease: CachedLease,
     target: SshTarget,
     job: Job,
     release_on_exit: bool,
     warnings: list[WarningItem],
+    swept: list[SweptEntry],
 ) -> Outcome:
     out: TextIO = ctx.stderr if ctx.mode == "json" else ctx.stdout
     started_at = job.started_at if job.started_at is not None else ctx.clock.now()
     try:
         code = ctx.box.attach_job(target, job.id, out)
     except KeyboardInterrupt:
-        return _interrupted(ctx, snap, lease, target, job, release_on_exit, warnings, started_at)
+        return _interrupted(ctx, lease, target, job, release_on_exit, warnings, swept, started_at)
     now = ctx.clock.now()
     duration = max(0, now - started_at)
     if code is None:
-        return _lost(ctx, lease, job, duration, warnings, snap)
+        return _lost(ctx, lease, job, duration, warnings, swept)
     with _release_on_error(ctx, lease, release_on_exit):
         save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, now))
-    released, swept = _released_swept(ctx, lease, release_on_exit, list(snap.swept))
+    released, swept = _released_swept(ctx, lease, release_on_exit, swept)
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=code, duration_s=duration, released=released,
         warnings=warnings, swept=swept,
@@ -228,16 +230,15 @@ def _lost(
     job: Job,
     duration: int,
     warnings: list[WarningItem],
-    snap: Snapshot,
+    swept: list[SweptEntry],
 ) -> Outcome:
     error = "box_unreachable"
-    swept = list(snap.swept)
     try:
         fresh = engine.refresh(ctx)
     except RigError:
         fresh = None
     if fresh is not None:
-        swept += [entry for entry in fresh.swept if entry not in swept]
+        swept = merge_swept(swept, fresh.swept)
         now_lease = fresh.leases.get(lease.lease)
         if now_lease is None or now_lease.state in HISTORY_STATES:
             error = "lease_expired"
@@ -253,12 +254,12 @@ def _lost(
 
 def _interrupted(
     ctx: Context,
-    snap: Snapshot,
     lease: CachedLease,
     target: SshTarget,
     job: Job,
     release_on_exit: bool,
     warnings: list[WarningItem],
+    swept: list[SweptEntry],
     started_at: int,
 ) -> Outcome:
     exit_code: int | None = None
@@ -280,7 +281,7 @@ def _interrupted(
         if exit_code is not None:
             code = exit_code
             save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, now))
-    released, swept = _released_swept(ctx, lease, release_on_exit, list(snap.swept))
+    released, swept = _released_swept(ctx, lease, release_on_exit, swept)
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=exit_code, duration_s=max(0, now - started_at),
         released=released, warnings=warnings, swept=swept,

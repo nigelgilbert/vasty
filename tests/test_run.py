@@ -7,6 +7,7 @@ from typing import Any, TextIO
 import pytest
 
 from fakes import NOW, FakeReserve, Harness, add_lease
+from rig import engine
 from rig.errors import RigError
 from rig.models import Job
 from rig.remote import SshTarget
@@ -341,6 +342,80 @@ def test_sigint_reports_release_refresh_sweep(harness: Harness, reserve: FakeRes
     assert data["released"] is True
     assert [(s["lease"], s["name"], s["ok"]) for s in data["swept"]] == [("l-0000a009", "old", True)]
     assert sorted(harness.provider.destroyed) == [1001, 1002]
+
+
+def _expire_other_lease_during_wait(
+    harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def wait(ctx: Any, args: Any, snap: Any, *, ttl: int, wait: bool = True) -> Any:
+        add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
+        return reserve(ctx, args, snap, ttl=ttl, wait=wait)
+
+    monkeypatch.setattr("rig.commands.reserve.reserve_lease", wait)
+
+
+@pytest.mark.parametrize("detach", [False, True])
+@pytest.mark.parametrize("ok", [True, False])
+def test_auto_run_reports_reserve_wait_sweep(
+    harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch, detach: bool, ok: bool
+) -> None:
+    _expire_other_lease_during_wait(harness, reserve, monkeypatch)
+    if not ok:
+        harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    code, data, _ = run(harness, *(["--detach"] if detach else []), "--", "ls")
+    assert code == 0
+    error = None if ok else "provider_error"
+    assert [(s["lease"], s["name"], s["ok"], s["error"]) for s in data["swept"]] == [
+        ("l-0000a009", "old", ok, error)
+    ]
+    assert (1001 in harness.provider.destroyed) is ok
+    if not detach:
+        assert data["released"] is True and 1002 in harness.provider.destroyed
+
+
+def test_auto_run_lists_failed_release_retry_once(harness: Harness, reserve: FakeReserve) -> None:
+    add_lease(harness, label={"name": "gone", "expires": NOW + 3000})
+    ctx = harness.context()
+    engine.refresh(ctx)
+    cache = ctx.cache.load()
+    lease = cache.leases["l-0000a001"]
+    lease.state, lease.released_here, lease.destroy_pending = "released", True, True
+    lease.destroy_attempts, lease.destroy_at = 1, NOW - 60
+    ctx.cache.save(cache)
+    err = RigError("provider_error", "boom", "retry")
+    harness.provider.fail["destroy"] = [err, err]
+    real = harness.box.attach_job
+
+    def attach(target: SshTarget, job_id: str, out: TextIO) -> int | None:
+        harness.time.advance(10)
+        return real(target, job_id, out)
+
+    harness.box.attach_job = attach  # type: ignore[method-assign]
+    code, data, _ = run(harness, "--", "ls")
+    assert code == 0 and data["released"] is True
+    entries = [(s["lease"], s["ok"], s["expired_at"]) for s in data["swept"]]
+    assert entries == [("l-0000a001", False, "2026-10-29T01:00:00Z")]
+    assert harness.provider.destroyed == [1002]
+
+
+def test_failed_auto_release_reports_release_refresh_sweep(
+    harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _expire_other_lease_during_job(harness, interrupt=False)
+    real = harness.provider.destroy
+
+    def destroy(instance_id: int) -> None:
+        if instance_id == 1001:
+            raise RigError("provider_error", "boom", "retry")
+        real(instance_id)
+
+    monkeypatch.setattr(harness.provider, "destroy", destroy)
+    code, data, err = run(harness, "--", "python", "train.py")
+    assert code == 0
+    assert data["released"] is False
+    assert [(s["lease"], s["ok"]) for s in data["swept"]] == [("l-0000a009", True)]
+    assert harness.provider.destroyed == [1002]
+    assert "could not release l-0000b001" in err
 
 
 def test_auto_run_ttl_flag_overrides_run_ttl(harness: Harness, reserve: FakeReserve) -> None:

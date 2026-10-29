@@ -14,7 +14,15 @@ from typing import TYPE_CHECKING, Callable
 from rig import labels
 from rig.errors import RigError
 from rig.ids import job_number
-from rig.models import HISTORY_STATES, CachedLease, Instance, Job, Label, WarningItem
+from rig.models import (
+    HISTORY_STATES,
+    CachedLease,
+    Instance,
+    Job,
+    Label,
+    SweptEntry,
+    WarningItem,
+)
 from rig.targeting import resolve_lease
 from rig.views import warnings_for
 
@@ -120,6 +128,22 @@ def merge_warnings(*groups: list[WarningItem]) -> list[WarningItem]:
             if key not in seen:
                 seen.add(key)
                 out.append(item)
+    return out
+
+
+def merge_swept(*groups: list[SweptEntry]) -> list[SweptEntry]:
+    """Concatenate `swept` lists, keeping the first entry for each lease, `ok` and `error`.
+
+    A failed retry's `expired_at` moves with each refresh, so the key leaves it out.
+    """
+    seen: set[tuple[str, bool, str | None]] = set()
+    out: list[SweptEntry] = []
+    for group in groups:
+        for entry in group:
+            key = (entry.lease, entry.ok, entry.error)
+            if key not in seen:
+                seen.add(key)
+                out.append(entry)
     return out
 
 
