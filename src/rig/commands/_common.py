@@ -9,11 +9,11 @@ and `ssh` act on and raises the §7 code for a lease they cannot use.
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING, Callable
 
 from rig import labels
 from rig.errors import RigError
+from rig.ids import job_number
 from rig.models import HISTORY_STATES, CachedLease, Instance, Job, Label, WarningItem
 from rig.targeting import resolve_lease
 from rig.views import warnings_for
@@ -23,7 +23,6 @@ if TYPE_CHECKING:
     from rig.engine import Snapshot
 
 DEFAULT_EXCLUDES: tuple[str, ...] = (".git", "__pycache__", ".venv", "node_modules")
-_JOB_NUMBER = re.compile(r"j-([0-9]+)")
 
 
 def require_tools(ctx: Context, *names: str) -> None:
@@ -68,9 +67,9 @@ def next_job_id(lease: CachedLease) -> str:
     """Return `j-N` one past the highest job number on the lease."""
     highest = 0
     for job in lease.jobs:
-        match = _JOB_NUMBER.fullmatch(job.id)
-        if match is not None:
-            highest = max(highest, int(match.group(1)))
+        number = job_number(job.id)
+        if number is not None:
+            highest = max(highest, number)
     return f"j-{highest + 1}"
 
 

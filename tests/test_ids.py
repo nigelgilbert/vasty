@@ -38,6 +38,13 @@ def test_orphan_ids() -> None:
         assert ids.parse_orphan_id(text) is None
 
 
+def test_job_number() -> None:
+    assert ids.job_number("j-1") == 1
+    assert ids.job_number("j-042") == 42
+    for text in ["j-", "j-1a", "job-1", "1", "j-1\n", "J-1", "x-j-1"]:
+        assert ids.job_number(text) is None
+
+
 @pytest.mark.parametrize("kind", ["name", "group", "owner"])
 @pytest.mark.parametrize("value", ["a", "trainer", "claude-code", "exp_42.v2", "A" * 63, "9x"])
 def test_valid_values(kind: str, value: str) -> None:

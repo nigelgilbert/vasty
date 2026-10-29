@@ -136,8 +136,9 @@ def test_exec_raises_on_ssh_failure_and_timeout(tmp_path: Path) -> None:
     box = fake_box(tmp_path, runner)
     with pytest.raises(BoxUnreachableError, match="refused"):
         box.exec(TARGET, "true")
-    with pytest.raises(BoxUnreachableError):
+    with pytest.raises(BoxUnreachableError) as err:
         box.exec(TARGET, "true", timeout=3)
+    assert isinstance(err.value.__cause__, subprocess.TimeoutExpired)
 
 
 def test_exec_passes_remote_exit_codes(tmp_path: Path) -> None:
@@ -259,12 +260,23 @@ def test_rsync_path_with_a_space_is_quoted_on_old_rsync(tmp_path: Path) -> None:
         "/data/out/": "/data/out/",
         "~": ".",
         "~/a b/": "'./a b/'",
-        "~bob/a b": "~bob/'a b'",
-        "~bob": "~bob",
     }
     for src, remote in pulls.items():
         argv = box.rsync_argv(TARGET, False, src, "./", False, [])
         assert argv[-2] == f"root@198.51.100.7:{remote}"
+
+
+@pytest.mark.parametrize("protect", [True, False])
+@pytest.mark.parametrize("path", ["~bob/a b", "~bob", "~$(id)/foo"])
+@pytest.mark.parametrize("push", [True, False])
+def test_rsync_path_rejects_tilde_user(tmp_path: Path, protect: bool, path: str, push: bool) -> None:
+    box = fake_box(tmp_path, FakeRunner(), protect_args=protect)
+    src, dest = ("./", path) if push else (path, "./")
+    with pytest.raises(RigError) as err:
+        box.rsync_argv(TARGET, push, src, dest, False, [])
+    assert err.value.code == "invalid_arguments"
+    assert err.value.message == f"Remote path {path} uses ~user."
+    assert err.value.hint == "Use an absolute path or ~/."
 
 
 @pytest.mark.parametrize(

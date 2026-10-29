@@ -1,4 +1,4 @@
-"""Lease ids, orphan ids and name validation (spec §4.0)."""
+"""Lease ids, orphan ids, job numbers and name validation (spec §4.0)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from rig.errors import invalid
 
 LEASE_ID = re.compile(r"l-[0-9a-f]+")
 ORPHAN_ID = re.compile(r"i-[0-9]+")
+JOB_NUMBER = re.compile(r"j-([0-9]+)")
 VALUE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}")
 KINDS = ("name", "group", "owner")
 MAX_DRAWS = 1000
@@ -37,6 +38,12 @@ def parse_orphan_id(text: str) -> int | None:
     if ORPHAN_ID.fullmatch(text):
         return int(text[2:])
     return None
+
+
+def job_number(job_id: str) -> int | None:
+    """Return N for a `j-N` job id, else None."""
+    match = JOB_NUMBER.fullmatch(job_id)
+    return None if match is None else int(match.group(1))
 
 
 def is_lease_id(text: str) -> bool:

@@ -21,8 +21,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, TextIO
 
-from rig.errors import RigError
+from rig.errors import RigError, invalid
+from rig.ids import job_number
 from rig.models import Job, JobState, ProbeResult
+from rig.onstart import ROOT, WORKDIR
 
 
 class BoxUnreachableError(RigError):
@@ -159,7 +161,6 @@ def subprocess_runner(
 
 _JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SIGNAL = re.compile(r"^(?:[A-Z][A-Z0-9+-]*|[0-9]{1,2})$")
-_JOB_NUMBER = re.compile(r"j-([0-9]+)")
 _RSYNC_VERSION = re.compile(r"version\s+v?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?")
 WATCHDOG_STALE_S = 180
 JOB_CLAIM_TRIES = 10
@@ -178,8 +179,8 @@ def _job_id(job_id: str) -> str:
 
 def following_job_id(job_id: str) -> str | None:
     """Return `j-(N+1)` for a `j-N` id, or None for any other id."""
-    match = _JOB_NUMBER.fullmatch(job_id)
-    return None if match is None else f"j-{int(match.group(1)) + 1}"
+    number = job_number(job_id)
+    return None if number is None else f"j-{number + 1}"
 
 
 def parse_rsync_version(text: str) -> tuple[int, int, int] | None:
@@ -378,8 +379,8 @@ class SshBox:
         known_hosts: str,
         *,
         runner: Runner = subprocess_runner,
-        root: str = "/workspace/.rig",
-        workdir: str = "/workspace",
+        root: str = ROOT,
+        workdir: str = WORKDIR,
         tmux: str = "tmux",
         poll: float = 1.0,
         services: bool = True,
@@ -706,16 +707,15 @@ class SshBox:
 
         A leading `~` or `~/` becomes `.` because rsync resolves relative
         remote paths in the login user's home. Without `-s` the path is
-        shell-quoted, leaving any `~user/` prefix outside the quotes.
+        shell-quoted. Raise `invalid_arguments` for a `~user` path.
         """
         resolved = self.remote_path(path)
         if resolved == "~" or resolved.startswith("~/"):
             resolved = "." + resolved[1:]
+        if resolved.startswith("~"):
+            raise invalid(f"Remote path {path} uses ~user.", "Use an absolute path or ~/.")
         if protect:
             return resolved
-        if resolved.startswith("~"):
-            head, sep, tail = resolved.partition("/")
-            return head + sep + (shlex.quote(tail) if tail else "")
         return shlex.quote(resolved)
 
     def _protect_rule(self, dest: str) -> str | None:
