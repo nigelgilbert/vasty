@@ -408,6 +408,15 @@ def test_probe_reports_the_guard_file(tmp_path: Path, kw: dict[str, str], guard_
     assert fake_box(tmp_path, runner).probe(TARGET, 2000).guard_file is guard_file
 
 
+@pytest.mark.parametrize("kw, adopted", [
+    ({}, False),
+    ({"adopted": "1"}, True),
+])
+def test_probe_reports_the_adopted_marker(tmp_path: Path, kw: dict[str, str], adopted: bool) -> None:
+    runner = FakeRunner([ExecResult(0, probe_output(**kw), "")])
+    assert fake_box(tmp_path, runner).probe(TARGET, 2000).adopted is adopted
+
+
 def test_probe_reports_unsupported_and_interrupted_startup(tmp_path: Path) -> None:
     out = probe_output(unsupported="apt-get root ", startup_exit="-1")
     result = fake_box(tmp_path, FakeRunner([ExecResult(0, out, "")])).probe(TARGET, None)
@@ -530,6 +539,7 @@ def test_probe_reads_a_healthy_box(local: LocalBox) -> None:
     assert result.alive_mtime is not None and abs(result.alive_mtime - time.time()) < 60
     assert result.jobs == []
     assert result.unsupported == []
+    assert result.adopted is False
 
 
 def test_probe_rewrites_a_differing_clock(local: LocalBox) -> None:
@@ -633,6 +643,7 @@ def test_adopt_returns_missing_layers(local: LocalBox) -> None:
     assert (local.root / "watchdog.sh").exists()
     result = local.box.probe(TARGET, 4102444800)
     assert result.startup_exit == 0
+    assert result.adopted is True
 
 
 def test_job_lifecycle(local: LocalBox) -> None:

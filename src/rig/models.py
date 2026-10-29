@@ -148,6 +148,8 @@ class ProbeResult:
     """Set when the hook started, the container restarted, and no exit marker exists."""
     guard_file: bool = False
     """Set when `onstart` or the adoption script has written the guard file."""
+    adopted: bool = False
+    """Set when the adoption script has written its `adopted` marker."""
 
 
 LeaseState = Literal[

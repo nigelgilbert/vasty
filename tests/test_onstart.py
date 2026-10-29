@@ -532,6 +532,7 @@ def test_adopt_writes_clock_env_and_starts_watchdog(box: Box) -> None:
     assert stat.S_IMODE((box.root / "env").stat().st_mode) == 0o600
     assert (box.root / "alive").exists()
     assert box.read("startup.exit") == "0\n"
+    assert (box.root / "adopted").exists()
 
 
 def test_adopt_again_keeps_the_running_watchdog(box: Box) -> None:

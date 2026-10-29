@@ -24,7 +24,7 @@ from typing import Literal, Protocol, TextIO
 from rig.errors import RigError, invalid
 from rig.ids import job_number
 from rig.models import Job, JobState, ProbeResult
-from rig.onstart import ROOT, WORKDIR
+from rig.onstart import LAYERS, ROOT, WORKDIR, adopt_script
 
 
 class BoxUnreachableError(RigError):
@@ -257,6 +257,7 @@ def probe_script(label_expires: int | None, root: str) -> str:
         '[ -e "$R/guard" ] && echo guard_file=1\n'
         "echo \"guard=$(cat \"$R/guard\" 2>/dev/null | tr '\\n\\r\\t' '   ')\"\n"
         '[ -e "$R/startup.started" ] && echo startup_started=1\n'
+        '[ -e "$R/adopted" ] && echo adopted=1\n'
         "echo \"startup_exit=$(head -c 16 \"$R/startup.exit\" 2>/dev/null | tr -d ' \\n\\r\\t')\"\n"
         'echo "alive=$(stat -c %Y "$R/alive" 2>/dev/null || stat -f %m "$R/alive" 2>/dev/null)"\n'
         "if grep -q '^CONTAINER_ID=.' \"$R/env\" 2>/dev/null && "
@@ -306,7 +307,8 @@ def parse_probe(stdout: str, label_expires: int | None, root: str) -> ProbeResul
     `onstart` has written the guard file or started the startup hook.
     `destroy_key` is missing when the env file lacks the container key.
     `clock_file` is missing when the clock file is unreadable or still differs
-    from the label. Raise `BoxUnreachableError` on a partial answer.
+    from the label. `adopted` is set when the adoption script has run on the
+    box. Raise `BoxUnreachableError` on a partial answer.
     """
     lines = stdout.splitlines()
     if "rig_probe=1" not in lines or "rig_probe=end" not in lines:
@@ -359,6 +361,7 @@ def parse_probe(stdout: str, label_expires: int | None, root: str) -> ProbeResul
         jobs=jobs,
         unsupported=values.get("unsupported", "").split(),
         guard_file=guard_file,
+        adopted=values.get("adopted") == "1",
     )
 
 
@@ -487,8 +490,6 @@ class SshBox:
             raise BoxUnreachableError(f"Could not write the clock file. {result.stderr.strip()}")
 
     def adopt(self, target: SshTarget, expires: int) -> list[str]:
-        from rig.onstart import LAYERS, adopt_script
-
         script = adopt_script(
             expires, root=self.root, workdir=self.workdir, services=self.services
         )

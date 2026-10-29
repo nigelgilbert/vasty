@@ -10,7 +10,11 @@ moment rig first sees them gone. A lease listed by Vast is active unless it
 has `destroy_pending`.
 
 Destroy lifecycle. `destroy_pending` marks a lease whose row rig has decided to
-destroy and a list call still shows.
+destroy and a list call still shows. A destroy compares the re-read row's
+`expires` against the last value this command read for the lease: the listed
+row for the sweep and its retries, the cached label for `release`, and for the
+`reserve` give-up the stored label, or the row read at give-up when the stored
+label has none.
 
 - `release` and the `reserve` give-up path set it with `released_here` and
   state `released` once Vast accepts the destroy call. A give-up whose destroy
@@ -23,7 +27,8 @@ destroy and a list call still shows.
   `destroy_pending` again on a listed `released` lease. The wait between calls
   starts at 5s and doubles per call up to 60s (spec §6). A failed call sets
   `last_provider_error` and adds an `ok: false` entry to `swept`; an accepted
-  one clears it. A retry whose re-read finds the row gone or `expires` moved
+  one clears it. The entry's `expired_at` is the earlier of now and the
+  label's effective expiry. A retry whose re-read finds the row gone or `expires` moved
   sends nothing and leaves `destroy_attempts`, `destroy_at` and
   `last_provider_error` unchanged. The retry runs before the probe pool starts.
 - A swept lease whose label is no longer past its clock drops
@@ -50,13 +55,21 @@ it adopts an orphan. A lease whose label `miss` lists `watchdog` or
   pool, while the cache records no SSH answer for the lease. The wait between
   calls follows `retry_delay`.
 - A successful probe reruns the adoption script when the box is an adopted
-  orphan: the cache marks it `adopted`, or the box lacks both the guard file
-  and `startup.started`. `onstart` writes the guard file and then that marker
-  on every box `reserve` makes, so the script skips `reserve` boxes. A probe
-  between the two writes sees the guard file.
+  orphan: the cache marks it `adopted`, the box holds the `adopted` marker
+  the script writes, or the box lacks both the guard file and
+  `startup.started`. A probe that finds the marker sets `adopted` in the
+  cache, so a lost cache entry still gets reruns after a container restart.
+  Boxes adopted before the marker existed rely on the cache flag. `onstart`
+  writes the guard file and then `startup.started` on every box `reserve`
+  makes, so the script skips `reserve` boxes. A probe between the two writes
+  sees the guard file.
 - The rerun runs over SSH inside the probe pool. The wait between reruns
   follows `retry_delay`, counted by `adopt_attempts` from `adopt_at`. The
   count resets once the probe finds `watchdog` and `destroy_key` in place.
+- A probe on a box without the guard file or `startup.started` reports no
+  `watchdog` or `destroy_key`, so the lease keeps those layers from the label
+  `miss`. A probe inside the backoff leaves `adopt_attempts` and `adopt_at`
+  unchanged.
 """
 
 from __future__ import annotations
@@ -216,12 +229,20 @@ def past_clock(label: Label, now: int) -> bool:
     return now > label.created + label.ttl
 
 
-def _reread_matches(ctx: Context, instance_id: int, read_expires: int | None) -> bool:
+def row_label(ctx: Context, instance_id: int) -> Label | None:
+    """Re-read the row and return its label.
+
+    Return None when the row is gone or its label is unreadable. Provider
+    failures raise.
+    """
     row = ctx.provider.get_instance(instance_id)
-    if row is None:
-        return False
-    parsed = labels.parse(row.label)
-    return isinstance(parsed, Label) and parsed.expires == read_expires
+    parsed = labels.parse(row.label) if row is not None else None
+    return parsed if isinstance(parsed, Label) else None
+
+
+def _reread_matches(ctx: Context, instance_id: int, read_expires: int | None) -> bool:
+    label = row_label(ctx, instance_id)
+    return label is not None and label.expires == read_expires
 
 
 def write_label(ctx: Context, instance_id: int, read_expires: int | None, label: Label) -> bool:
@@ -341,7 +362,7 @@ def _retry_destroy(
     mark_destroy_sent(lease, now, error)
     if error is None:
         return None
-    return SweptEntry(lease.lease, label.name, iso(effective_expiry(label)), False, error)
+    return SweptEntry(lease.lease, label.name, iso(min(now, effective_expiry(label))), False, error)
 
 
 def _sweep(
@@ -425,14 +446,14 @@ def _reruns_adoption(lease: CachedLease, result: ProbeResult, now: int) -> bool:
     """Return True when this probe reruns the adoption script on the box.
 
     A box with the guard file or `startup.started` came from `reserve` unless
-    the cache marks it `adopted`. Reruns wait `retry_delay(adopt_attempts)`
-    after the last one.
+    the cache or the box's `adopted` marker says it was adopted. Reruns wait
+    `retry_delay(adopt_attempts)` after the last one.
     """
     if not _adoption_listed(lease.label.miss + result.guard_missing):
         return False
     if lease.adopt_at is not None and now - lease.adopt_at < retry_delay(lease.adopt_attempts):
         return False
-    return lease.adopted or not (result.startup_started or result.guard_file)
+    return lease.adopted or result.adopted or not (result.startup_started or result.guard_file)
 
 
 def _probe_one(ctx: Context, lease: CachedLease, now: int) -> _Probed:
@@ -521,12 +542,13 @@ def _apply_probe(ctx: Context, lease: CachedLease, probed: _Probed, now: int) ->
     label = lease.label
     if probed.adopt_missing is not None:
         missing = probed.adopt_missing
-    elif probed.adopt_ran:
+    elif probed.adopt_ran or not (result.startup_started or result.guard_file):
         missing = _layers(result.guard_missing + [m for m in label.miss if m in ADOPT_LAYERS])
     else:
         missing = _layers(result.guard_missing)
-    if probed.adopt_ran:
+    if probed.adopt_ran or result.adopted:
         lease.adopted = True
+    if probed.adopt_ran:
         lease.adopt_attempts += 1
         lease.adopt_at = now
     if not _adoption_listed(missing):
@@ -541,11 +563,8 @@ def _apply_probe(ctx: Context, lease: CachedLease, probed: _Probed, now: int) ->
     try:
         if write_label(ctx, lease.instance_id, label.expires, wanted):
             lease.label = wanted
-        else:
-            row = ctx.provider.get_instance(lease.instance_id)
-            parsed = labels.parse(row.label) if row is not None else None
-            if isinstance(parsed, Label):
-                lease.label = parsed
+        elif (fresh := row_label(ctx, lease.instance_id)) is not None:
+            lease.label = fresh
     except RigError as err:
         lease.last_provider_error = err.message
 

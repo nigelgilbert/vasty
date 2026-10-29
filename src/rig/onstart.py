@@ -274,7 +274,8 @@ def adopt_script(
 
     It writes the clock file, copies the container env from
     `/proc/1/environ`, installs the watchdog at `/workspace/.rig/watchdog.sh`,
-    starts it under cron and `nohup`, and marks startup done. It prints
+    starts it under cron and `nohup`, marks startup done and writes the
+    `adopted` marker. It prints
     `missing=` followed by the layers still missing.
     """
     body = _head(root, workdir, f"{root}/watchdog.sh")
@@ -290,5 +291,6 @@ def adopt_script(
     body += _GUARD_WRITE
     body += '[ -e "$R/startup.started" ]||date +%s>"$R/startup.started"\n'
     body += '[ -e "$R/startup.exit" ]||echo 0 >"$R/startup.exit"\n'
+    body += ': >"$R/adopted"\n'
     body += 'echo "missing=$g"\n'
     return "{\n" + body + "} </dev/null\n"

@@ -10,6 +10,7 @@ from rig import engine
 from rig.errors import RigError
 from rig.labels import parse
 from rig.models import Instance, Job, Label
+from rig.timeutil import iso
 
 
 def label_of(harness: Harness, instance_id: int) -> Label:
@@ -235,6 +236,19 @@ def test_skipped_retry_leaves_attempts_and_error_unchanged(harness: Harness) -> 
     harness.provider.get_instance = real_get  # type: ignore[method-assign]
     refresh(harness)
     assert harness.provider.destroyed == [row.id]
+
+
+def test_failed_retry_of_an_early_release_reports_expired_at_by_now(harness: Harness) -> None:
+    harness.provider.keep_rows = True
+    add_lease(harness, label={"expires": NOW + 3000})
+    refresh(harness)
+    release_in_cache(harness)
+    harness.time.advance(5)
+    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    snap = refresh(harness)
+    assert [(e.lease, e.ok, e.error) for e in snap.swept] == [("l-0000a001", False, "provider_error")]
+    assert snap.swept[0].expired_at <= iso(snap.now)
+    assert snap.swept[0].expired_at == iso(NOW + 5)
 
 
 def test_released_lease_listed_without_pending_is_destroyed(harness: Harness) -> None:
@@ -652,6 +666,49 @@ def test_failed_adoption_rerun_keeps_layers_in_label(
     assert lease.adopted is True
 
 
+def test_held_adoption_rerun_keeps_layers_in_label(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rig.remote import BoxUnreachableError, SshTarget
+
+    row = adopted_orphan(harness, reachable=True)
+
+    def fail(target: SshTarget, expires: int) -> list[str]:
+        raise BoxUnreachableError("adopt failed")
+
+    monkeypatch.setattr(harness.box, "adopt", fail)
+    refresh(harness)
+    for step in (1, 2):
+        harness.time.advance(step)
+        lease = refresh(harness).leases["l-abababab"]
+        assert label_of(harness, row.id).miss == ["watchdog", "destroy_key"]
+        assert lease.guard_missing == ["watchdog", "destroy_key"]
+        assert (lease.adopt_attempts, lease.adopt_at) == (1, NOW)
+
+
+def test_lost_cache_entry_reruns_adoption_from_the_box_marker(harness: Harness) -> None:
+    row = adopted_orphan(harness, reachable=True)
+    refresh(harness)
+    box = harness.box.state(row.id)
+    assert (harness.box.adopts, box.adopted, box.guard_file) == ([row.id], True, True)
+    ctx = harness.context()
+    data = ctx.cache.load()
+    del data.leases["l-abababab"]
+    ctx.cache.save(data)
+    box.alive_mtime = int(harness.time.wall_now) - 600
+    lease = refresh(harness).leases["l-abababab"]
+    assert harness.box.adopts == [row.id, row.id]
+    assert lease.adopted is True
+
+
+def test_box_marker_sets_adopted_without_a_rerun(harness: Harness) -> None:
+    row = add_lease(harness)
+    harness.box.state(row.id).adopted = True
+    lease = refresh(harness).leases["l-0000a001"]
+    assert harness.box.adopts == []
+    assert lease.adopted is True
+
+
 def test_reserve_lease_with_missing_layers_skips_adoption_retries(harness: Harness) -> None:
     add_key(harness)
     row = add_lease(harness)
@@ -844,6 +901,19 @@ def test_legacy_entry_keeps_observed_layers(harness: Harness) -> None:
     refresh(harness)
     edit_cache(harness, "l-0000a001", guard_missing=[], adopted=True)
     assert refresh(harness).leases["l-0000a001"].guard_missing == []
+
+
+def test_row_label_reads_the_row(harness: Harness) -> None:
+    ctx = harness.context()
+    row = add_lease(harness)
+    unreadable = harness.provider.add_instance(label=f"rig:v1;lease=l-1;created={NOW - 9000}")
+    found = engine.row_label(ctx, row.id)
+    assert found is not None and found.lease == "l-0000a001"
+    assert engine.row_label(ctx, unreadable.id) is None
+    assert engine.row_label(ctx, 999_999) is None
+    harness.provider.fail["get_instance"] = RigError("provider_error", "boom", "retry")
+    with pytest.raises(RigError):
+        engine.row_label(ctx, row.id)
 
 
 def test_write_label_checks_expires(harness: Harness) -> None:

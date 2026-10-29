@@ -210,6 +210,8 @@ class BoxState:
     unsupported: list[str] = field(default_factory=list)
     guard_file: bool = False
     """Set when `onstart` or `adopt` has written the guard file."""
+    adopted: bool = False
+    """Set when `adopt` has written its `adopted` marker."""
 
 
 @dataclass
@@ -255,6 +257,7 @@ class FakeBox:
             jobs=[Job(**vars(j)) for j in box.jobs.values()],
             unsupported=list(box.unsupported),
             guard_file=box.guard_file,
+            adopted=box.adopted,
         )
 
     def write_clock(self, target: SshTarget, expires: int) -> None:
@@ -271,6 +274,7 @@ class FakeBox:
         box.clock = expires
         box.guard_file = True
         box.startup_started = True
+        box.adopted = True
         if box.startup_exit is None:
             box.startup_exit = 0
         box.guard_missing = list(box.adopt_missing)

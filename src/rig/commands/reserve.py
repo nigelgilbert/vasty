@@ -358,9 +358,8 @@ _E = TypeVar("_E", bound=BaseException)
 
 def _row_expires(ctx: Context, instance_id: int) -> int | None:
     """Return `expires` from the row's label, or None when the row or the value is missing."""
-    row = ctx.provider.get_instance(instance_id)
-    parsed = labels.parse(row.label) if row is not None else None
-    return parsed.expires if isinstance(parsed, Label) else None
+    label = engine.row_label(ctx, instance_id)
+    return label.expires if label else None
 
 
 def _give_up(ctx: Context, lease: CachedLease, created: bool, err: _E) -> _E:
