@@ -447,6 +447,11 @@ def _adoption_listed(names: list[str]) -> bool:
     return any(layer in ADOPT_LAYERS for layer in names)
 
 
+def _unmarked(result: ProbeResult) -> bool:
+    """Return True when the box has neither the guard file nor `startup.started`."""
+    return not (result.startup_started or result.guard_file)
+
+
 def _reruns_adoption(lease: CachedLease, result: ProbeResult, now: int) -> bool:
     """Return True when this probe reruns the adoption script on the box.
 
@@ -458,7 +463,7 @@ def _reruns_adoption(lease: CachedLease, result: ProbeResult, now: int) -> bool:
         return False
     if lease.adopt_at is not None and now - lease.adopt_at < retry_delay(lease.adopt_attempts):
         return False
-    return lease.adopted or result.adopted or not (result.startup_started or result.guard_file)
+    return lease.adopted or result.adopted or _unmarked(result)
 
 
 def _probe_one(ctx: Context, lease: CachedLease, now: int) -> _Probed:
@@ -547,7 +552,7 @@ def _apply_probe(ctx: Context, lease: CachedLease, probed: _Probed, now: int) ->
     label = lease.label
     if probed.adopt_missing is not None:
         missing = probed.adopt_missing
-    elif probed.adopt_ran or not (result.startup_started or result.guard_file):
+    elif probed.adopt_ran or _unmarked(result):
         missing = _layers(result.guard_missing + [m for m in label.miss if m in ADOPT_LAYERS])
     else:
         missing = _layers(result.guard_missing)
