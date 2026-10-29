@@ -521,6 +521,13 @@ def test_adopt_script_parses() -> None:
     bash_n(adopt_script(4102444800))
 
 
+def test_adopt_writes_the_marker_before_the_guard() -> None:
+    script = adopt_script(4102444800)
+    marker = script.index(': >"$R/adopted"')
+    assert script.count(': >"$R/adopted"') == 1
+    assert marker < script.index("printf '%s\\n' $g>\"$R/guard.tmp\"")
+
+
 def test_adopt_writes_clock_env_and_starts_watchdog(box: Box) -> None:
     box.environ.write_bytes(b"CONTAINER_ID=88\0CONTAINER_API_KEY=ak-88\0")
     script = adopt_script(4102444800, root=str(box.root), workdir=str(box.workdir),

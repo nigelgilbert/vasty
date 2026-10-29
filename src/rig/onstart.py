@@ -272,13 +272,13 @@ def adopt_script(
 ) -> str:
     """Return the bash script `tag` runs over SSH to give an orphan a guard.
 
-    It writes the clock file, copies the container env from
-    `/proc/1/environ`, installs the watchdog at `/workspace/.rig/watchdog.sh`,
-    starts it under cron and `nohup`, marks startup done and writes the
-    `adopted` marker. It prints `missing=` followed by the layers still
-    missing.
+    It writes the `adopted` marker and the clock file, copies the container
+    env from `/proc/1/environ`, installs the watchdog at
+    `/workspace/.rig/watchdog.sh`, starts it under cron and `nohup`, and marks
+    startup done. It prints `missing=` followed by the layers still missing.
     """
     body = _head(root, workdir, f"{root}/watchdog.sh")
+    body += ': >"$R/adopted"\n'
     body += (
         f'echo {int(expires)} >"$R/clock.tmp"&&mv -f "$R/clock.tmp" "$R/clock"\n'
         f'[ "$(cat "$R/clock" 2>/dev/null)" = {int(expires)} ]||g="$g clock_file"\n'
@@ -291,6 +291,5 @@ def adopt_script(
     body += _GUARD_WRITE
     body += '[ -e "$R/startup.started" ]||date +%s>"$R/startup.started"\n'
     body += '[ -e "$R/startup.exit" ]||echo 0 >"$R/startup.exit"\n'
-    body += ': >"$R/adopted"\n'
     body += 'echo "missing=$g"\n'
     return "{\n" + body + "} </dev/null\n"
