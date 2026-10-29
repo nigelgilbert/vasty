@@ -1,0 +1,365 @@
+from __future__ import annotations
+
+import json
+from decimal import Decimal
+from typing import Any
+
+import pytest
+
+from fakes import NOW, Harness, add_lease
+from rig.errors import RigError
+from rig.labels import parse
+from rig.models import Label
+from rig.remote import BoxUnreachableError, SshTarget
+
+
+@pytest.fixture
+def h(harness: Harness) -> Harness:
+    harness.provider.covered_through = NOW
+    return harness
+
+
+def run_json(harness: Harness, *argv: str) -> tuple[int, dict[str, Any]]:
+    code, out, _ = harness.run(*argv)
+    data: dict[str, Any] = json.loads(out)
+    return code, data
+
+
+def label_of(harness: Harness, instance_id: int) -> Label:
+    parsed = parse(harness.provider.instances[instance_id].label)
+    assert isinstance(parsed, Label)
+    return parsed
+
+
+def cached(harness: Harness, lease: str) -> Any:
+    return harness.context().cache.load().leases[lease]
+
+
+def record_writes(h: Harness, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int]]:
+    events: list[tuple[str, int]] = []
+    set_label = h.provider.set_label
+    write_clock = h.box.write_clock
+
+    def label(instance_id: int, text: str) -> None:
+        parsed = parse(text)
+        assert isinstance(parsed, Label) and parsed.expires is not None
+        events.append(("label", parsed.expires))
+        set_label(instance_id, text)
+
+    def clock(target: SshTarget, expires: int) -> None:
+        events.append(("clock", expires))
+        write_clock(target, expires)
+
+    monkeypatch.setattr(h.provider, "set_label", label)
+    monkeypatch.setattr(h.box, "write_clock", clock)
+    return events
+
+
+# Single lease.
+
+
+def test_extend_by_moves_label_and_clock(h: Harness) -> None:
+    row = add_lease(h, label={"name": "ft", "expires": NOW + 600})
+    code, data = run_json(h, "extend", "ft", "--by", "30m")
+    assert code == 0, data
+    assert set(data) == {"lease", "expires_at", "ttl_remaining_s", "warnings", "swept"}
+    assert data["lease"] == "l-0000a001"
+    assert data["expires_at"] == "2026-10-29T01:40:00Z"
+    assert data["ttl_remaining_s"] == 2400
+    assert label_of(h, row.id).expires == NOW + 2400
+    assert h.box.state(row.id).clock == NOW + 2400
+
+
+def test_extend_to_counts_from_now(h: Harness) -> None:
+    row = add_lease(h, label={"expires": NOW + 600})
+    _, data = run_json(h, "extend", "l-0000a001", "--to", "2h")
+    assert data["ttl_remaining_s"] == 7200
+    assert label_of(h, row.id).expires == NOW + 7200
+
+
+def test_extend_until_timestamp(h: Harness) -> None:
+    row = add_lease(h, label={"expires": NOW + 600})
+    _, data = run_json(h, "extend", "l-0000a001", "--until", "2026-10-29T03:00:00+01:00")
+    assert data["expires_at"] == "2026-10-29T02:00:00Z"
+    assert label_of(h, row.id).expires == NOW + 3600
+
+
+def test_extend_keeps_unknown_label_fields(h: Harness) -> None:
+    row = add_lease(h, label={"expires": NOW + 600, "extra": {"note": "x"}})
+    run_json(h, "extend", "l-0000a001", "--by", "10m")
+    assert label_of(h, row.id).extra == {"note": "x"}
+
+
+@pytest.mark.parametrize("flags", [[], ["--by", "1h", "--to", "2h"]])
+def test_extend_needs_exactly_one_flag(h: Harness, flags: list[str]) -> None:
+    add_lease(h)
+    code, data = run_json(h, "extend", "l-0000a001", *flags)
+    assert code == 1
+    assert data["error"] == "invalid_arguments"
+
+
+def test_extend_to_past_points_at_release(h: Harness) -> None:
+    row = add_lease(h, label={"expires": NOW + 600})
+    code, data = run_json(h, "extend", "l-0000a001", "--until", "2026-10-29T00:30:00Z")
+    assert code == 1
+    assert data["error"] == "invalid_arguments"
+    assert data["hint"] == "rig release l-0000a001"
+    assert label_of(h, row.id).expires == NOW + 600
+
+
+def test_extend_at_now_is_invalid(h: Harness) -> None:
+    add_lease(h, label={"expires": NOW + 600})
+    code, data = run_json(h, "extend", "l-0000a001", "--until", "2026-10-29T01:00:00Z")
+    assert (code, data["error"]) == (1, "invalid_arguments")
+
+
+def test_lengthen_writes_clock_then_label(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    add_lease(h, label={"expires": NOW + 600})
+    h.run("status")
+    events = record_writes(h, monkeypatch)
+    run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert events == [("clock", NOW + 2400), ("label", NOW + 2400)]
+
+
+def test_shorten_writes_label_then_clock(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    add_lease(h, label={"expires": NOW + 3000})
+    h.run("status")
+    events = record_writes(h, monkeypatch)
+    code, data = run_json(h, "extend", "l-0000a001", "--to", "10m")
+    assert code == 0
+    assert data["ttl_remaining_s"] == 600
+    assert events == [("label", NOW + 600), ("clock", NOW + 600)]
+
+
+def test_lengthen_label_failure_restores_clock(h: Harness) -> None:
+    row = add_lease(h, label={"expires": NOW + 600})
+    h.provider.fail["set_label"] = RigError("provider_error", "boom", "Run rig status.")
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert code == 2
+    assert data["error"] == "provider_error"
+    assert label_of(h, row.id).expires == NOW + 600
+    assert h.box.state(row.id).clock == NOW + 600
+    assert h.box.clock_writes == [(row.id, NOW + 2400), (row.id, NOW + 600)]
+    lease = cached(h, "l-0000a001")
+    assert "clock_file" in lease.guard_missing
+
+
+def test_lengthen_restore_failure_names_both_values(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = add_lease(h, label={"expires": NOW + 600})
+    h.provider.fail["set_label"] = RigError("provider_error", "boom", "Run rig status.")
+    write_clock = h.box.write_clock
+    count = [0]
+
+    def clock(target: SshTarget, expires: int) -> None:
+        count[0] += 1
+        if count[0] > 1:
+            raise BoxUnreachableError("gone")
+        write_clock(target, expires)
+
+    monkeypatch.setattr(h.box, "write_clock", clock)
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert code == 2
+    assert data["error"] == "provider_error"
+    assert data["details"] == {
+        "old_expires_at": "2026-10-29T01:10:00Z", "new_expires_at": "2026-10-29T01:40:00Z",
+    }
+    assert h.box.state(row.id).clock == NOW + 2400
+    code, out, _ = h.run("status", "--cached", "l-0000a001")
+    view = json.loads(out)["leases"][0]
+    assert view["guard"] == "partial"
+    assert view["guard_missing"] == ["clock_file"]
+
+
+def test_shorten_clock_failure_restores_label(h: Harness) -> None:
+    row = add_lease(h, label={"expires": NOW + 3000})
+    h.run("status")
+    h.box.state(row.id).clock_write_fails = True
+    code, data = run_json(h, "extend", "l-0000a001", "--to", "10m")
+    assert code == 2
+    assert data["error"] == "provider_error"
+    assert label_of(h, row.id).expires == NOW + 3000
+    assert h.box.state(row.id).clock == NOW + 3000
+    assert "clock_file" in cached(h, "l-0000a001").guard_missing
+
+
+def test_shorten_restore_failure_names_both_values(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = add_lease(h, label={"expires": NOW + 3000})
+    h.run("status")
+    h.box.state(row.id).clock_write_fails = True
+    set_label = h.provider.set_label
+    count = [0]
+
+    def label(instance_id: int, text: str) -> None:
+        count[0] += 1
+        if count[0] > 1:
+            raise RigError("provider_error", "label api down", "Run rig status.")
+        set_label(instance_id, text)
+
+    monkeypatch.setattr(h.provider, "set_label", label)
+    code, data = run_json(h, "extend", "l-0000a001", "--to", "10m")
+    assert code == 2
+    assert data["error"] == "provider_error"
+    assert data["details"] == {
+        "old_expires_at": "2026-10-29T01:50:00Z", "new_expires_at": "2026-10-29T01:10:00Z",
+    }
+    assert label_of(h, row.id).expires == NOW + 600
+
+
+def test_label_moved_since_read_aborts(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    row = add_lease(h, label={"expires": NOW + 600})
+    get_instance = h.provider.get_instance
+
+    def moved(instance_id: int) -> Any:
+        inst = get_instance(instance_id)
+        if inst is not None:
+            parsed = parse(inst.label)
+            assert isinstance(parsed, Label)
+            parsed.expires = NOW + 999
+            from rig.labels import format_label
+
+            inst.label = format_label(parsed)
+        return inst
+
+    monkeypatch.setattr(h.provider, "get_instance", moved)
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert code == 2
+    assert data["error"] == "provider_error"
+    assert label_of(h, row.id).expires == NOW + 999
+    assert h.box.state(row.id).clock == NOW + 600
+
+
+# Refusals.
+
+
+def test_history_lease_is_expired(h: Harness) -> None:
+    add_lease(h, label={"name": "ft", "expires": NOW - 5})
+    code, data = run_json(h, "extend", "ft", "--by", "30m")
+    assert (code, data["error"]) == (1, "lease_expired")
+
+
+def test_unreachable_lease_changes_nothing(h: Harness) -> None:
+    row = add_lease(h, label={"expires": NOW + 600})
+    h.run("status")
+    h.box.state(row.id).reachable = False
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert (code, data["error"]) == (2, "box_unreachable")
+    assert label_of(h, row.id).expires == NOW + 600
+    assert h.box.clock_writes == []
+
+
+def test_never_answered_lease_is_pending(h: Harness) -> None:
+    add_lease(h, reachable=False, label={"expires": None}, actual_status="loading")
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert (code, data["error"]) == (1, "lease_pending")
+
+
+def test_running_startup_accepts_extend(h: Harness) -> None:
+    row = add_lease(h, label={"expires": NOW + 600})
+    h.box.state(row.id).startup_exit = None
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert code == 0, data
+    assert label_of(h, row.id).expires == NOW + 2400
+
+
+def test_orphan_is_unmanaged(h: Harness) -> None:
+    h.provider.add_instance(id=55120)
+    code, data = run_json(h, "extend", "i-55120", "--by", "30m")
+    assert (code, data["error"]) == (1, "orphan_unmanaged")
+    assert data["hint"] == "rig tag i-55120 --ttl 30m"
+
+
+def test_budget_refusal_says_by_how_much(h: Harness) -> None:
+    h.env["RIG_DAILY_BUDGET"] = "1.00"
+    row = add_lease(h, label={"expires": NOW + 3600}, dph_total=Decimal("0.50"))
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "2h")
+    assert code == 3
+    assert data["error"] == "budget_exceeded"
+    assert data["details"] == {"projected": 1.5, "remaining": 0.5, "daily_budget": 1.0}
+    assert "by $0.50" in data["message"]
+    assert label_of(h, row.id).expires == NOW + 3600
+    assert h.box.clock_writes == []
+
+
+def test_shortening_passes_over_budget(h: Harness) -> None:
+    h.env["RIG_DAILY_BUDGET"] = "0.10"
+    row = add_lease(h, label={"expires": NOW + 7200}, dph_total=Decimal("0.50"))
+    code, _ = run_json(h, "extend", "l-0000a001", "--to", "1h")
+    assert code == 0
+    assert label_of(h, row.id).expires == NOW + 3600
+
+
+# Bulk.
+
+
+def test_bulk_by_extends_each_lease(h: Harness) -> None:
+    a = add_lease(h, "l-0000a001", label={"group": "exp", "expires": NOW + 600})
+    b = add_lease(h, "l-0000a002", label={"group": "exp", "expires": NOW + 1200})
+    add_lease(h, "l-0000a003", label={"group": "other", "expires": NOW + 600})
+    code, data = run_json(h, "extend", "--group", "exp", "--by", "30m")
+    assert code == 0
+    assert set(data) == {"results", "warnings", "swept"}
+    assert data["results"] == [
+        {"lease": "l-0000a001", "ok": True, "error": None, "expires_at": "2026-10-29T01:40:00Z"},
+        {"lease": "l-0000a002", "ok": True, "error": None, "expires_at": "2026-10-29T01:50:00Z"},
+    ]
+    assert label_of(h, a.id).expires == NOW + 2400
+    assert label_of(h, b.id).expires == NOW + 3000
+
+
+def test_bulk_to_aligns_expiries_with_one_now(h: Harness) -> None:
+    add_lease(h, "l-0000a001", label={"group": "exp", "expires": NOW + 600})
+    add_lease(h, "l-0000a002", label={"group": "exp", "expires": NOW + 5000})
+    _, data = run_json(h, "extend", "--group", "exp", "--to", "1h")
+    assert {r["expires_at"] for r in data["results"]} == {"2026-10-29T02:00:00Z"}
+
+
+def test_bulk_budget_is_atomic(h: Harness) -> None:
+    h.env["RIG_DAILY_BUDGET"] = "2.00"
+    a = add_lease(h, "l-0000a001", label={"group": "exp", "expires": NOW + 1800},
+                  dph_total=Decimal("0.50"))
+    b = add_lease(h, "l-0000a002", label={"group": "exp", "expires": NOW + 1800},
+                  dph_total=Decimal("0.50"))
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "2h")
+    assert code == 0
+    code, data = run_json(h, "extend", "l-0000a001", "--to", "30m")
+    assert code == 0
+    h.box.clock_writes.clear()
+    code, data = run_json(h, "extend", "--group", "exp", "--by", "2h")
+    assert code == 3
+    assert data["error"] == "budget_exceeded"
+    assert data["details"] == {"projected": 2.5, "remaining": 1.5, "daily_budget": 2.0}
+    assert label_of(h, a.id).expires == NOW + 1800
+    assert label_of(h, b.id).expires == NOW + 1800
+    assert h.box.clock_writes == []
+
+
+def test_bulk_reports_per_lease_errors_with_highest_exit(h: Harness) -> None:
+    add_lease(h, "l-0000a001", label={"group": "exp", "expires": NOW + 600})
+    dead = add_lease(h, "l-0000a002", label={"group": "exp", "expires": NOW + 600})
+    h.run("status")
+    h.box.state(dead.id).reachable = False
+    code, data = run_json(h, "extend", "--group", "exp", "--by", "10m")
+    assert code == 2
+    results = {r["lease"]: r for r in data["results"]}
+    assert results["l-0000a001"]["ok"] is True
+    assert results["l-0000a002"] == {
+        "lease": "l-0000a002", "ok": False, "error": "box_unreachable",
+        "expires_at": "2026-10-29T01:10:00Z",
+    }
+
+
+def test_bulk_skips_other_owners(h: Harness) -> None:
+    add_lease(h, "l-0000a001", label={"group": "exp", "owner": "nick"})
+    code, data = run_json(h, "extend", "--group", "exp", "--by", "10m")
+    assert code == 0
+    assert data["results"] == []
+
+
+def test_bulk_empty_target_exits_zero(h: Harness) -> None:
+    code, data = run_json(h, "extend", "--group", "nobody", "--by", "10m")
+    assert code == 0
+    assert data == {"results": [], "warnings": [], "swept": []}
