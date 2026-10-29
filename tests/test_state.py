@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from rig.models import CachedLease, Job, Label, LeaseState, ProbeResult
-from rig.state import (
+from vasty.models import CachedLease, Job, Label, LeaseState, ProbeResult
+from vasty.state import (
     derive_state,
     effective_expiry,
     fix_for,
@@ -15,7 +15,7 @@ from rig.state import (
     resolve_state,
     ttl_remaining,
 )
-from rig.timeutil import format_duration
+from vasty.timeutil import format_duration
 
 NOW = 1_793_235_600
 WARN = 300
@@ -128,7 +128,7 @@ def codes(items: list[Any]) -> list[str]:
 
 def test_expiring_soon() -> None:
     [w] = lease_warnings(lease(label=label(expires=NOW + 180)), NOW, WARN)
-    assert (w.code, w.lease, w.message, w.fix) == ("expiring_soon", "l-8b12", "3m left", "rig extend l-8b12 --by 30m")
+    assert (w.code, w.lease, w.message, w.fix) == ("expiring_soon", "l-8b12", "3m left", "vasty extend l-8b12 --by 30m")
 
 
 @pytest.mark.parametrize("remaining", [0, WARN + 1, 3600])
@@ -150,12 +150,12 @@ def test_expiring_with_running_job_replaces_expiring_soon(job_state: str) -> Non
     [w] = lease_warnings(item, NOW, WARN)
     assert w.code == "expiring_with_running_job"
     assert w.message == "2m left, j-1 running"
-    assert w.fix == "rig extend l-8b12 --by 30m"
+    assert w.fix == "vasty extend l-8b12 --by 30m"
 
 
 def test_box_unreachable() -> None:
     [w] = lease_warnings(lease("unreachable", reachable_at=NOW - 360), NOW, WARN)
-    assert (w.code, w.message, w.fix) == ("box_unreachable", "no answer for 6m", "rig release l-8b12")
+    assert (w.code, w.message, w.fix) == ("box_unreachable", "no answer for 6m", "vasty release l-8b12")
 
 
 def test_box_unreachable_never_answered() -> None:
@@ -170,7 +170,7 @@ def test_unreachable_lease_gets_no_expiring_soon() -> None:
 
 def test_guard_partial() -> None:
     [w] = lease_warnings(lease(guard_missing=["watchdog"], reachable_at=NOW), NOW, WARN)
-    assert (w.code, w.message, w.fix) == ("guard_partial", "watchdog not running", "rig release l-8b12")
+    assert (w.code, w.message, w.fix) == ("guard_partial", "watchdog not running", "vasty release l-8b12")
 
 
 def test_guard_partial_names_every_layer() -> None:
@@ -213,7 +213,7 @@ def test_startup_failed_on_non_zero_exit() -> None:
     [w] = lease_warnings(lease(startup_started=True, startup_exit=2), NOW, WARN)
     assert w.code == "startup_failed"
     assert w.message == "startup exited 2"
-    assert w.fix == "rig ssh l-8b12 -- cat /workspace/.rig/startup.log"
+    assert w.fix == "vasty ssh l-8b12 -- cat /workspace/.vasty/startup.log"
 
 
 def test_startup_failed_on_restart_cut_off() -> None:
@@ -235,7 +235,7 @@ def test_expired_with_running_jobs() -> None:
     [w] = lease_warnings(item, NOW, WARN)
     assert w.code == "expired_with_running_jobs"
     assert w.message == "expired with j-1, j-2 running"
-    assert w.fix == "rig status l-8b12"
+    assert w.fix == "vasty status l-8b12"
 
 
 @pytest.mark.parametrize("state", ["expired", "released", "gone"])
@@ -256,26 +256,26 @@ def test_fixes_use_the_lease_id_and_shell_quote_it() -> None:
     item = lease(label=label(lease=odd, name="eval-2", expires=NOW + 60))
     [w] = lease_warnings(item, NOW, WARN)
     assert w.lease == odd
-    assert w.fix == "rig extend 'l-x'\"'\"'; rm -rf ~' --by 30m"
+    assert w.fix == "vasty extend 'l-x'\"'\"'; rm -rf ~' --by 30m"
 
 
 @pytest.mark.parametrize(
     "code, target, fix",
     [
-        ("expiring_soon", "l-1", "rig extend l-1 --by 30m"),
-        ("expiring_with_running_job", "l-1", "rig extend l-1 --by 30m"),
-        ("box_unreachable", "l-1", "rig release l-1"),
-        ("guard_partial", "l-1", "rig release l-1"),
-        ("orphan", "i-55120", "rig tag i-55120 --ttl 30m"),
-        ("startup_failed", "l-1", "rig ssh l-1 -- cat /workspace/.rig/startup.log"),
-        ("expired_with_running_jobs", "l-1", "rig status l-1"),
-        ("flag_mismatch", "l-1", "rig status l-1"),
-        ("label_unreadable", "i-7", "rig release i-7"),
-        ("budget_low", None, "rig status"),
-        ("spend_unavailable", None, "rig status"),
-        ("clock_unverified", None, "rig status"),
-        ("cache_rebuilt", None, "rig status"),
-        ("orphan", "i-1 2", "rig tag 'i-1 2' --ttl 30m"),
+        ("expiring_soon", "l-1", "vasty extend l-1 --by 30m"),
+        ("expiring_with_running_job", "l-1", "vasty extend l-1 --by 30m"),
+        ("box_unreachable", "l-1", "vasty release l-1"),
+        ("guard_partial", "l-1", "vasty release l-1"),
+        ("orphan", "i-55120", "vasty tag i-55120 --ttl 30m"),
+        ("startup_failed", "l-1", "vasty ssh l-1 -- cat /workspace/.vasty/startup.log"),
+        ("expired_with_running_jobs", "l-1", "vasty status l-1"),
+        ("flag_mismatch", "l-1", "vasty status l-1"),
+        ("label_unreadable", "i-7", "vasty release i-7"),
+        ("budget_low", None, "vasty status"),
+        ("spend_unavailable", None, "vasty status"),
+        ("clock_unverified", None, "vasty status"),
+        ("cache_rebuilt", None, "vasty status"),
+        ("orphan", "i-1 2", "vasty tag 'i-1 2' --ttl 30m"),
     ],
 )
 def test_fix_table(code: str, target: str | None, fix: str) -> None:
@@ -283,8 +283,8 @@ def test_fix_table(code: str, target: str | None, fix: str) -> None:
 
 
 def test_make_warning() -> None:
-    w = make_warning("orphan", "i-55120", "not created by rig")
-    assert (w.code, w.lease, w.message, w.fix) == ("orphan", "i-55120", "not created by rig", "rig tag i-55120 --ttl 30m")
+    w = make_warning("orphan", "i-55120", "not created by vasty")
+    assert (w.code, w.lease, w.message, w.fix) == ("orphan", "i-55120", "not created by vasty", "vasty tag i-55120 --ttl 30m")
     assert make_warning("budget_low", None, "x").lease is None
 
 

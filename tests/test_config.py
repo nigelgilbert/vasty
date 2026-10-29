@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from fakes import Harness
-from rig.config import (
+from vasty.config import (
     ModelEntry,
     Settings,
     emit_toml,
@@ -19,7 +19,7 @@ from rig.config import (
     resolve,
     user_config_path,
 )
-from rig.errors import RigError
+from vasty.errors import VastyError
 
 
 def write(path: Path, text: str) -> Path:
@@ -40,7 +40,7 @@ class Env:
     def user(self, text: str) -> Path:
         return write(user_config_path(self.home), text)
 
-    def project(self, text: str, name: str = "rig.toml") -> Path:
+    def project(self, text: str, name: str = "vasty.toml") -> Path:
         return write(self.cwd / name, text)
 
     def resolve(
@@ -55,8 +55,8 @@ class Env:
         return resolve(flags or {}, stdin_json, profile, self.env, self.cwd, self.home,
                        stdin_text=reader, model=model)
 
-    def error(self, **kw: Any) -> RigError:
-        with pytest.raises(RigError) as exc:
+    def error(self, **kw: Any) -> VastyError:
+        with pytest.raises(VastyError) as exc:
             self.resolve(**kw)
         return exc.value
 
@@ -78,7 +78,7 @@ def test_builtin_defaults(cfg: Env) -> None:
     assert s.warn_before_expiry == 300
     assert s.disk == 50
     assert s.gpus == 1
-    assert s.image == "rig/base:cuda12.4"
+    assert s.image == "vasty/base:cuda12.4"
     assert s.api_key_env == "VAST_API_KEY"
     assert (s.gpu, s.vram, s.region, s.ports, s.startup) == (None, None, None, [], None)
     assert s.sources["ttl"] == "default"
@@ -102,7 +102,7 @@ def test_resolution_order(cfg: Env, top: str) -> None:
     if "project" in present:
         cfg.project('[defaults]\nttl = "5m"\n')
     if "env" in present:
-        cfg.env["RIG_TTL"] = "4m"
+        cfg.env["VASTY_TTL"] = "4m"
     s = cfg.resolve(
         flags={"ttl": "1m"} if "flag" in present else {},
         stdin_json={"ttl": "2m"} if "stdin" in present else None,
@@ -127,8 +127,8 @@ def test_stdin_json_bad_type(cfg: Env) -> None:
     assert cfg.error(stdin_json={"ttl": 30}).code == "invalid_config"
 
 
-def test_rig_toml_wins_over_dot_rig(cfg: Env) -> None:
-    cfg.project('[defaults]\nttl = "5m"\ndisk = 70\n', ".rig/config.toml")
+def test_vasty_toml_wins_over_dot_vasty(cfg: Env) -> None:
+    cfg.project('[defaults]\nttl = "5m"\ndisk = 70\n', ".vasty/config.toml")
     cfg.project('[defaults]\nttl = "7m"\n')
     s = cfg.resolve()
     assert s.ttl == 420
@@ -150,7 +150,7 @@ def test_profiles_merge_by_name_and_field(cfg: Env) -> None:
 
 def test_profile_beats_env(cfg: Env) -> None:
     cfg.user('[profiles.big]\ngpu = "A100"\n')
-    cfg.env["RIG_GPU"] = "3090"
+    cfg.env["VASTY_GPU"] = "3090"
     assert cfg.resolve(profile="big").gpu == "A100"
     assert cfg.resolve().gpu == "3090"
 
@@ -168,21 +168,21 @@ def test_unknown_profile_is_invalid_arguments(cfg: Env) -> None:
 @pytest.mark.parametrize(
     ("var", "text", "attr", "expected"),
     [
-        ("RIG_TTL", "1h", "ttl", 3600),
-        ("RIG_RUN_TTL", "3h", "run_ttl", 10800),
-        ("RIG_MAX_PRICE", "0.45", "max_price", Decimal("0.45")),
-        ("RIG_DAILY_BUDGET", "25", "daily_budget", Decimal("25")),
-        ("RIG_WARN_BEFORE_EXPIRY", "10m", "warn_before_expiry", 600),
-        ("RIG_IMAGE", "my/img:1", "image", "my/img:1"),
-        ("RIG_DISK", "100", "disk", 100),
-        ("RIG_GPUS", "2", "gpus", 2),
-        ("RIG_GPU", "L40S", "gpu", "L40S"),
-        ("RIG_VRAM", "48", "vram", 48.0),
-        ("RIG_REGION", "EU", "region", "EU"),
-        ("RIG_PORTS", "8888,9000", "ports", [8888, 9000]),
-        ("RIG_STARTUP", "echo hi\n", "startup", "echo hi\n"),
-        ("RIG_OWNER", "agent", "owner", "agent"),
-        ("RIG_API_KEY_ENV", "MY_KEY", "api_key_env", "MY_KEY"),
+        ("VASTY_TTL", "1h", "ttl", 3600),
+        ("VASTY_RUN_TTL", "3h", "run_ttl", 10800),
+        ("VASTY_MAX_PRICE", "0.45", "max_price", Decimal("0.45")),
+        ("VASTY_DAILY_BUDGET", "25", "daily_budget", Decimal("25")),
+        ("VASTY_WARN_BEFORE_EXPIRY", "10m", "warn_before_expiry", 600),
+        ("VASTY_IMAGE", "my/img:1", "image", "my/img:1"),
+        ("VASTY_DISK", "100", "disk", 100),
+        ("VASTY_GPUS", "2", "gpus", 2),
+        ("VASTY_GPU", "L40S", "gpu", "L40S"),
+        ("VASTY_VRAM", "48", "vram", 48.0),
+        ("VASTY_REGION", "EU", "region", "EU"),
+        ("VASTY_PORTS", "8888,9000", "ports", [8888, 9000]),
+        ("VASTY_STARTUP", "echo hi\n", "startup", "echo hi\n"),
+        ("VASTY_OWNER", "agent", "owner", "agent"),
+        ("VASTY_API_KEY_ENV", "MY_KEY", "api_key_env", "MY_KEY"),
     ],
 )
 def test_env_maps_each_key(cfg: Env, var: str, text: str, attr: str, expected: Any) -> None:
@@ -192,8 +192,8 @@ def test_env_maps_each_key(cfg: Env, var: str, text: str, attr: str, expected: A
     assert s.sources[attr] == "env"
 
 
-@pytest.mark.parametrize(("var", "text"), [("RIG_DISK", "abc"), ("RIG_TTL", "soon"),
-                                           ("RIG_MAX_PRICE", "cheap"), ("RIG_PORTS", "1,x")])
+@pytest.mark.parametrize(("var", "text"), [("VASTY_DISK", "abc"), ("VASTY_TTL", "soon"),
+                                           ("VASTY_MAX_PRICE", "cheap"), ("VASTY_PORTS", "1,x")])
 def test_env_bad_value_is_invalid_config(cfg: Env, var: str, text: str) -> None:
     cfg.env[var] = text
     err = cfg.error()
@@ -202,7 +202,7 @@ def test_env_bad_value_is_invalid_config(cfg: Env, var: str, text: str) -> None:
 
 
 def test_empty_env_value_is_unset(cfg: Env) -> None:
-    cfg.env["RIG_TTL"] = ""
+    cfg.env["VASTY_TTL"] = ""
     assert cfg.resolve().sources["ttl"] == "default"
 
 
@@ -258,7 +258,7 @@ def test_example_config_from_spec(cfg: Env) -> None:
     cfg.user(
         'api_key_env = "VAST_API_KEY"\nowner = "nick"\nssh_key = "~/.ssh/id_ed25519"\n\n'
         '[defaults]\nttl = "30m"\nrun_ttl = "2h"\nmax_price = 0.60\ndaily_budget = 10.00\n'
-        'warn_before_expiry = "5m"\nimage = "rig/base:cuda12.4"\ndisk = 50\n\n'
+        'warn_before_expiry = "5m"\nimage = "vasty/base:cuda12.4"\ndisk = 50\n\n'
         '[profiles.small]\ngpu = "4090"\nvram = 24\n\n'
         '[profiles.big]\ngpu = "A100"\nvram = 80\nmax_price = 2.50\n\n'
         '[models."Qwen/Qwen3-72B-Instruct"]\nvram = 80\nquant = "awq"\n'
@@ -315,7 +315,7 @@ def test_startup_both_in_stdin_is_invalid(cfg: Env) -> None:
 
 
 def test_startup_both_in_env_is_invalid(cfg: Env) -> None:
-    cfg.env.update(RIG_STARTUP="echo", RIG_STARTUP_FILE="a.sh")
+    cfg.env.update(VASTY_STARTUP="echo", VASTY_STARTUP_FILE="a.sh")
     assert cfg.error().code == "invalid_config"
 
 
@@ -329,8 +329,8 @@ def test_startup_file_resolves_relative_to_user_file(cfg: Env) -> None:
 
 
 def test_startup_file_resolves_relative_to_project_file(cfg: Env) -> None:
-    script = write(cfg.cwd / ".rig" / "boot.sh", "echo project\n")
-    cfg.project('[profiles.ft]\nstartup_file = "boot.sh"\n', ".rig/config.toml")
+    script = write(cfg.cwd / ".vasty" / "boot.sh", "echo project\n")
+    cfg.project('[profiles.ft]\nstartup_file = "boot.sh"\n', ".vasty/config.toml")
     s = cfg.resolve(profile="ft")
     assert s.startup == "echo project\n"
     assert s.startup_path == str(script)
@@ -392,7 +392,7 @@ def test_owner_order(cfg: Env) -> None:
     assert (cfg.resolve().owner, cfg.resolve().sources["owner"]) == ("from-user", "user")
     cfg.project('owner = "from-project"\n')
     assert cfg.resolve().owner == "from-project"
-    cfg.env["RIG_OWNER"] = "from-env"
+    cfg.env["VASTY_OWNER"] = "from-env"
     assert cfg.resolve().owner == "from-env"
     s = cfg.resolve(flags={"owner": "from-flag"})
     assert (s.owner, s.sources["owner"]) == ("from-flag", "flag")
@@ -424,7 +424,7 @@ def test_daily_budget_order(cfg: Env) -> None:
     cfg.project("[defaults]\ndaily_budget = 30.5\n")
     s = cfg.resolve()
     assert (s.daily_budget, s.sources["daily_budget"]) == (Decimal("30.5"), "project")
-    cfg.env["RIG_DAILY_BUDGET"] = "40"
+    cfg.env["VASTY_DAILY_BUDGET"] = "40"
     s = cfg.resolve()
     assert (s.daily_budget, s.sources["daily_budget"]) == (Decimal("40"), "env")
 
@@ -465,7 +465,7 @@ def test_config_models_add_and_override(cfg: Env) -> None:
 
 
 def test_model_layer_sources(cfg: Env) -> None:
-    cfg.env["RIG_VRAM"] = "24"
+    cfg.env["VASTY_VRAM"] = "24"
     s = cfg.resolve(model="Qwen/Qwen3-72B-Instruct")
     assert (s.vram, s.image) == (80.0, "vllm/vllm-openai:v0.6.3")
     assert (s.sources["vram"], s.sources["image"]) == ("model", "model")
@@ -491,7 +491,7 @@ def test_model_layer_beats_lower_layers(cfg: Env) -> None:
 def test_model_layer_empty_for_unknown_or_absent_model(cfg: Env) -> None:
     for model in (None, "org/mystery"):
         s = cfg.resolve(model=model)
-        assert s.vram is None and s.image == "rig/base:cuda12.4"
+        assert s.vram is None and s.image == "vasty/base:cuda12.4"
         assert "model" not in s.sources.values()
 
 
@@ -571,7 +571,7 @@ def test_config_show_profile(harness: Harness) -> None:
 
 
 def test_config_show_human(harness: Harness) -> None:
-    write(harness.home / "project" / "rig.toml", '[defaults]\nimage = "my/img"\n')
+    write(harness.home / "project" / "vasty.toml", '[defaults]\nimage = "my/img"\n')
     code, out, _ = harness.run("config", "show", "--plain")
     assert code == 0
     lines = out.strip().splitlines()
@@ -707,7 +707,7 @@ def test_parse_key() -> None:
         "models", "Qwen/Qwen3-72B-Instruct", "vram"]
     assert parse_key("models.'a.b'.image") == ["models", "a.b", "image"]
     for bad in ("", "a.", ".a", 'a."b', "a b"):
-        with pytest.raises(RigError):
+        with pytest.raises(VastyError):
             parse_key(bad)
 
 
@@ -716,7 +716,7 @@ def test_parse_key() -> None:
 
 def test_config_profiles(harness: Harness) -> None:
     write(user_config_path(harness.home), '[profiles.small]\ngpu = "4090"\nvram = 24\n')
-    write(harness.home / "project" / "rig.toml", '[profiles.big]\ngpu = "A100"\n')
+    write(harness.home / "project" / "vasty.toml", '[profiles.big]\ngpu = "A100"\n')
     code, out, _ = harness.run("config", "profiles")
     assert code == 0
     assert json.loads(out) == {"profiles": {"small": {"gpu": "4090", "vram": 24},

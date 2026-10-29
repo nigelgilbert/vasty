@@ -4,8 +4,8 @@ import secrets
 
 import pytest
 
-from rig import ids
-from rig.errors import RigError
+from vasty import ids
+from vasty.errors import VastyError
 
 
 def test_new_lease_id_shape() -> None:
@@ -56,14 +56,14 @@ def test_valid_values(kind: str, value: str) -> None:
     "value", ["", "-x", ".x", "_x", "a b", "a/b", "a;b", "a=b", "A" * 64, "é", "x\n"]
 )
 def test_invalid_values(kind: str, value: str) -> None:
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         ids.validate_value(kind, value)
     assert exc.value.code == "invalid_arguments"
 
 
 @pytest.mark.parametrize("value", ["l-7f3a", "l-0", "i-55120", "i-0"])
 def test_name_rejects_id_forms(value: str) -> None:
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         ids.validate_value("name", value)
     assert exc.value.code == "invalid_arguments"
     assert ids.validate_value("group", value) == value

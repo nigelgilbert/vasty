@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 from fakes import START, FakeTime, Harness
-from rig.errors import RigError
-from rig.timeutil import Clock, format_duration, iso, parse_duration, parse_http_date, parse_time
+from vasty.errors import VastyError
+from vasty.timeutil import Clock, format_duration, iso, parse_duration, parse_http_date, parse_time
 
 
 @pytest.mark.parametrize(
@@ -24,7 +24,7 @@ def test_parse_duration(text: str, seconds: int) -> None:
      "30m ", "1h 30m", "+5m", "1h30"],
 )
 def test_parse_duration_rejects(text: str) -> None:
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         parse_duration(text)
     assert exc.value.code == "invalid_arguments"
 
@@ -74,7 +74,7 @@ def test_parse_time(text: str, epoch: int) -> None:
     ],
 )
 def test_parse_time_rejects(text: str) -> None:
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         parse_time(text)
     assert exc.value.code == "invalid_arguments"
 

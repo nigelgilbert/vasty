@@ -7,13 +7,13 @@ from typing import Any
 import pytest
 
 from fakes import NOW, FakeReserve, Harness, add_lease
-from rig.commands import serve
-from rig.errors import RigError
-from rig.models import Job
-from rig.remote import BoxUnreachableError, ExecResult, SshTarget
+from vasty.commands import serve
+from vasty.errors import VastyError
+from vasty.models import Job
+from vasty.remote import BoxUnreachableError, ExecResult, SshTarget
 
 QWEN = "Qwen/Qwen3-72B-Instruct"
-KEY = "rig-" + "ab" * 32
+KEY = "vasty-" + "ab" * 32
 
 
 def run_serve(harness: Harness, *argv: str) -> tuple[int, dict[str, Any], str]:
@@ -54,16 +54,16 @@ def test_serve_on_box(harness: Harness, box: int, started: list[tuple[Job, str]]
     }
     execs = harness.box.state(box).execs
     assert execs == [serve.install_command("0.6.3")]
-    assert "vllm==0.6.3" in execs[0] and "/workspace/.rig/venv" in execs[0]
+    assert "vllm==0.6.3" in execs[0] and "/workspace/.vasty/venv" in execs[0]
     job, command = started[0]
     assert (job.kind, job.port, job.state) == ("serve", 8000, "serving")
     assert command == (
-        f"/workspace/.rig/venv/bin/vllm serve {QWEN} --api-key {KEY} "
+        f"/workspace/.vasty/venv/bin/vllm serve {QWEN} --api-key {KEY} "
         "--host 0.0.0.0 --port 8000 --quantization awq"
     )
     assert KEY not in job.cmd
     assert job.cmd == (
-        f"/workspace/.rig/venv/bin/vllm serve {QWEN} --host 0.0.0.0 --port 8000 --quantization awq"
+        f"/workspace/.vasty/venv/bin/vllm serve {QWEN} --host 0.0.0.0 --port 8000 --quantization awq"
     )
     assert harness.http_calls == ["http://198.51.100.9:40080/v1/models"]
     assert harness.http_headers == [{"Authorization": f"Bearer {KEY}"}]
@@ -84,8 +84,8 @@ def test_serve_fresh_key_per_job(harness: Harness, box: int) -> None:
     harness.hex_values = ["11" * 32, "22" * 32]
     _, first, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
     _, second, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
-    assert first["api_key"] == "rig-" + "11" * 32
-    assert second["api_key"] == "rig-" + "22" * 32
+    assert first["api_key"] == "vasty-" + "11" * 32
+    assert second["api_key"] == "vasty-" + "22" * 32
     assert (first["job"], second["job"]) == ("j-1", "j-2")
 
 
@@ -112,7 +112,7 @@ def test_serve_deadline_is_serve_failed(harness: Harness, box: int) -> None:
 
 
 def test_serve_install_failure(harness: Harness, box: int, started: list[tuple[Job, str]]) -> None:
-    harness.box.state(box).exec_results["V=/workspace/.rig/venv"] = ExecResult(1, "", "no pip")
+    harness.box.state(box).exec_results["V=/workspace/.vasty/venv"] = ExecResult(1, "", "no pip")
     code, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
     assert code == 2 and data["error"] == "serve_failed"
     assert data["details"]["output"] == ["no pip"]
@@ -173,7 +173,7 @@ def test_serve_quant_flag_overrides_entry(
 
 
 def test_serve_pin_from_config_entry(harness: Harness, box: int) -> None:
-    cfg = harness.home / ".config" / "rig"
+    cfg = harness.home / ".config" / "vasty"
     cfg.mkdir(parents=True)
     (cfg / "config.toml").write_text(
         '[models."org/small"]\nvram = 24\nimage = "vllm/vllm-openai:v0.7.2"\n'
@@ -290,9 +290,9 @@ def test_serve_reports_reserve_wait_sweep(
         add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
         return reserve(ctx, args, snap, ttl=ttl, wait=wait)
 
-    monkeypatch.setattr("rig.commands.reserve.reserve_lease", wait)
+    monkeypatch.setattr("vasty.commands.reserve.reserve_lease", wait)
     if not ok:
-        harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+        harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
     code, data, _ = run_serve(harness, "--model", QWEN)
     assert code == 0
     error = None if ok else "provider_error"
@@ -304,18 +304,18 @@ def test_serve_reports_reserve_wait_sweep(
 
 def test_serve_failure_reports_failed_sweep_on_stderr(harness: Harness, box: int) -> None:
     add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
-    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
     harness.box.state(box).exec_results["V="] = ExecResult(1, "", "pip exploded")
     code, data, err = run_serve(harness, "--on", "ft", "--model", QWEN)
     assert code == 2 and data["error"] == "serve_failed"
     assert "swept" not in data
     assert err.splitlines() == [
-        "rig: SWEPT  l-0000a009 old  expired 2026-10-29T00:59:50Z  destroy failed (provider_error)"
+        "vasty: SWEPT  l-0000a009 old  expired 2026-10-29T00:59:50Z  destroy failed (provider_error)"
     ]
 
 
 def test_serve_vllm_pin_parsing() -> None:
-    from rig.config import ModelEntry
+    from vasty.config import ModelEntry
 
     assert serve.vllm_pin(None) == serve.DEFAULT_VLLM
     assert serve.vllm_pin(ModelEntry(image="vllm/vllm-openai:v0.8.1")) == "0.8.1"

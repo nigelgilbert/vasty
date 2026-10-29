@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 
 from fakes import NOW, Harness, make_offer
-from rig.labels import parse
-from rig.models import CreateRequest, Instance, Label
+from vasty.labels import parse
+from vasty.models import CreateRequest, Instance, Label
 
 
 def boot(harness: Harness, inst: Instance, request: CreateRequest) -> None:
@@ -70,7 +70,7 @@ def test_auto_reserved_serve_returns_endpoint(h: Harness) -> None:
     assert code == 0, data
     assert data["url"].startswith("http://198.51.100.7:")
     assert data["url"].endswith("/v1")
-    assert data["api_key"].startswith("rig-")
+    assert data["api_key"].startswith("vasty-")
     assert h.provider.created[0].image == "vllm/vllm-openai:v0.6.3"
     assert len(h.provider.instances) == 1
 
@@ -84,7 +84,7 @@ def test_serve_failure_releases_reserved_box(h: Harness) -> None:
 
 
 def test_auto_reserve_runs_budget_check_with_run_ttl(h: Harness) -> None:
-    h.env["RIG_DAILY_BUDGET"] = "0.50"
+    h.env["VASTY_DAILY_BUDGET"] = "0.50"
     code, data = run_json(h, "run", "--", "true")
     assert code == 3
     assert data["error"] == "budget_exceeded"

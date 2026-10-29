@@ -5,8 +5,8 @@ from decimal import Decimal
 from typing import Any
 
 from fakes import NOW, Harness, add_lease
-from rig.errors import RigError
-from rig.models import Instance, Job
+from vasty.errors import VastyError
+from vasty.models import Instance, Job
 
 
 def release(harness: Harness, *argv: str, tty: bool = False, stdin: str = "") -> tuple[int, Any, str]:
@@ -96,7 +96,7 @@ def test_release_history_lease_returns_summary_with_already_absent(harness: Harn
 
 def test_release_after_failed_sweep_destroy_is_provider_error(harness: Harness) -> None:
     row = add_lease(harness, label={"expires": NOW - 10})
-    harness.provider.fail["destroy"] = [RigError("provider_error", "boom", "retry")] * 2
+    harness.provider.fail["destroy"] = [VastyError("provider_error", "boom", "retry")] * 2
     code, data, _ = release(harness, "l-0000a001")
     assert code == 2
     assert data["error"] == "provider_error"
@@ -107,7 +107,7 @@ def test_release_after_failed_sweep_destroy_is_provider_error(harness: Harness) 
 
 def test_release_after_failed_sweep_destroy_sends_destroy(harness: Harness) -> None:
     row = add_lease(harness, label={"expires": NOW - 10})
-    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
     code, data, _ = release(harness, "l-0000a001")
     assert code == 0
     assert harness.provider.destroyed == [row.id]
@@ -143,7 +143,7 @@ def test_release_unreachable_lease(harness: Harness) -> None:
 
 def test_release_failed_destroy_is_provider_error(harness: Harness) -> None:
     add_lease(harness)
-    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
     code, data, _ = release(harness, "l-0000a001")
     assert code == 2
     assert data["error"] == "provider_error"
@@ -174,7 +174,7 @@ def test_release_reports_unreadable_label_on_reread(harness: Harness) -> None:
     real_get = harness.provider.get_instance
 
     def garbled(instance_id: int) -> Instance | None:
-        harness.provider.instances[instance_id].label = "rig:v9;garbage"
+        harness.provider.instances[instance_id].label = "vasty:v9;garbage"
         return real_get(instance_id)
 
     harness.provider.get_instance = garbled  # type: ignore[method-assign]
@@ -182,7 +182,7 @@ def test_release_reports_unreadable_label_on_reread(harness: Harness) -> None:
     assert code == 2
     assert data["error"] == "provider_error"
     assert data["message"] == "Lease l-0000a001's label is unreadable."
-    assert data["hint"] == f"rig release i-{row.id} --yes"
+    assert data["hint"] == f"vasty release i-{row.id} --yes"
     assert harness.provider.destroyed == []
     code, data, _ = release(harness, f"i-{row.id}", "--yes")
     assert code == 0
@@ -248,7 +248,7 @@ def test_orphan_release_tty_with_yes_skips_prompt(harness: Harness) -> None:
 
 
 def test_unreadable_label_releases_by_instance_id(harness: Harness) -> None:
-    harness.provider.add_instance(id=777, label="rig:v9;lease=l-1")
+    harness.provider.add_instance(id=777, label="vasty:v9;lease=l-1")
     code, data, _ = release(harness, "i-777", "--yes")
     assert code == 0
     assert harness.provider.destroyed == [777]
@@ -288,7 +288,7 @@ def test_bulk_release_empty_match(harness: Harness) -> None:
 def test_bulk_release_reports_failed_entries(harness: Harness) -> None:
     add_lease(harness, "l-0000a001")
     b = add_lease(harness, "l-0000a002")
-    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
     code, data, _ = release(harness, "--all")
     assert code == 2
     first, second = data["results"]

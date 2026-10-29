@@ -5,7 +5,7 @@ import json
 import pytest
 
 from fakes import Harness, add_lease
-from rig.remote import SshTarget
+from vasty.remote import SshTarget
 
 
 @pytest.fixture
@@ -26,10 +26,10 @@ def test_one_off_command_passes_exit_code(harness: Harness, box: int) -> None:
         return 7
 
     harness.box.interactive = interactive  # type: ignore[method-assign]
-    code, out, _ = harness.run("ssh", "ft", "--", "cat", "/workspace/.rig/startup.log")
+    code, out, _ = harness.run("ssh", "ft", "--", "cat", "/workspace/.vasty/startup.log")
     assert code == 7
     assert out == ""
-    assert harness.box.interactive_calls == [(box, ["cat", "/workspace/.rig/startup.log"], [])]
+    assert harness.box.interactive_calls == [(box, ["cat", "/workspace/.vasty/startup.log"], [])]
 
 
 def test_forwards_pass_through(harness: Harness, box: int) -> None:

@@ -8,10 +8,10 @@ from typing import Any, TextIO
 import pytest
 
 from fakes import NOW, FakeReserve, Harness, add_lease
-from rig import engine
-from rig.errors import RigError
-from rig.models import Job
-from rig.remote import SshTarget
+from vasty import engine
+from vasty.errors import VastyError
+from vasty.models import Job
+from vasty.remote import SshTarget
 
 
 def run(harness: Harness, *argv: str) -> tuple[int, dict[str, Any], str]:
@@ -81,7 +81,7 @@ def test_run_detach_returns_job_immediately(harness: Harness, box: int) -> None:
     code, data, _ = run(harness, "--on", "ft", "--detach", "--", "python", "train.py")
     assert code == 0
     assert data == {
-        "lease": "l-0000a001", "job": "j-1", "log_path": "/workspace/.rig/jobs/j-1/log",
+        "lease": "l-0000a001", "job": "j-1", "log_path": "/workspace/.vasty/jobs/j-1/log",
         "expires_at": "2026-10-29T01:50:00Z", "warnings": [], "swept": [],
     }
     assert attached == []
@@ -92,7 +92,7 @@ def test_run_warns_when_clock_is_short(harness: Harness) -> None:
     add_lease(harness, label={"name": "ft", "expires": NOW + 120})
     code, data, err = run(harness, "--on", "ft", "--", "ls")
     assert code == 0
-    assert "rig extend l-0000a001 --by 30m" in err
+    assert "vasty extend l-0000a001 --by 30m" in err
     assert [w["code"] for w in data["warnings"]] == ["expiring_with_running_job"]
 
 
@@ -247,7 +247,7 @@ def test_os_error_before_job_releases_auto_box(harness: Harness, reserve: FakeRe
 def test_save_failure_after_job_start_releases_auto_box(
     harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from rig.commands import run as run_cmd
+    from vasty.commands import run as run_cmd
 
     def broken(*args: Any) -> None:
         raise OSError("disk full")
@@ -260,7 +260,7 @@ def test_save_failure_after_job_start_releases_auto_box(
 
 
 def _fail_finish_save(monkeypatch: pytest.MonkeyPatch) -> None:
-    from rig.commands import run as run_cmd
+    from vasty.commands import run as run_cmd
 
     real = run_cmd.save_lease
     calls: list[int] = []
@@ -352,7 +352,7 @@ def _expire_other_lease_during_wait(
         add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
         return reserve(ctx, args, snap, ttl=ttl, wait=wait)
 
-    monkeypatch.setattr("rig.commands.reserve.reserve_lease", wait)
+    monkeypatch.setattr("vasty.commands.reserve.reserve_lease", wait)
 
 
 @pytest.mark.parametrize("detach", [False, True])
@@ -362,7 +362,7 @@ def test_auto_run_reports_reserve_wait_sweep(
 ) -> None:
     _expire_other_lease_during_wait(harness, reserve, monkeypatch)
     if not ok:
-        harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+        harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
     code, data, _ = run(harness, *(["--detach"] if detach else []), "--", "ls")
     assert code == 0
     error = None if ok else "provider_error"
@@ -383,7 +383,7 @@ def test_auto_run_lists_failed_release_retry_once(harness: Harness, reserve: Fak
     lease.state, lease.released_here, lease.destroy_pending = "released", True, True
     lease.destroy_attempts, lease.destroy_at = 1, NOW - 60
     ctx.cache.save(cache)
-    err = RigError("provider_error", "boom", "retry")
+    err = VastyError("provider_error", "boom", "retry")
     harness.provider.fail["destroy"] = [err, err]
     real = harness.box.attach_job
 
@@ -407,7 +407,7 @@ def test_failed_auto_release_reports_release_refresh_sweep(
 
     def destroy(instance_id: int) -> None:
         if instance_id == 1001:
-            raise RigError("provider_error", "boom", "retry")
+            raise VastyError("provider_error", "boom", "retry")
         real(instance_id)
 
     monkeypatch.setattr(harness.provider, "destroy", destroy)
@@ -427,7 +427,7 @@ def test_auto_run_ttl_flag_overrides_run_ttl(harness: Harness, reserve: FakeRese
 def test_auto_run_profile_ttl_does_not_override_run_ttl(
     harness: Harness, reserve: FakeReserve
 ) -> None:
-    harness.env["RIG_TTL"] = "10m"
+    harness.env["VASTY_TTL"] = "10m"
     run(harness, "--", "ls")
     assert reserve.calls[0]["ttl"] == 7200
 
@@ -468,7 +468,7 @@ def test_auto_run_rejects_no_wait(harness: Harness, reserve: FakeReserve) -> Non
 
 
 def test_auto_run_reserve_failure_propagates(harness: Harness, reserve: FakeReserve) -> None:
-    reserve.fail = RigError("budget_exceeded", "over", "release something")
+    reserve.fail = VastyError("budget_exceeded", "over", "release something")
     code, data, _ = run(harness, "--", "ls")
     assert code == 3 and data["error"] == "budget_exceeded"
 
@@ -499,7 +499,7 @@ def test_auto_run_attach_error_keeps_box_and_prints_recovery(
     text = err.getvalue()
     assert "j-1 on l-0000b001" in text
     assert "2026-10-29T03:00:00Z" in text
-    assert "rig status l-0000b001" in text and "rig release l-0000b001" in text
+    assert "vasty status l-0000b001" in text and "vasty release l-0000b001" in text
 
 
 def test_auto_run_attach_error_survives_broken_stderr(
@@ -524,7 +524,7 @@ def test_attach_error_reports_sweep_on_stderr(harness: Harness, reserve: FakeRes
     assert harness.last_ctx is not None
     err = harness.last_ctx.stderr
     assert isinstance(err, io.StringIO)
-    assert "rig: SWEPT  l-0000a009 old" in err.getvalue()
+    assert "vasty: SWEPT  l-0000a009 old" in err.getvalue()
 
 
 def test_attach_error_with_sweep_survives_broken_stderr(

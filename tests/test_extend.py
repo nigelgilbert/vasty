@@ -7,10 +7,10 @@ from typing import Any
 import pytest
 
 from fakes import NOW, Harness, add_lease, lease_label
-from rig.errors import RigError
-from rig.labels import parse
-from rig.models import Label
-from rig.remote import BoxUnreachableError, SshTarget
+from vasty.errors import VastyError
+from vasty.labels import parse
+from vasty.models import Label
+from vasty.remote import BoxUnreachableError, SshTarget
 
 
 @pytest.fixture
@@ -114,7 +114,7 @@ def test_extend_to_past_points_at_release(h: Harness) -> None:
     code, data = run_json(h, "extend", "l-0000a001", "--until", "2026-10-29T00:30:00Z")
     assert code == 1
     assert data["error"] == "invalid_arguments"
-    assert data["hint"] == "rig release l-0000a001"
+    assert data["hint"] == "vasty release l-0000a001"
     assert label_of(h, row.id).expires == NOW + 600
 
 
@@ -144,7 +144,7 @@ def test_shorten_writes_label_then_clock(h: Harness, monkeypatch: pytest.MonkeyP
 
 def test_lengthen_label_failure_restores_clock(h: Harness) -> None:
     row = add_lease(h, label={"expires": NOW + 600})
-    h.provider.fail["set_label"] = RigError("provider_error", "boom", "Run rig status.")
+    h.provider.fail["set_label"] = VastyError("provider_error", "boom", "Run vasty status.")
     code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
     assert code == 2
     assert data["error"] == "provider_error"
@@ -159,7 +159,7 @@ def test_lengthen_restore_failure_names_both_values(
     h: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     row = add_lease(h, label={"expires": NOW + 600})
-    h.provider.fail["set_label"] = RigError("provider_error", "boom", "Run rig status.")
+    h.provider.fail["set_label"] = VastyError("provider_error", "boom", "Run vasty status.")
     write_clock = h.box.write_clock
     count = [0]
 
@@ -207,7 +207,7 @@ def test_shorten_restore_failure_names_both_values(
     def label(instance_id: int, text: str) -> None:
         count[0] += 1
         if count[0] > 1:
-            raise RigError("provider_error", "label api down", "Run rig status.")
+            raise VastyError("provider_error", "label api down", "Run vasty status.")
         set_label(instance_id, text)
 
     monkeypatch.setattr(h.provider, "set_label", label)
@@ -230,7 +230,7 @@ def test_label_moved_since_read_aborts(h: Harness, monkeypatch: pytest.MonkeyPat
             parsed = parse(inst.label)
             assert isinstance(parsed, Label)
             parsed.expires = NOW + 999
-            from rig.labels import format_label
+            from vasty.labels import format_label
 
             inst.label = format_label(parsed)
         return inst
@@ -247,14 +247,14 @@ def test_label_moved_since_read_aborts(h: Harness, monkeypatch: pytest.MonkeyPat
 
 
 def test_label_over_limit_is_invalid_before_any_write(h: Harness) -> None:
-    from rig import engine
-    from rig.commands import extend
+    from vasty import engine
+    from vasty.commands import extend
 
     base = len(lease_label(expires=None, extra={"note": ""}))
     row = add_lease(h, label={"expires": None, "extra": {"note": "x" * (1020 - base)}})
     ctx = h.context()
     lease = engine.refresh(ctx, probe=False).leases["l-0000a001"]
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         extend.apply(ctx, lease, NOW + 7200)
     assert exc.value.code == "invalid_arguments"
     assert h.box.clock_writes == []
@@ -296,11 +296,11 @@ def test_orphan_is_unmanaged(h: Harness) -> None:
     h.provider.add_instance(id=55120)
     code, data = run_json(h, "extend", "i-55120", "--by", "30m")
     assert (code, data["error"]) == (1, "orphan_unmanaged")
-    assert data["hint"] == "rig tag i-55120 --ttl 30m"
+    assert data["hint"] == "vasty tag i-55120 --ttl 30m"
 
 
 def test_budget_refusal_says_by_how_much(h: Harness) -> None:
-    h.env["RIG_DAILY_BUDGET"] = "1.00"
+    h.env["VASTY_DAILY_BUDGET"] = "1.00"
     row = add_lease(h, label={"expires": NOW + 3600}, dph_total=Decimal("0.50"))
     code, data = run_json(h, "extend", "l-0000a001", "--by", "2h")
     assert code == 3
@@ -312,7 +312,7 @@ def test_budget_refusal_says_by_how_much(h: Harness) -> None:
 
 
 def test_shortening_passes_over_budget(h: Harness) -> None:
-    h.env["RIG_DAILY_BUDGET"] = "0.10"
+    h.env["VASTY_DAILY_BUDGET"] = "0.10"
     row = add_lease(h, label={"expires": NOW + 7200}, dph_total=Decimal("0.50"))
     code, _ = run_json(h, "extend", "l-0000a001", "--to", "1h")
     assert code == 0
@@ -320,8 +320,8 @@ def test_shortening_passes_over_budget(h: Harness) -> None:
 
 
 def run_after_refresh(h: Harness, monkeypatch: pytest.MonkeyPatch, *argv: str) -> None:
-    """Run `argv` as a second local rig command right after the next refresh returns."""
-    from rig import engine
+    """Run `argv` as a second local vasty command right after the next refresh returns."""
+    from vasty import engine
 
     real = engine.refresh
 
@@ -347,7 +347,7 @@ def reserve_after_refresh(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
 def test_budget_counts_local_reserve_between_refresh_and_lock(
     h: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    h.env["RIG_DAILY_BUDGET"] = "1.00"
+    h.env["VASTY_DAILY_BUDGET"] = "1.00"
     row = add_lease(h, label={"expires": NOW + 3600}, dph_total=Decimal("0.50"))
     reserve_after_refresh(h, monkeypatch)
     code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
@@ -359,7 +359,7 @@ def test_budget_counts_local_reserve_between_refresh_and_lock(
 def test_budget_counts_local_extend_between_refresh_and_lock(
     h: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    h.env["RIG_DAILY_BUDGET"] = "1.60"
+    h.env["VASTY_DAILY_BUDGET"] = "1.60"
     row = add_lease(h, "l-0000a001", label={"expires": NOW + 1800}, dph_total=Decimal("0.50"))
     add_lease(h, "l-0000a002", label={"expires": NOW + 1800}, dph_total=Decimal("0.50"))
     run_after_refresh(h, monkeypatch, "extend", "l-0000a002", "--by", "2h")
@@ -405,7 +405,7 @@ def edit_after_refresh(
     """Set `fields` on the cache copy of `lease` right after the next refresh returns."""
     import dataclasses
 
-    from rig import engine
+    from vasty import engine
 
     real = engine.refresh
 
@@ -481,7 +481,7 @@ def test_bulk_to_aligns_expiries_with_one_now(h: Harness) -> None:
 def test_bulk_budget_counts_local_reserve_between_refresh_and_lock(
     h: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    h.env["RIG_DAILY_BUDGET"] = "1.00"
+    h.env["VASTY_DAILY_BUDGET"] = "1.00"
     add_lease(h, "l-0000a001", label={"group": "exp", "expires": NOW + 1800},
               dph_total=Decimal("0.50"))
     reserve_after_refresh(h, monkeypatch)
@@ -545,7 +545,7 @@ def test_bulk_unwritable_between_refresh_and_lock_changes_nothing(
 
 
 def test_bulk_budget_is_atomic(h: Harness) -> None:
-    h.env["RIG_DAILY_BUDGET"] = "2.00"
+    h.env["VASTY_DAILY_BUDGET"] = "2.00"
     a = add_lease(h, "l-0000a001", label={"group": "exp", "expires": NOW + 1800},
                   dph_total=Decimal("0.50"))
     b = add_lease(h, "l-0000a002", label={"group": "exp", "expires": NOW + 1800},

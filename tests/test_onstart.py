@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from rig.errors import RigError
-from rig.onstart import (
+from vasty.errors import VastyError
+from vasty.onstart import (
     IMAGE_WATCHDOG,
     ONSTART_LIMIT,
     STARTUP_INTERRUPTED,
@@ -50,10 +50,10 @@ def write_exe(path: Path, text: str) -> None:
 
 
 class Watchdog:
-    """The watchdog script in a temp `.rig` root with stubbed `date`, `sleep` and `curl`."""
+    """The watchdog script in a temp `.vasty` root with stubbed `date`, `sleep` and `curl`."""
 
     def __init__(self, tmp: Path) -> None:
-        self.root = tmp / "rig"
+        self.root = tmp / "vasty"
         self.root.mkdir()
         self.stubs = tmp / "stubs"
         self.stubs.mkdir()
@@ -96,8 +96,8 @@ class Watchdog:
     def env(self, max_loops: int, stub_sleep: float = 0.0) -> dict[str, str]:
         return {
             "PATH": f"{self.stubs}:{os.environ['PATH']}",
-            "RIG_ROOT": str(self.root),
-            "RIG_MAX_LOOPS": str(max_loops),
+            "VASTY_ROOT": str(self.root),
+            "VASTY_MAX_LOOPS": str(max_loops),
             "STUB_DIR": str(self.stubs),
             "STUB_SLEEP": str(stub_sleep),
         }
@@ -301,7 +301,7 @@ class Box:
 
     def __init__(self, tmp: Path) -> None:
         self.tmp = tmp
-        self.root = tmp / "workspace" / ".rig"
+        self.root = tmp / "workspace" / ".vasty"
         self.workdir = tmp / "workspace"
         self.workdir.mkdir()
         self.environ = tmp / "environ"
@@ -323,8 +323,8 @@ class Box:
     def run(self, payload: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         base = {
             "PATH": os.environ["PATH"],
-            "RIG_POLL": "1",
-            "RIG_MAX_LOOPS": "1",
+            "VASTY_POLL": "1",
+            "VASTY_MAX_LOOPS": "1",
             "CONTAINER_ID": "777",
             "CONTAINER_API_KEY": "ck-777",
         }
@@ -400,8 +400,8 @@ def test_onstart_without_watchdog_marks_watchdog(box: Box) -> None:
 def test_default_image_uses_image_watchdog() -> None:
     payload = build_payload(600, None, False)
     assert f"WD={IMAGE_WATCHDOG}" in payload
-    assert "RIG_WATCHDOG_EOF" not in payload
-    assert "/etc/cron.d/rig" in payload
+    assert "VASTY_WATCHDOG_EOF" not in payload
+    assert "/etc/cron.d/vasty" in payload
     assert "* * * * * root" in payload
 
 
@@ -434,7 +434,7 @@ def test_hook_cut_off_by_restart_reports_failure(box: Box) -> None:
 
 
 def test_startup_containing_the_delimiter_runs(box: Box) -> None:
-    script = "cat <<'RIG_STARTUP_EOF'\nline\nRIG_STARTUP_EOF\n"
+    script = "cat <<'VASTY_STARTUP_EOF'\nline\nVASTY_STARTUP_EOF\n"
     box.run(box.payload(startup=script))
     assert box.wait_startup() == 0
     assert "line" in box.read("startup.log")
@@ -443,11 +443,11 @@ def test_startup_containing_the_delimiter_runs(box: Box) -> None:
 def test_custom_image_installs_essentials_and_writes_watchdog(box: Box) -> None:
     apt = box.tmp / "apt-get"
     write_exe(apt, f'#!/bin/sh\necho "$@" >>{box.tmp}/apt.log\n')
-    essentials = (("rig-missing-tool", "rig-pkg"), ("sh", "sh-pkg"))
+    essentials = (("vasty-missing-tool", "vasty-pkg"), ("sh", "sh-pkg"))
     box.run(box.payload(custom=True, apt=str(apt), essentials=essentials))
     log = (box.tmp / "apt.log").read_text()
     assert "update -qq" in log
-    assert "install -y -qq --no-install-recommends rig-pkg" in log
+    assert "install -y -qq --no-install-recommends vasty-pkg" in log
     assert "sh-pkg" not in log
     assert (box.root / "watchdog.sh").exists()
     assert box.guard() == []
@@ -474,7 +474,7 @@ def test_custom_image_installs_python3_venv_when_python_lacks_it(
 
 
 def test_custom_image_without_apt_is_unsupported(box: Box) -> None:
-    essentials = (("rig-missing-tool", "rig-pkg"),)
+    essentials = (("vasty-missing-tool", "vasty-pkg"),)
     box.run(box.payload(custom=True, apt=str(box.tmp / "no-apt"), essentials=essentials))
     assert "apt-get" in box.read("unsupported").split()
 
@@ -497,7 +497,7 @@ def test_onstart_command_decodes_to_payload() -> None:
 def test_custom_onstart_checks_for_bash() -> None:
     cmd = build_onstart(1800, None, True)
     assert cmd.startswith("command -v bash >/dev/null||")
-    assert "RIG_WATCHDOG_EOF" in decode_onstart(cmd)
+    assert "VASTY_WATCHDOG_EOF" in decode_onstart(cmd)
 
 
 def test_onstart_sizes_fit() -> None:
@@ -508,7 +508,7 @@ def test_onstart_sizes_fit() -> None:
 
 def test_large_startup_is_rejected() -> None:
     script = "".join(f"echo {os.urandom(16).hex()}\n" for _ in range(200))
-    with pytest.raises(RigError) as err:
+    with pytest.raises(VastyError) as err:
         build_onstart(1800, script, False)
     assert err.value.code == "startup_too_large"
     assert err.value.details is not None and err.value.details["size"] > ONSTART_LIMIT
@@ -546,7 +546,7 @@ def test_adopt_again_keeps_the_running_watchdog(box: Box) -> None:
     box.environ.write_bytes(b"CONTAINER_ID=88\0CONTAINER_API_KEY=ak-88\0")
     script = adopt_script(4102444800, root=str(box.root), workdir=str(box.workdir),
                           services=False, proc_environ=str(box.environ), alive_wait=5.0)
-    env = {"CONTAINER_ID": "", "CONTAINER_API_KEY": "", "RIG_MAX_LOOPS": "0"}
+    env = {"CONTAINER_ID": "", "CONTAINER_API_KEY": "", "VASTY_MAX_LOOPS": "0"}
     box.run(script, env=env)
     pid = int(box.read("watchdog.lock/pid"))
     try:

@@ -1,7 +1,7 @@
 """In-memory fakes for the provider and box boundaries.
 
-`FakeProvider` implements `rig.provider.Provider`. `FakeBox` implements
-`rig.remote.BoxAccess`. `make_context` builds a `Context` wired to both, with
+`FakeProvider` implements `vasty.provider.Provider`. `FakeBox` implements
+`vasty.remote.BoxAccess`. `make_context` builds a `Context` wired to both, with
 a fixed clock, captured I/O and a temp home directory.
 """
 
@@ -14,10 +14,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Mapping, TextIO
 
-from rig.context import Context
-from rig.errors import RigError
-from rig.labels import format_label
-from rig.models import (
+from vasty.context import Context
+from vasty.errors import VastyError
+from vasty.labels import format_label
+from vasty.models import (
     Charges,
     CreateRequest,
     Instance,
@@ -28,8 +28,8 @@ from rig.models import (
     ProbeResult,
     SshKey,
 )
-from rig.provider import ProviderTimeout
-from rig.remote import BoxUnreachableError, ExecResult, SshTarget, following_job_id
+from vasty.provider import ProviderTimeout
+from vasty.remote import BoxUnreachableError, ExecResult, SshTarget, following_job_id
 
 START = 1_793_232_000  # 2026-10-29T00:00:00Z
 NOW = START + 3600  # FakeTime's default start
@@ -80,7 +80,7 @@ class FakeProvider:
     attached: list[tuple[str, int | None]] = field(default_factory=list)
     destroyed: list[int] = field(default_factory=list)
     calls: list[tuple[str, Any]] = field(default_factory=list)
-    fail: dict[str, RigError | list[RigError]] = field(default_factory=dict)
+    fail: dict[str, VastyError | list[VastyError]] = field(default_factory=dict)
     date_header: bool = True
     start_status: str | None = "running"
     created: list[CreateRequest] = field(default_factory=list)
@@ -157,7 +157,7 @@ class FakeProvider:
         self._call("set_label", (instance_id, label))
         inst = self.instances.get(instance_id)
         if inst is None:
-            raise RigError("provider_error", f"No instance {instance_id}.", "Run rig status.")
+            raise VastyError("provider_error", f"No instance {instance_id}.", "Run vasty status.")
         inst.label = label
 
     def charges(self, start: int, end: int) -> Charges:
@@ -188,7 +188,7 @@ def timeout_error() -> ProviderTimeout:
 
 @dataclass
 class BoxState:
-    """One box's `/workspace/.rig` as the fake sees it."""
+    """One box's `/workspace/.vasty` as the fake sees it."""
 
     clock: int | None = None
     clock_readable: bool = True
@@ -285,7 +285,7 @@ class FakeBox:
         while job.id in box.jobs and (following := following_job_id(job.id)) is not None:
             job = replace(job, id=following)
         started = Job(**{**vars(job), "started_at": int(self.time.wall_now), "state": "running",
-                         "log_path": f"/workspace/.rig/jobs/{job.id}/log", "pid": 4242})
+                         "log_path": f"/workspace/.vasty/jobs/{job.id}/log", "pid": 4242})
         box.jobs[job.id] = started
         box.logs.setdefault(job.id, [f"started {command}"])
         return started
@@ -363,7 +363,7 @@ class Harness:
     def __post_init__(self) -> None:
         self.provider = FakeProvider(time=self.time)
         self.box = FakeBox(time=self.time)
-        self.env.setdefault("RIG_OWNER", "claude")
+        self.env.setdefault("VASTY_OWNER", "claude")
         self.env.setdefault("USER", "nick")
         self.env.setdefault("HOME", str(self.home))
 
@@ -394,7 +394,7 @@ class Harness:
 
     def run(self, *argv: str, stdin: str = "", tty: bool = False) -> tuple[int, str, str]:
         """Run the CLI and return exit code, stdout and stderr."""
-        from rig.cli import configure, run
+        from vasty.cli import configure, run
 
         holder: list[Context] = []
         self.last_ctx = None
@@ -425,7 +425,7 @@ def lease_label(
     expires: int | None = _AUTO,
     **kw: Any,
 ) -> str:
-    """Render a `rig:v1` label. `expires` defaults to `created + ttl`; pass None to leave it out."""
+    """Render a `vasty:v1` label. `expires` defaults to `created + ttl`; pass None to leave it out."""
     if expires is _AUTO:
         expires = created + ttl
     return format_label(Label(lease=lease, owner=owner, created=created, ttl=ttl, expires=expires, **kw))
@@ -443,7 +443,7 @@ def add_lease(
     text = lease_label(lease, **(label or {}))
     row = harness.provider.add_instance(label=text, **inst)
     if reachable:
-        from rig.labels import parse
+        from vasty.labels import parse
 
         parsed = parse(text)
         assert isinstance(parsed, Label)
@@ -453,7 +453,7 @@ def add_lease(
 
 @dataclass
 class FakeReserve:
-    """A stand-in for `rig.commands.reserve.reserve_lease` on the `run` and `serve` auto-reserve paths.
+    """A stand-in for `vasty.commands.reserve.reserve_lease` on the `run` and `serve` auto-reserve paths.
 
     Each call adds a running lease to the fake provider and box with
     `add_lease`, refreshes, and returns `Reserved`. A `--name` that matches an
@@ -465,16 +465,16 @@ class FakeReserve:
     harness: Harness
     lease_ids: list[str] = field(default_factory=lambda: ["l-0000b001", "l-0000b002"])
     calls: list[dict[str, Any]] = field(default_factory=list)
-    fail: RigError | None = None
+    fail: VastyError | None = None
     row: dict[str, Any] = field(default_factory=dict)
 
     def install(self, monkeypatch: Any) -> FakeReserve:
-        monkeypatch.setattr("rig.commands.reserve.reserve_lease", self)
+        monkeypatch.setattr("vasty.commands.reserve.reserve_lease", self)
         return self
 
     def __call__(self, ctx: Context, args: Any, snap: Any, *, ttl: int, wait: bool = True) -> Any:
-        from rig import engine
-        from rig.commands.reserve import Reserved
+        from vasty import engine
+        from vasty.commands.reserve import Reserved
 
         settings = ctx.settings
         name = getattr(args, "name", None)
@@ -508,10 +508,10 @@ class FakeReserve:
 
 def reserve_result(lease: Any, now: int, reused: bool, warnings: list[Any], swept: list[Any]) -> Any:
     """Build a `ReserveResult` for a cached lease."""
-    from rig.models import ReserveResult
-    from rig.state import effective_expiry, guard
-    from rig.timeutil import iso
-    from rig.views import endpoint_fields
+    from vasty.models import ReserveResult
+    from vasty.state import effective_expiry, guard
+    from vasty.timeutil import iso
+    from vasty.views import endpoint_fields
 
     level, missing = guard(lease)
     point = endpoint_fields(lease)

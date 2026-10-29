@@ -10,13 +10,13 @@ from typing import Any
 import pytest
 
 from fakes import NOW, Harness, add_lease, make_offer, timeout_error
-from rig import engine
-from rig.commands import reserve
-from rig.context import Context
-from rig.errors import RigError
-from rig.labels import format_label, parse
-from rig.models import CreateRequest, Instance, Label
-from rig.onstart import decode_onstart
+from vasty import engine
+from vasty.commands import reserve
+from vasty.context import Context
+from vasty.errors import VastyError
+from vasty.labels import format_label, parse
+from vasty.models import CreateRequest, Instance, Label
+from vasty.onstart import decode_onstart
 
 RESULT_KEYS = {
     "lease", "name", "owner", "group", "state", "guard", "guard_missing", "reused", "gpu",
@@ -97,7 +97,7 @@ def test_reserve_writes_create_label_and_copies_clock(h: Harness) -> None:
     assert (created.created, created.ttl, created.expires) == (NOW, 3600, None)
     assert request.runtype == "ssh_direct"
     assert request.ports == [22, 8000, 8080]
-    assert request.image == "rig/base:cuda12.4"
+    assert request.image == "vasty/base:cuda12.4"
     assert request.disk_gb == 50
     (iid,) = h.provider.instances
     assert label_of(h, iid).expires == NOW + 3600
@@ -256,7 +256,7 @@ def test_startup_failure_ends_wait_with_warning(h: Harness) -> None:
     assert code == 0
     assert data["state"] == "running"
     assert [w["code"] for w in data["warnings"]] == ["startup_failed"]
-    assert data["warnings"][0]["fix"] == f"rig ssh {data['lease']} -- cat /workspace/.rig/startup.log"
+    assert data["warnings"][0]["fix"] == f"vasty ssh {data['lease']} -- cat /workspace/.vasty/startup.log"
     assert h.provider.destroyed == []
 
 
@@ -302,7 +302,7 @@ def test_wait_lists_failed_destroy_retry_once(
     h: Harness, monkeypatch: pytest.MonkeyPatch, setup: Any
 ) -> None:
     setup(h)
-    h.provider.fail["destroy"] = [RigError("provider_error", "boom", "retry")] * 50
+    h.provider.fail["destroy"] = [VastyError("provider_error", "boom", "retry")] * 50
 
     def slow(inst: Instance, req: CreateRequest) -> None:
         boot(h, inst, req)
@@ -415,11 +415,11 @@ def test_give_up_keeps_lease_active_when_destroy_skipped(
     h: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     unsupported_image(h)
-    monkeypatch.setattr("rig.engine.destroy_checked", lambda ctx, iid, expires: False)
+    monkeypatch.setattr("vasty.engine.destroy_checked", lambda ctx, iid, expires: False)
     code, out, err = h.run("reserve", "--image", "alpine:3")
     assert code == 1
     assert json.loads(out)["error"] == "image_unsupported"
-    assert "rig: l-abababab changed before it could be destroyed. Run rig release l-abababab." in err
+    assert "vasty: l-abababab changed before it could be destroyed. Run vasty release l-abababab." in err
     (iid,) = h.provider.instances
     lease = cached_lease(h)
     assert (lease.state, lease.released_here, lease.destroy_pending) == ("running", False, False)
@@ -438,7 +438,7 @@ def test_give_up_marks_released_when_row_already_gone(
         del h.provider.instances[iid]
         return False
 
-    monkeypatch.setattr("rig.engine.destroy_checked", vanish)
+    monkeypatch.setattr("vasty.engine.destroy_checked", vanish)
     code, out, err = h.run("reserve", "--image", "alpine:3")
     assert code == 1
     assert "changed before" not in err
@@ -448,11 +448,11 @@ def test_give_up_marks_released_when_row_already_gone(
 
 def test_give_up_failed_destroy_names_release_fix(h: Harness) -> None:
     unsupported_image(h)
-    h.provider.fail["destroy"] = RigError("provider_error", "boom.", "retry")
+    h.provider.fail["destroy"] = VastyError("provider_error", "boom.", "retry")
     code, out, err = h.run("reserve", "--image", "alpine:3")
     assert code == 1
     assert json.loads(out)["error"] == "image_unsupported"
-    assert "rig: could not destroy l-abababab: boom. Run rig release l-abababab." in err
+    assert "vasty: could not destroy l-abababab: boom. Run vasty release l-abababab." in err
     lease = cached_lease(h)
     assert (lease.released_here, lease.destroy_pending) == (False, False)
 
@@ -481,7 +481,7 @@ def interrupt_after_probe(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
         if leases:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("rig.engine._probe_all", probe_all)
+    monkeypatch.setattr("vasty.engine._probe_all", probe_all)
 
 
 def test_ctrl_c_after_probe_writes_expires_destroys_box(
@@ -525,7 +525,7 @@ def test_give_up_skips_destroy_when_expires_moves_after_row_read(
     assert list(h.provider.instances) == [1001]
     err = contexts[0].stderr
     assert isinstance(err, io.StringIO)
-    assert "rig: l-abababab changed before it could be destroyed. Run rig release l-abababab." in (
+    assert "vasty: l-abababab changed before it could be destroyed. Run vasty release l-abababab." in (
         err.getvalue())
     lease = cached_lease(h)
     assert (lease.released_here, lease.destroy_pending) == (False, False)
@@ -548,12 +548,12 @@ def test_give_up_keeps_stored_expires_when_row_differs(
     def no_row_read(ctx: Any, iid: int) -> int | None:
         raise AssertionError("stored expires is set")
 
-    monkeypatch.setattr("rig.engine.refresh", refresh)
+    monkeypatch.setattr("vasty.engine.refresh", refresh)
     monkeypatch.setattr(reserve, "_row_expires", no_row_read)
     code, out, err = h.run("reserve", "--image", "alpine:3")
     assert code == 1
     assert json.loads(out)["error"] == "image_unsupported"
-    assert "rig: l-abababab changed before it could be destroyed. Run rig release l-abababab." in err
+    assert "vasty: l-abababab changed before it could be destroyed. Run vasty release l-abababab." in err
     assert h.provider.destroyed == []
 
 
@@ -564,7 +564,7 @@ def test_refresh_error_during_wait_destroys_box(
     real_sleep = h.time.sleep
 
     def sleep(seconds: float) -> None:
-        h.provider.fail["list_instances"] = RigError("provider_error", "list failed", "retry")
+        h.provider.fail["list_instances"] = VastyError("provider_error", "list failed", "retry")
         real_sleep(seconds)
 
     monkeypatch.setattr(h.time, "sleep", sleep)
@@ -598,7 +598,7 @@ def test_name_hit_returns_existing_lease(h: Harness) -> None:
 def test_name_hit_warns_on_flag_mismatch(h: Harness) -> None:
     add_lease(h, "l-0000a001", label={"name": "ft", "group": "a", "expires": NOW + 1200},
               gpu_name="RTX 3090", gpu_ram_gb=24.0)
-    h.env["RIG_DAILY_BUDGET"] = "0.01"
+    h.env["VASTY_DAILY_BUDGET"] = "0.01"
     code, data = run_json(h, "reserve", "--name", "ft", "--gpu", "4090", "--vram", "48",
                           "--group", "b", "--ttl", "2h")
     assert code == 0
@@ -652,7 +652,7 @@ def test_ttl_accepts_chained_units(h: Harness) -> None:
 
 
 def test_budget_refusal_details_and_exit(h: Harness) -> None:
-    h.env["RIG_DAILY_BUDGET"] = "1.00"
+    h.env["VASTY_DAILY_BUDGET"] = "1.00"
     h.provider.billed = {9: Decimal("0.20")}
     code, data = run_json(h, "reserve", "--ttl", "3h")
     assert code == 3
@@ -663,7 +663,7 @@ def test_budget_refusal_details_and_exit(h: Harness) -> None:
 
 
 def test_budget_low_warning_near_cap(h: Harness) -> None:
-    h.env["RIG_DAILY_BUDGET"] = "0.40"
+    h.env["VASTY_DAILY_BUDGET"] = "0.40"
     _, data = run_json(h, "reserve", "--ttl", "1h")
     assert [w["code"] for w in data["warnings"]] == ["budget_low"]
 
@@ -671,9 +671,9 @@ def test_budget_low_warning_near_cap(h: Harness) -> None:
 def test_budget_counts_local_reserve_between_refresh_and_lock(
     h: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from rig import engine
+    from vasty import engine
 
-    h.env["RIG_DAILY_BUDGET"] = "0.60"
+    h.env["VASTY_DAILY_BUDGET"] = "0.60"
     real = engine.refresh
 
     def refresh_then_reserve(ctx: Any, probe: bool = True) -> engine.Snapshot:
@@ -711,7 +711,7 @@ def test_registers_public_key_before_create(h: Harness) -> None:
 
 
 def test_skips_registration_when_key_exists(h: Harness) -> None:
-    from rig.models import SshKey
+    from vasty.models import SshKey
 
     add_key(h)
     h.provider.ssh_keys = [SshKey(id=1, public_key=PUB.rsplit(" ", 1)[0] + " other@host")]
@@ -768,13 +768,13 @@ def test_create_timeout_two_matches_keep_lowest(h: Harness) -> None:
 
 def test_create_timeout_failed_duplicate_destroy_names_release_fix(h: Harness) -> None:
     _timing_out_create(h, 2)
-    h.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    h.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
     code, out, err = h.run("reserve")
     assert code == 0, out
     kept = min(h.provider.instances)
     assert (
-        f"rig: could not destroy duplicate instance {kept + 1}: boom"
-        f" Run rig release i-{kept + 1} --yes."
+        f"vasty: could not destroy duplicate instance {kept + 1}: boom"
+        f" Run vasty release i-{kept + 1} --yes."
     ) in err
 
 
@@ -793,7 +793,7 @@ def test_create_timeout_no_match_returns_provider_error(h: Harness) -> None:
 
 
 def test_create_error_other_than_timeout_is_not_retried(h: Harness) -> None:
-    h.provider.fail["create"] = RigError("provider_error", "no", "Run rig status.")
+    h.provider.fail["create"] = VastyError("provider_error", "no", "Run vasty status.")
     code, data = run_json(h, "reserve")
     assert code == 2
     assert data["error"] == "provider_error"
@@ -806,7 +806,7 @@ def test_create_error_other_than_timeout_is_not_retried(h: Harness) -> None:
 def test_reserve_lease_accepts_sparse_args(h: Harness) -> None:
     import argparse
 
-    from rig import engine
+    from vasty import engine
 
     ctx = h.context()
     snap = engine.refresh(ctx)

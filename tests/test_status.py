@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from fakes import NOW, Harness, add_lease
-from rig.models import Job
+from vasty.models import Job
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 
@@ -114,7 +114,7 @@ def test_status_totals(account: Harness) -> None:
 
 
 def test_status_daily_budget_source(account: Harness) -> None:
-    account.env["RIG_DAILY_BUDGET"] = "20"
+    account.env["VASTY_DAILY_BUDGET"] = "20"
     totals = status(account)["totals"]
     assert (totals["daily_budget"], totals["daily_budget_source"]) == (20.0, "env")
 
@@ -127,9 +127,9 @@ def test_status_warnings(account: Harness) -> None:
     assert ("orphan", "i-55120") in found
     assert ("budget_low", None) in found
     fixes = {w["code"]: w["fix"] for w in data["warnings"]}
-    assert fixes["expiring_soon"] == "rig extend l-8b12 --by 30m"
-    assert fixes["orphan"] == "rig tag i-55120 --ttl 30m"
-    assert fixes["budget_low"] == "rig status"
+    assert fixes["expiring_soon"] == "vasty extend l-8b12 --by 30m"
+    assert fixes["orphan"] == "vasty tag i-55120 --ttl 30m"
+    assert fixes["budget_low"] == "vasty status"
 
 
 def test_status_unreachable_jobs_unknown(account: Harness) -> None:
@@ -190,7 +190,7 @@ def test_status_unknown_target(account: Harness) -> None:
 def test_status_verbose_fields(account: Harness) -> None:
     row = by_lease(status(account, "--verbose"))["l-8b12"]
     extra = row["verbose"]
-    assert extra["label"].startswith("rig:v1;lease=l-8b12;name=eval-2")
+    assert extra["label"].startswith("vasty:v1;lease=l-8b12;name=eval-2")
     assert extra["guard_layers"] == {"watchdog": "ok", "destroy_key": "ok", "clock_file": "ok"}
     assert extra["ports"] == {"22": 40022, "8000": 40080, "8080": 40081}
     assert set(extra) >= {"instance_id", "image", "last_provider_error"}
@@ -283,7 +283,7 @@ def test_status_human_table(account: Harness) -> None:
     assert orphan[1:5] == ["—", "—", "?", "3090"] and "none" in orphan and "?" in orphan[-3:]
     assert "WARNINGS" in lines
     warn = next(line for line in lines if "expiring_soon" in line)
-    assert warn.split()[0] == "l-8b12" and warn.endswith("fix: rig extend l-8b12 --by 30m")
+    assert warn.split()[0] == "l-8b12" and warn.endswith("fix: vasty extend l-8b12 --by 30m")
     assert lines[-1] == ("TODAY  spent $7.12 of $10.00  ·  5 leases live (4 yours)  ·  "
                          "burning $5.46/hr")
 
@@ -311,16 +311,16 @@ def test_status_cached_imports_stdlib_only(account: Harness) -> None:
     probe = (
         "import json, sys\n"
         "before = set(sys.modules)\n"
-        "from rig.cli import main\n"
+        "from vasty.cli import main\n"
         "code = main(sys.argv[1:])\n"
         "loaded = set(sys.modules) - before\n"
         "third = sorted(m for m in loaded if m.split('.')[0] not in sys.stdlib_module_names"
-        " and m.split('.')[0] != 'rig')\n"
+        " and m.split('.')[0] != 'vasty')\n"
         "print(json.dumps({'code': code, 'vastai': 'vastai' in sys.modules,"
-        " 'provider': 'rig.provider' in sys.modules, 'third': third}), file=sys.stderr)\n"
+        " 'provider': 'vasty.provider' in sys.modules, 'third': third}), file=sys.stderr)\n"
     )
     env = {"HOME": str(account.home), "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-           "PYTHONPATH": str(SRC), "USER": "nick", "RIG_OWNER": "claude"}
+           "PYTHONPATH": str(SRC), "USER": "nick", "VASTY_OWNER": "claude"}
     result = subprocess.run([sys.executable, "-c", probe, "status", "--cached", "--json"],
                             env=env, cwd=account.home, capture_output=True, text=True, check=True)
     report = json.loads(result.stderr.strip().splitlines()[-1])

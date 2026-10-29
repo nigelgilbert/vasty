@@ -12,9 +12,9 @@ from typing import Any, Callable
 import pytest
 import requests
 
-from rig.errors import RigError
-from rig.models import CreateRequest, OfferQuery
-from rig.provider import (
+from vasty.errors import VastyError
+from vasty.models import CreateRequest, OfferQuery
+from vasty.provider import (
     ProviderTimeout,
     VastProvider,
     build_offer_query,
@@ -90,7 +90,7 @@ def always(r: requests.Response | BaseException) -> Handler:
 
 def request(runtype: str = "ssh_direct") -> CreateRequest:
     return CreateRequest(
-        offer_id=77, image="vastai/base-image:cuda-12.4", disk_gb=50, label="rig:v1 lease=l-7f3a",
+        offer_id=77, image="vastai/base-image:cuda-12.4", disk_gb=50, label="vasty:v1 lease=l-7f3a",
         onstart="echo hi", ports=[22, 8000, 8080], runtype=runtype,  # type: ignore[arg-type]
         env={"FOO": "bar"},
     )
@@ -180,7 +180,7 @@ def test_search_posts_bundles_and_normalizes() -> None:
 
 def test_search_quota_error_is_surfaced() -> None:
     provider, http, _ = make(always(resp(429, {"error": "search_quota_exceeded", "msg": "quota"})))
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         provider.search_offers(OfferQuery(None, None, 1, 50, Decimal("1"), None))
     assert exc.value.code == "provider_error"
     assert exc.value.details is not None
@@ -208,7 +208,7 @@ def test_normalize_ports() -> None:
 
 def instance_row(iid: int, **kw: Any) -> dict[str, Any]:
     row: dict[str, Any] = {
-        "id": iid, "label": "rig:v1 lease=l-1", "actual_status": "running", "gpu_name": "RTX 4090",
+        "id": iid, "label": "vasty:v1 lease=l-1", "actual_status": "running", "gpu_name": "RTX 4090",
         "num_gpus": 1, "gpu_ram": 24564, "dph_total": 0.38, "public_ipaddr": "198.51.100.7\n",
         "ssh_host": "ssh4.vast.ai", "ssh_port": "31022", "image_uuid": "vastai/base",
         "image_runtype": "ssh_direc ssh_proxy", "extra_env": [["FOO", "bar"]],
@@ -275,7 +275,7 @@ def test_create_payload(runtype: str, sent: str) -> None:
     assert (method, path) == ("PUT", "/asks/77/")
     assert body["image"] == "vastai/base-image:cuda-12.4"
     assert body["disk"] == 50.0
-    assert body["label"] == "rig:v1 lease=l-7f3a"
+    assert body["label"] == "vasty:v1 lease=l-7f3a"
     assert body["onstart"] == "echo hi"
     assert body["runtype"] == sent
     assert body["env"] == {"-p 22:22": "1", "-p 8000:8000": "1", "-p 8080:8080": "1", "FOO": "bar"}
@@ -303,7 +303,7 @@ def test_create_unknown_outcome_raises_provider_timeout(failure: Any) -> None:
                                      resp(400, {"error": "invalid_args", "msg": "bad image"})])
 def test_create_rejection_is_provider_error(failure: requests.Response) -> None:
     provider, _, _ = make(always(failure))
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         provider.create(request())
     assert not isinstance(exc.value, ProviderTimeout)
     assert exc.value.code == "provider_error"
@@ -360,7 +360,7 @@ def test_sdk_other_calls_keep_retries(session: Callable[[list[Any]], SessionStub
 
 def test_sdk_search_quota_is_not_retried(session: Callable[[list[Any]], SessionStub]) -> None:
     stub = session([resp(429, {"error": "search_quota_exceeded"})])
-    with pytest.raises(RigError):
+    with pytest.raises(VastyError):
         VastProvider("test-key").search_offers(OfferQuery(None, None, 1, 50, Decimal("1"), None))
     assert len(stub.sent) == 1
 
@@ -381,7 +381,7 @@ def test_sdk_search_quota_is_not_retried(session: Callable[[list[Any]], SessionS
 def test_http_errors_map_to_provider_error(failure: requests.Response, hint_part: str,
                                            status: int) -> None:
     provider, _, _ = make(always(failure))
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         provider.destroy(5)
     assert exc.value.code == "provider_error"
     assert hint_part in exc.value.hint
@@ -390,18 +390,18 @@ def test_http_errors_map_to_provider_error(failure: requests.Response, hint_part
 
 def test_transport_and_shape_errors_map_to_provider_error() -> None:
     provider, _, _ = make(always(requests.exceptions.ConnectionError("down")))
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         provider.list_instances()
     assert exc.value.code == "provider_error" and not isinstance(exc.value, ProviderTimeout)
     assert "network" in exc.value.hint
 
     provider, _, _ = make(always(resp(200, text="<html>")))
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         provider.list_ssh_keys()
     assert exc.value.code == "provider_error"
 
     provider, _, _ = make(always(resp(body={"success": False, "msg": "nope"})))
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         provider.set_label(5, "x")
     assert "nope" in exc.value.message
 
@@ -488,7 +488,7 @@ def test_balance() -> None:
     assert provider.balance() == Decimal("12.5")
     assert http.calls[0][:2] == ("GET", "/users/current")
     provider, _, _ = make(always(resp(body={"credit": 40})))
-    with pytest.raises(RigError):
+    with pytest.raises(VastyError):
         provider.balance()
 
 
@@ -515,16 +515,16 @@ def test_attach_ssh_key_account_and_instance() -> None:
 def test_destroy_and_set_label_requests() -> None:
     provider, http, _ = make(always(resp(body={"success": True})))
     provider.destroy(5)
-    provider.set_label(5, "rig:v1 lease=l-1")
+    provider.set_label(5, "vasty:v1 lease=l-1")
     assert http.calls[0][:2] == ("DELETE", "/instances/5/")
     assert http.calls[1][:2] == ("PUT", "/instances/5/")
-    assert http.calls[1][3] == {"label": "rig:v1 lease=l-1"}
+    assert http.calls[1][3] == {"label": "vasty:v1 lease=l-1"}
 
 
 # Import cost.
 
 
 def test_import_does_not_load_vastai() -> None:
-    code = "import sys, rig.provider; print(sorted(m for m in ('vastai', 'requests') if m in sys.modules))"
+    code = "import sys, vasty.provider; print(sorted(m for m in ('vastai', 'requests') if m in sys.modules))"
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "[]"

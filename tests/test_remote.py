@@ -19,10 +19,10 @@ from typing import TextIO
 
 import pytest
 
-import rig.remote as remote_module
-from rig.errors import RigError
-from rig.models import Job
-from rig.remote import (
+import vasty.remote as remote_module
+from vasty.errors import VastyError
+from vasty.models import Job
+from vasty.remote import (
     JOB_CLAIM_TRIES,
     BoxUnreachableError,
     ExecResult,
@@ -73,7 +73,7 @@ class LocalRunner:
     """Run the remote command of an ssh argv with the local shell."""
 
     def __init__(self, path: str) -> None:
-        self.env = {**os.environ, "PATH": path, "RIG_POLL": "1", "RIG_MAX_LOOPS": "1"}
+        self.env = {**os.environ, "PATH": path, "VASTY_POLL": "1", "VASTY_MAX_LOOPS": "1"}
 
     def __call__(
         self, argv: list[str], *, input: str | None = None, timeout: float | None = None,
@@ -148,7 +148,7 @@ def test_exec_passes_remote_exit_codes(tmp_path: Path) -> None:
 
 def test_missing_ssh_binary_is_dependency_missing(tmp_path: Path) -> None:
     runner = FakeRunner([FileNotFoundError("ssh")])
-    with pytest.raises(RigError) as err:
+    with pytest.raises(VastyError) as err:
         fake_box(tmp_path, runner).exec(TARGET, "true")
     assert err.value.code == "dependency_missing"
 
@@ -167,9 +167,9 @@ def test_interactive_passes_terminal_and_ssh_args(tmp_path: Path) -> None:
 def test_interactive_command_words(tmp_path: Path) -> None:
     runner = FakeRunner()
     box = fake_box(tmp_path, runner)
-    box.interactive(TARGET, ["cat /workspace/.rig/startup.log | tail"], [])
+    box.interactive(TARGET, ["cat /workspace/.vasty/startup.log | tail"], [])
     box.interactive(TARGET, ["python", "-c", "print('a b')"], [])
-    assert runner.calls[0].argv[-1] == "cat /workspace/.rig/startup.log | tail"
+    assert runner.calls[0].argv[-1] == "cat /workspace/.vasty/startup.log | tail"
     assert runner.calls[1].argv[-1] == "python -c 'print('\"'\"'a b'\"'\"')'"
 
 
@@ -212,15 +212,15 @@ def test_rsync_returns_its_exit_code(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("dest", "rule"),
     [
-        ("./", "/.rig/***"),
-        (".", "/.rig/***"),
-        ("/workspace/", "/.rig/***"),
-        ("/workspace", "/.rig/***"),
-        ("/", "/workspace/.rig/***"),
+        ("./", "/.vasty/***"),
+        (".", "/.vasty/***"),
+        ("/workspace/", "/.vasty/***"),
+        ("/workspace", "/.vasty/***"),
+        ("/", "/workspace/.vasty/***"),
         ("sub/", None),
         ("/data/", None),
         ("~/", None),
-        ("/workspace/.rig/", None),
+        ("/workspace/.vasty/", None),
     ],
 )
 def test_rsync_push_delete_protects_the_state_dir(
@@ -272,7 +272,7 @@ def test_rsync_path_with_a_space_is_quoted_on_old_rsync(tmp_path: Path) -> None:
 def test_rsync_path_rejects_tilde_user(tmp_path: Path, protect: bool, path: str, push: bool) -> None:
     box = fake_box(tmp_path, FakeRunner(), protect_args=protect)
     src, dest = ("./", path) if push else (path, "./")
-    with pytest.raises(RigError) as err:
+    with pytest.raises(VastyError) as err:
         box.rsync_argv(TARGET, push, src, dest, False, [])
     assert err.value.code == "invalid_arguments"
     assert err.value.message == f"Remote path {path} uses ~user."
@@ -314,8 +314,8 @@ def test_parse_rsync_version() -> None:
 def test_rsync_push_delete_runs_against_a_path_with_a_space(tmp_path: Path) -> None:
     """Run the real local rsync with an ssh stub that runs the remote command in `sh -c`."""
     workspace = tmp_path / "box dir" / "workspace"
-    (workspace / ".rig" / "jobs").mkdir(parents=True)
-    (workspace / ".rig" / "clock").write_text("1\n")
+    (workspace / ".vasty" / "jobs").mkdir(parents=True)
+    (workspace / ".vasty" / "clock").write_text("1\n")
     (workspace / "stale").write_text("old\n")
     src = tmp_path / "src"
     (src / "pkg").mkdir(parents=True)
@@ -331,7 +331,7 @@ def test_rsync_push_delete_runs_against_a_path_with_a_space(tmp_path: Path) -> N
     )
     stub.chmod(0o755)
     box = SshBox(
-        None, str(tmp_path / "kh"), runner=FakeRunner(), root=f"{workspace}/.rig",
+        None, str(tmp_path / "kh"), runner=FakeRunner(), root=f"{workspace}/.vasty",
         workdir=str(workspace),
     )
     argv = box.rsync_argv(TARGET, True, f"{src}/", f"{workspace}/", True, [".git"])
@@ -340,8 +340,8 @@ def test_rsync_push_delete_runs_against_a_path_with_a_space(tmp_path: Path) -> N
     assert done.returncode == 0, done.stderr
     assert (workspace / "pkg" / "a.py").read_text() == "print(1)\n"
     assert not (workspace / "stale").exists()
-    assert (workspace / ".rig" / "clock").read_text() == "1\n"
-    assert (workspace / ".rig" / "jobs").is_dir()
+    assert (workspace / ".vasty" / "clock").read_text() == "1\n"
+    assert (workspace / ".vasty" / "jobs").is_dir()
 
 
 # Probe with a fake runner.
@@ -352,8 +352,8 @@ def probe_output(**kw: str) -> str:
               "startup_started": "1", "startup_exit": "0", "alive": "990", "key": "1",
               "unsupported": ""}
     values.update(kw)
-    lines = ["rig_probe=1"] + [f"{k}={v}" for k, v in values.items() if v != "<absent>"]
-    return "\n".join(lines + ["rig_probe=end"]) + "\n"
+    lines = ["vasty_probe=1"] + [f"{k}={v}" for k, v in values.items() if v != "<absent>"]
+    return "\n".join(lines + ["vasty_probe=end"]) + "\n"
 
 
 def test_probe_runs_one_ssh_command_with_timeout(tmp_path: Path) -> None:
@@ -364,7 +364,7 @@ def test_probe_runs_one_ssh_command_with_timeout(tmp_path: Path) -> None:
     assert call.timeout == 5.0
     assert call.argv[-1] == "sh -s"
     assert "ConnectTimeout=5" in call.argv
-    assert call.input == probe_script(2000, "/workspace/.rig")
+    assert call.input == probe_script(2000, "/workspace/.vasty")
     assert result.clock_expires == 2000
     assert result.guard_missing == []
     assert result.startup_exit == 0
@@ -373,7 +373,7 @@ def test_probe_runs_one_ssh_command_with_timeout(tmp_path: Path) -> None:
 @pytest.mark.parametrize("result", [
     ExecResult(255, "", "Connection timed out"),
     subprocess.TimeoutExpired(["ssh"], 5),
-    ExecResult(0, "rig_probe=1\nnow=1\n", ""),
+    ExecResult(0, "vasty_probe=1\nnow=1\n", ""),
     ExecResult(127, "", "sh: not found"),
 ])
 def test_probe_non_answer_raises(tmp_path: Path, result: ExecResult | BaseException) -> None:
@@ -426,8 +426,8 @@ def test_probe_reports_unsupported_and_interrupted_startup(tmp_path: Path) -> No
 
 def test_generated_scripts_parse() -> None:
     box = SshBox(None, "/tmp/kh")
-    bash_n(probe_script(None, "/workspace/.rig"))
-    bash_n(probe_script(123, "/workspace/.rig"))
+    bash_n(probe_script(None, "/workspace/.vasty"))
+    bash_n(probe_script(123, "/workspace/.vasty"))
     bash_n(box.start_script(Job("j-1", "python train.py", None, None, "running"), "python 'x'"))
     bash_n(box.attach_script("j-1"))
 
@@ -441,7 +441,7 @@ def test_invalid_ids_and_signals_are_rejected(tmp_path: Path) -> None:
 
 
 def test_attach_returns_exit_code_from_marker(tmp_path: Path) -> None:
-    runner = FakeRunner([ExecResult(0, "", "rig_exit=4\n")], stream="line one\nline two\n")
+    runner = FakeRunner([ExecResult(0, "", "vasty_exit=4\n")], stream="line one\nline two\n")
     out = io.StringIO()
     assert fake_box(tmp_path, runner).attach_job(TARGET, "j-1", out) == 4
     assert out.getvalue() == "line one\nline two\n"
@@ -450,7 +450,7 @@ def test_attach_returns_exit_code_from_marker(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("result", [
     ExecResult(255, "", "Connection reset"),
-    ExecResult(0, "", "rig_exit=lost\n"),
+    ExecResult(0, "", "vasty_exit=lost\n"),
     ExecResult(0, "", ""),
 ])
 def test_attach_returns_none_when_dropped(tmp_path: Path, result: ExecResult) -> None:
@@ -473,7 +473,7 @@ class LocalBox:
     def __init__(self, tmp: Path) -> None:
         self.tmp = tmp
         self.workdir = tmp / "workspace"
-        self.root = self.workdir / ".rig"
+        self.root = self.workdir / ".vasty"
         (self.root / "jobs").mkdir(parents=True)
         stubs = tmp / "stubs"
         stubs.mkdir()
@@ -675,7 +675,7 @@ def test_start_job_claims_the_next_free_id(local: LocalBox) -> None:
 def test_start_job_with_a_taken_custom_id_is_refused(local: LocalBox) -> None:
     job = Job("custom", "demo", None, None, "running")
     local.box.start_job(TARGET, job, "true")
-    with pytest.raises(RigError, match="already exists"):
+    with pytest.raises(VastyError, match="already exists"):
         local.box.start_job(TARGET, job, "true")
 
 
@@ -683,7 +683,7 @@ def test_start_job_gives_up_after_the_claim_limit(local: LocalBox) -> None:
     for n in range(1, JOB_CLAIM_TRIES + 1):
         (local.root / "jobs" / f"j-{n}").mkdir()
     job = Job("j-1", "demo", None, None, "running")
-    with pytest.raises(RigError, match=f"Job j-{JOB_CLAIM_TRIES} already exists"):
+    with pytest.raises(VastyError, match=f"Job j-{JOB_CLAIM_TRIES} already exists"):
         local.box.start_job(TARGET, job, "true")
 
 
@@ -691,7 +691,7 @@ def test_start_job_keeps_other_mkdir_failures(local: LocalBox) -> None:
     (local.root / "jobs").rmdir()
     (local.root / "jobs").write_text("")
     job = Job("j-1", "demo", None, None, "running")
-    with pytest.raises(RigError, match="Could not start job j-1") as caught:
+    with pytest.raises(VastyError, match="Could not start job j-1") as caught:
         local.box.start_job(TARGET, job, "true")
     assert "already exists" not in str(caught.value)
 
@@ -700,8 +700,8 @@ def test_start_script_claims_the_job_dir_with_mkdir(tmp_path: Path) -> None:
     box = fake_box(tmp_path, FakeRunner())
     script = box.start_script(Job("j-1", "demo", None, None, "running"), "true")
     lines = script.splitlines()
-    assert lines[1] == "mkdir -p /workspace/.rig/jobs || exit 3"
-    assert lines[2] == 'mkdir "$J" || { [ -e "$J" ] && echo rig_job=exists; exit 3; }'
+    assert lines[1] == "mkdir -p /workspace/.vasty/jobs || exit 3"
+    assert lines[2] == 'mkdir "$J" || { [ -e "$J" ] && echo vasty_job=exists; exit 3; }'
     bash_n(script)
 
 

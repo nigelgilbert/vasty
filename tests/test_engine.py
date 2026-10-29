@@ -6,11 +6,11 @@ from typing import Any
 import pytest
 
 from fakes import NOW, Harness, add_lease, lease_label
-from rig import engine
-from rig.errors import RigError
-from rig.labels import parse
-from rig.models import Instance, Job, Label
-from rig.timeutil import iso
+from vasty import engine
+from vasty.errors import VastyError
+from vasty.labels import parse
+from vasty.models import Instance, Job, Label
+from vasty.timeutil import iso
 
 
 def label_of(harness: Harness, instance_id: int) -> Label:
@@ -88,7 +88,7 @@ def test_sweep_aborts_when_expires_moved(harness: Harness) -> None:
 
 def test_sweep_failed_destroy_reports_error(harness: Harness) -> None:
     row = add_lease(harness, label={"expires": NOW - 10})
-    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
     snap = refresh(harness)
     assert snap.swept[0].ok is False
     assert snap.swept[0].error == "provider_error"
@@ -179,7 +179,7 @@ def test_failed_retry_records_error_and_backs_off(harness: Harness) -> None:
     refresh(harness)
     release_in_cache(harness)
     harness.time.advance(5)
-    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
     lease = refresh(harness).leases["l-0000a001"]
     assert (lease.destroy_pending, lease.destroy_attempts) == (True, 2)
     assert lease.last_provider_error == "destroy failed: provider_error"
@@ -195,7 +195,7 @@ def test_failed_retry_records_error_and_backs_off(harness: Harness) -> None:
 
 def test_failed_retry_on_a_later_refresh_is_reported_in_swept(harness: Harness) -> None:
     row = add_lease(harness, label={"name": "ft", "expires": NOW - 10})
-    harness.provider.fail["destroy"] = [RigError("provider_error", "boom", "retry") for _ in range(2)]
+    harness.provider.fail["destroy"] = [VastyError("provider_error", "boom", "retry") for _ in range(2)]
     first = refresh(harness)
     assert [(e.lease, e.ok, e.error) for e in first.swept] == [("l-0000a001", False, "provider_error")]
     assert refresh(harness).swept == []
@@ -259,7 +259,7 @@ def test_failed_retry_of_an_early_release_reports_expired_at_by_now(harness: Har
     refresh(harness)
     release_in_cache(harness)
     harness.time.advance(5)
-    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
     snap = refresh(harness)
     assert [(e.lease, e.ok, e.error) for e in snap.swept] == [("l-0000a001", False, "provider_error")]
     assert snap.swept[0].expired_at <= iso(snap.now)
@@ -329,7 +329,7 @@ def test_destroy_fields_survive_the_cache(harness: Harness) -> None:
 
 
 def test_sweep_skips_unreadable_rows(harness: Harness) -> None:
-    row = harness.provider.add_instance(label=f"rig:v1;lease=l-1;created={NOW - 9000}")
+    row = harness.provider.add_instance(label=f"vasty:v1;lease=l-1;created={NOW - 9000}")
     snap = refresh(harness)
     assert harness.provider.destroyed == []
     assert snap.unreadable == [row]
@@ -393,12 +393,12 @@ def test_reconcile_gone_with_time_left(harness: Harness) -> None:
 
 def test_reconcile_adopts_another_machines_lease(harness: Harness) -> None:
     add_lease(harness, "l-0000b001", label={"owner": "nick", "name": "scratch"},
-              gpu_name="RTX 4090", dph_total=Decimal("0.38"), image="rig/base:cuda12.4")
+              gpu_name="RTX 4090", dph_total=Decimal("0.38"), image="vasty/base:cuda12.4")
     snap = refresh(harness)
     lease = snap.leases["l-0000b001"]
     assert lease.state == "running"
     assert (lease.gpu, lease.price_per_hr, lease.image) == ("RTX 4090", Decimal("0.38"),
-                                                             "rig/base:cuda12.4")
+                                                             "vasty/base:cuda12.4")
     assert (lease.ssh_host, lease.ssh_port) == ("198.51.100.9", 40022)
     assert lease.ports == {22: 40022, 8000: 40080, 8080: 40081}
     assert "l-0000b001" in harness.context().cache.load().leases
@@ -444,7 +444,7 @@ def test_clock_unverified_warning(harness: Harness) -> None:
     harness.provider.date_header = False
     snap = refresh(harness)
     assert [(w.code, w.lease, w.fix) for w in snap.warnings] == [
-        ("clock_unverified", None, "rig status")
+        ("clock_unverified", None, "vasty status")
     ]
 
 
@@ -512,7 +512,7 @@ def test_unreachable_after_answered_and_jobs_unknown(harness: Harness) -> None:
     lease = snap.leases["l-0000a001"]
     assert lease.state == "unreachable"
     assert lease.reachable_at == NOW
-    from rig.views import lease_view
+    from vasty.views import lease_view
 
     view = lease_view(lease, snap.now)
     assert [(j.id, j.state, j.exit) for j in view.jobs] == [("j-1", "unknown", None)]
@@ -647,7 +647,7 @@ def test_failed_probe_retries_key_attach_on_main_thread_with_backoff(harness: Ha
 def test_failed_key_attach_records_the_error(harness: Harness) -> None:
     add_key(harness)
     adopted_orphan(harness, reachable=False)
-    harness.provider.fail["attach_ssh_key"] = RigError("provider_error", "boom", "Run rig status.")
+    harness.provider.fail["attach_ssh_key"] = VastyError("provider_error", "boom", "Run vasty status.")
     lease = refresh(harness).leases["l-abababab"]
     assert (lease.key_attempts, lease.key_attach_at) == (1, NOW)
     assert lease.last_provider_error == "key attach failed: provider_error"
@@ -668,7 +668,7 @@ def test_successful_probe_reruns_adoption_and_resets_backoff(harness: Harness) -
 def test_failed_adoption_rerun_keeps_layers_in_label(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from rig.remote import BoxUnreachableError, SshTarget
+    from vasty.remote import BoxUnreachableError, SshTarget
 
     row = adopted_orphan(harness, reachable=True)
 
@@ -684,7 +684,7 @@ def test_failed_adoption_rerun_keeps_layers_in_label(
 def test_held_adoption_rerun_keeps_layers_in_label(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from rig.remote import BoxUnreachableError, SshTarget
+    from vasty.remote import BoxUnreachableError, SshTarget
 
     row = adopted_orphan(harness, reachable=True)
 
@@ -727,7 +727,7 @@ def test_box_marker_sets_adopted_without_a_rerun(harness: Harness) -> None:
 def test_marker_without_guard_file_or_startup_keeps_layers_and_reruns(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from rig.remote import BoxUnreachableError, SshTarget
+    from vasty.remote import BoxUnreachableError, SshTarget
 
     row = adopted_orphan(harness, reachable=True)
     box = harness.box.state(row.id)
@@ -788,7 +788,7 @@ def test_ssh_target_direct_and_proxy(harness: Harness) -> None:
     assert (direct.host, direct.port) == ("198.51.100.9", 40022)
     proxy = engine.ssh_target(snap.leases["l-0000a002"])
     assert (proxy.host, proxy.port) == ("ssh5.vast.ai", 12345)
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         engine.ssh_target(snap.leases["l-0000a003"])
     assert exc.value.code == "lease_pending"
 
@@ -833,7 +833,7 @@ def test_spend_unknown_coverage(harness: Harness) -> None:
     ctx = harness.context()
     snap = engine.refresh(ctx)
     assert engine.spend(ctx, snap) == (None, None)
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         engine.budget_check(ctx, snap, Decimal("1"))
     assert exc.value.code == "spend_unavailable"
 
@@ -846,7 +846,7 @@ def test_budget_check_refuses_and_reports(harness: Harness) -> None:
     snap = engine.refresh(ctx)
     projected, daily = engine.budget_check(ctx, snap, Decimal("1.00"))
     assert (projected, daily) == (Decimal("8.00"), Decimal("10.00"))
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         engine.budget_check(ctx, snap, Decimal("4.00"))
     assert exc.value.code == "budget_exceeded"
     assert exc.value.details == {"projected": 11.0, "remaining": 3.0, "daily_budget": 10.0}
@@ -859,7 +859,7 @@ def test_budget_check_replace_expiry(harness: Harness) -> None:
     snap = engine.refresh(ctx)
     projected, _ = engine.budget_check(ctx, snap, replace={"l-0000a001": NOW + 7200})
     assert projected == Decimal("4.00")
-    with pytest.raises(RigError):
+    with pytest.raises(VastyError):
         engine.budget_check(ctx, snap, replace={"l-0000a001": NOW + 6 * 3600})
     shorter, _ = engine.budget_check(ctx, snap, replace={"l-0000a001": NOW + 60})
     assert shorter < Decimal("2.00")
@@ -947,13 +947,13 @@ def test_legacy_entry_keeps_observed_layers(harness: Harness) -> None:
 def test_row_label_reads_the_row(harness: Harness) -> None:
     ctx = harness.context()
     row = add_lease(harness)
-    unreadable = harness.provider.add_instance(label=f"rig:v1;lease=l-1;created={NOW - 9000}")
+    unreadable = harness.provider.add_instance(label=f"vasty:v1;lease=l-1;created={NOW - 9000}")
     found = engine.row_label(ctx, row.id)
     assert found is not None and found.lease == "l-0000a001"
     assert engine.row_label(ctx, unreadable.id) is None
     assert engine.row_label(ctx, 999_999) is None
-    harness.provider.fail["get_instance"] = RigError("provider_error", "boom", "retry")
-    with pytest.raises(RigError):
+    harness.provider.fail["get_instance"] = VastyError("provider_error", "boom", "retry")
+    with pytest.raises(VastyError):
         engine.row_label(ctx, row.id)
 
 

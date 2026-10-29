@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from rig.commands._common import merge_swept
-from rig.models import SweptEntry
+from vasty.commands._common import merge_swept
+from vasty.models import SweptEntry
 
 
 def entry(expired_at: str, ok: bool, error: str | None) -> SweptEntry:
-    return SweptEntry("l-0000a001", "rig-a", expired_at, ok, error)
+    return SweptEntry("l-0000a001", "vasty-a", expired_at, ok, error)
 
 
 def test_merge_swept_merges_failed_retries_with_moving_expired_at() -> None:

@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from rig.cache import Cache, CacheData
-from rig.models import CachedLease, Job, Label
+from vasty.cache import Cache, CacheData
+from vasty.models import CachedLease, Job, Label
 
 
 def full_lease() -> CachedLease:
@@ -38,7 +38,7 @@ def full_lease() -> CachedLease:
         startup_started=True,
         jobs=[
             Job(id="j-1", cmd="python train.py", started_at=1793236100, exit=None,
-                state="running", log_path="/workspace/.rig/jobs/j-1/log", pid=4242),
+                state="running", log_path="/workspace/.vasty/jobs/j-1/log", pid=4242),
             Job(id="j-2", cmd="vllm", started_at=1793236200, exit=0, state="serving",
                 kind="serve", port=8000, finished_at=1793236300),
         ],
@@ -55,7 +55,7 @@ def full_lease() -> CachedLease:
 
 @pytest.fixture
 def cache(tmp_path: Path) -> Cache:
-    return Cache(tmp_path / "state" / "rig" / "leases.json")
+    return Cache(tmp_path / "state" / "vasty" / "leases.json")
 
 
 def test_missing_file_is_empty(cache: Cache) -> None:

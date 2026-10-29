@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from rig.budget import (
+from vasty.budget import (
     billing_fresh,
     budget_low,
     budget_low_warning,
@@ -21,8 +21,8 @@ from rig.budget import (
     spend_unavailable_warning,
     spent_today,
 )
-from rig.errors import RigError
-from rig.models import CachedLease, Charges, Instance, Label, LeaseState
+from vasty.errors import VastyError
+from vasty.models import CachedLease, Charges, Instance, Label, LeaseState
 
 D = Decimal
 MIDNIGHT = 1_793_232_000  # 2026-10-29T00:00:00Z
@@ -74,7 +74,7 @@ def test_spent_today_none_without_coverage() -> None:
 
 def test_require_spent() -> None:
     assert require_spent(D("1.5")) == D("1.5")
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         require_spent(None)
     assert exc.value.code == "spend_unavailable"
     assert exc.value.exit_code == 2
@@ -82,7 +82,7 @@ def test_require_spent() -> None:
 
 def test_spend_unavailable_warning() -> None:
     w = spend_unavailable_warning()
-    assert (w.code, w.lease, w.fix) == ("spend_unavailable", None, "rig status")
+    assert (w.code, w.lease, w.fix) == ("spend_unavailable", None, "vasty status")
 
 
 def test_projection_live_and_expired_floored() -> None:
@@ -159,7 +159,7 @@ def test_check_lowering_extend_passes_over_budget() -> None:
 
 
 def test_check_refusal_details() -> None:
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         check(D("10.555"), D("8.004"), D("10"))
     err = exc.value
     assert err.code == "budget_exceeded"
@@ -170,14 +170,14 @@ def test_check_refusal_details() -> None:
 
 
 def test_check_refusal_remaining_can_be_negative() -> None:
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         check(D("13"), D("11"), D("10"))
     assert exc.value.details is not None
     assert exc.value.details["remaining"] == -1.0
 
 
 def test_check_custom_hint() -> None:
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         check(D("11"), D("1"), D("10"), hint="Try --ttl 15m.")
     assert exc.value.hint == "Try --ttl 15m."
 
@@ -194,7 +194,7 @@ def test_budget_low_warning() -> None:
     assert budget_low_warning(D("8.99"), D("10")) is None
     w = budget_low_warning(D("9.2"), D("10"))
     assert w is not None
-    assert (w.code, w.lease, w.message, w.fix) == ("budget_low", None, "projected $9.20 of $10.00", "rig status")
+    assert (w.code, w.lease, w.message, w.fix) == ("budget_low", None, "projected $9.20 of $10.00", "vasty status")
 
 
 def test_burn_per_hr() -> None:

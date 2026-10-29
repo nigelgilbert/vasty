@@ -8,9 +8,9 @@ from typing import Any
 import pytest
 
 from fakes import NOW, Harness, add_lease, make_offer
-from rig.cli import parse
-from rig.context import Context
-from rig.errors import RigError
+from vasty.cli import parse
+from vasty.context import Context
+from vasty.errors import VastyError
 
 
 def test_parser_error_is_invalid_arguments(harness: Harness) -> None:
@@ -20,13 +20,13 @@ def test_parser_error_is_invalid_arguments(harness: Harness) -> None:
 
 
 def test_json_and_plain_conflict() -> None:
-    with pytest.raises(RigError) as exc:
+    with pytest.raises(VastyError) as exc:
         parse(["status", "--json", "--plain"])
     assert exc.value.code == "invalid_arguments"
 
 
 def test_on_rejects_creation_flags() -> None:
-    with pytest.raises(RigError):
+    with pytest.raises(VastyError):
         parse(["run", "--on", "ft", "--gpu", "4090", "--", "true"])
 
 
@@ -36,12 +36,12 @@ def test_run_on_accepts_sync() -> None:
 
 
 def test_auto_reserve_rejects_no_wait() -> None:
-    with pytest.raises(RigError):
+    with pytest.raises(VastyError):
         parse(["serve", "--model", "m", "--no-wait"])
 
 
 def test_config_and_startup_stdin_conflict() -> None:
-    with pytest.raises(RigError):
+    with pytest.raises(VastyError):
         parse(["reserve", "--config", "-", "--startup", "-"])
 
 
@@ -55,7 +55,7 @@ def test_config_and_startup_stdin_conflict() -> None:
     ],
 )
 def test_target_selector_rules(argv: list[str]) -> None:
-    with pytest.raises(RigError):
+    with pytest.raises(VastyError):
         parse(argv)
 
 
@@ -65,18 +65,18 @@ def test_everyone_with_group_is_allowed() -> None:
 
 
 @pytest.mark.parametrize(
-    ("extra_env", "key_env"), [({}, "VAST_API_KEY"), ({"RIG_API_KEY_ENV": "MY_KEY"}, "MY_KEY")]
+    ("extra_env", "key_env"), [({}, "VAST_API_KEY"), ({"VASTY_API_KEY_ENV": "MY_KEY"}, "MY_KEY")]
 )
 def test_status_without_api_key_is_auth_missing(
     harness: Harness, monkeypatch: pytest.MonkeyPatch, extra_env: dict[str, str], key_env: str
 ) -> None:
-    import rig.provider
+    import vasty.provider
 
     def no_provider(*args: Any, **kw: Any) -> Any:
         raise AssertionError("VastProvider constructed")
 
-    monkeypatch.setattr(rig.provider, "VastProvider", no_provider)
-    for name in ("VAST_API_KEY", "MY_KEY", "RIG_API_KEY_ENV"):
+    monkeypatch.setattr(vasty.provider, "VastProvider", no_provider)
+    for name in ("VAST_API_KEY", "MY_KEY", "VASTY_API_KEY_ENV"):
         monkeypatch.delenv(name, raising=False)
         harness.env.pop(name, None)
     harness.env.update(extra_env)
@@ -97,12 +97,12 @@ def test_status_without_api_key_is_auth_missing(
 # Sweep entries of a failing command.
 
 FAILED_SWEEP = (
-    "rig: SWEPT  l-0000a009 old  expired 2026-10-29T00:59:50Z  destroy failed (provider_error)"
+    "vasty: SWEPT  l-0000a009 old  expired 2026-10-29T00:59:50Z  destroy failed (provider_error)"
 )
 
 
 def _fail_next_destroy(harness: Harness) -> None:
-    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
 
 
 def test_failing_run_reports_failed_sweep_on_stderr(harness: Harness) -> None:
@@ -122,7 +122,7 @@ def test_failing_command_without_sweep_writes_no_stderr(harness: Harness) -> Non
 
 
 def test_reserve_wait_error_reports_failed_sweep_on_stderr(harness: Harness) -> None:
-    from rig.models import CreateRequest, Instance
+    from vasty.models import CreateRequest, Instance
 
     def lacking(inst: Instance, request: CreateRequest) -> None:
         add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
@@ -139,7 +139,7 @@ def test_reserve_wait_error_reports_failed_sweep_on_stderr(harness: Harness) -> 
 
 
 def test_failing_run_with_closed_stderr_keeps_json_error(harness: Harness) -> None:
-    from rig import cli
+    from vasty import cli
 
     add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
     _fail_next_destroy(harness)

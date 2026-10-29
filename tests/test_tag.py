@@ -7,9 +7,9 @@ from typing import Any
 import pytest
 
 from fakes import NOW, Harness, add_lease, lease_label
-from rig.errors import RigError
-from rig.labels import parse
-from rig.models import Label
+from vasty.errors import VastyError
+from vasty.labels import parse
+from vasty.models import Label
 
 PUB = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample test@host"
 ENTRY_KEYS = {
@@ -179,7 +179,7 @@ def test_ttl_on_lease_points_at_extend(h: Harness) -> None:
     add_lease(h)
     code, data = run_json(h, "tag", "l-0000a001", "--ttl", "30m")
     assert (code, data["error"]) == (1, "invalid_arguments")
-    assert "rig extend" in data["hint"]
+    assert "vasty extend" in data["hint"]
 
 
 def test_no_setter_and_no_ttl_is_invalid(h: Harness) -> None:
@@ -202,7 +202,7 @@ def test_history_lease_is_expired(h: Harness) -> None:
 
 def test_label_write_failure_is_provider_error(h: Harness) -> None:
     add_lease(h)
-    h.provider.fail["set_label"] = RigError("provider_error", "boom", "Run rig status.")
+    h.provider.fail["set_label"] = VastyError("provider_error", "boom", "Run vasty status.")
     code, data = run_json(h, "tag", "l-0000a001", "--set-group", "g")
     assert (code, data["error"]) == (2, "provider_error")
 
@@ -265,7 +265,7 @@ def test_adopt_partial_guard_keeps_label(h: Harness) -> None:
     (entry,) = data["results"]
     assert (entry["guard"], entry["guard_missing"]) == ("partial", ["destroy_key"])
     assert [w["code"] for w in data["warnings"]] == ["guard_partial"]
-    assert data["warnings"][0]["fix"] == "rig release l-abababab"
+    assert data["warnings"][0]["fix"] == "vasty release l-abababab"
     assert label_of(h, iid).lease == "l-abababab"
     assert label_of(h, iid).miss == ["destroy_key"]
 
@@ -297,7 +297,7 @@ def test_adopt_retried_by_later_probe(h: Harness) -> None:
 def test_failed_key_attach_is_retried_and_adoption_finishes(h: Harness) -> None:
     add_key(h)
     iid = orphan(h, reachable=False)
-    h.provider.fail["attach_ssh_key"] = RigError("provider_error", "boom", "Run rig status.")
+    h.provider.fail["attach_ssh_key"] = VastyError("provider_error", "boom", "Run vasty status.")
     code, data = run_json(h, "tag", "i-55120", "--ttl", "30m")
     assert code == 0
     assert data["results"][0]["guard"] == "partial"
@@ -331,7 +331,7 @@ def test_adoption_retry_survives_cache_loss(h: Harness) -> None:
 
 
 def test_adopt_never_refused_by_budget(h: Harness) -> None:
-    h.env["RIG_DAILY_BUDGET"] = "0.05"
+    h.env["VASTY_DAILY_BUDGET"] = "0.05"
     iid = orphan(h)
     code, data = run_json(h, "tag", "i-55120", "--ttl", "1h")
     assert code == 0
@@ -356,8 +356,8 @@ def test_adopt_name_conflict(h: Harness) -> None:
 
 
 def test_unreadable_label_is_refused(h: Harness) -> None:
-    h.provider.add_instance(id=55120, label="rig:v9;lease=l-1")
+    h.provider.add_instance(id=55120, label="vasty:v9;lease=l-1")
     code, data = run_json(h, "tag", "i-55120", "--ttl", "30m")
     assert (code, data["error"]) == (1, "invalid_arguments")
-    assert data["hint"] == "rig release i-55120"
-    assert h.provider.instances[55120].label == "rig:v9;lease=l-1"
+    assert data["hint"] == "vasty release i-55120"
+    assert h.provider.instances[55120].label == "vasty:v9;lease=l-1"
