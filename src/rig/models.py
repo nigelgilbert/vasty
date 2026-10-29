@@ -391,3 +391,13 @@ class SyncResult:
     dest: str
     warnings: list[WarningItem]
     swept: list[SweptEntry]
+
+
+@dataclass
+class ReleaseAbsent:
+    """`release` output for a LEASE that matches no active or history lease."""
+
+    lease: str
+    already_absent: bool
+    warnings: list[WarningItem]
+    swept: list[SweptEntry]
