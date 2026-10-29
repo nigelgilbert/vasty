@@ -12,7 +12,8 @@ account: a lease now in history returns `lease_expired`, anything else
 `box_unreachable`, both with exit 2. SIGINT forwards `INT` to the job, waits
 up to 10s for it to exit, and exits 130. After the job exits or SIGINT
 arrives, an auto-reserved box is released even when saving the job or the
-10s wait raises, and the exception then propagates.
+10s wait raises, and the exception then propagates. The attached result's
+`swept` includes the entries of the release refresh.
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
 
@@ -44,6 +47,7 @@ from rig.models import (
     Job,
     RunAttachedResult,
     RunDetachedResult,
+    SweptEntry,
     WarningItem,
 )
 from rig.onstart import WORKDIR
@@ -66,21 +70,45 @@ def auto_ttl(ctx: Context) -> int:
     return settings.ttl if settings.sources.get("ttl") == "flag" else settings.run_ttl
 
 
-def release_quietly(ctx: Context, lease: CachedLease) -> bool:
-    """Refresh, then release the lease. Return True when this call destroyed it.
+def release_quietly(ctx: Context, lease: CachedLease) -> tuple[bool, list[SweptEntry]]:
+    """Refresh, then release the lease.
 
-    A failure prints one stderr line naming the lease and the fix.
+    Return whether this call destroyed the lease and the `swept` entries of
+    the refresh. A failure prints one stderr line naming the lease and the fix.
     """
     from rig.commands.release import release_lease
 
+    swept: list[SweptEntry] = []
     try:
         snap = engine.refresh(ctx, probe=False)
+        swept = list(snap.swept)
         fresh = snap.leases.get(lease.lease, lease)
         summary = release_lease(ctx, snap, fresh)
     except RigError as err:
         ctx.warn(f"rig: could not release {lease.lease}: {err.message} Run rig release {lease.lease}.")
-        return False
-    return not summary.already_absent
+        return False, swept
+    return not summary.already_absent, swept
+
+
+@contextmanager
+def _release_on_error(ctx: Context, lease: CachedLease, flag: bool) -> Iterator[None]:
+    """Release the lease quietly when the body raises and `flag` is set, then re-raise."""
+    try:
+        yield
+    except BaseException:
+        if flag:
+            release_quietly(ctx, lease)
+        raise
+
+
+def _released_swept(
+    ctx: Context, lease: CachedLease, release_on_exit: bool, swept: list[SweptEntry]
+) -> tuple[bool, list[SweptEntry]]:
+    """Release the lease when `release_on_exit` is set and add its refresh's new entries to `swept`."""
+    if not release_on_exit:
+        return False, swept
+    released, more = release_quietly(ctx, lease)
+    return released, swept + [entry for entry in more if entry not in swept]
 
 
 def push_dir(ctx: Context, target: SshTarget, directory: str) -> None:
@@ -136,7 +164,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         lease = pick_lease(ctx, snap, args.on)
     release_on_exit = auto and args.name is None and not detach and created
 
-    try:
+    with _release_on_error(ctx, lease, created):
         target = engine.ssh_target(lease)
         if sync_dir is not None:
             push_dir(ctx, target, str(sync_dir))
@@ -145,10 +173,6 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         job = Job(id=next_job_id(lease), cmd=command, started_at=None, exit=None, state="running")
         started = ctx.box.start_job(target, job, command)
         save_lease(ctx, lease, lambda record: put_job(record, started))
-    except BaseException:
-        if created:
-            release_quietly(ctx, lease)
-        raise
     warnings = merge_warnings(warnings, lease_warnings(ctx, snap, lease, now))
 
     if detach:
@@ -188,16 +212,12 @@ def _attach(
     duration = max(0, now - started_at)
     if code is None:
         return _lost(ctx, lease, job, duration, warnings, snap)
-    try:
+    with _release_on_error(ctx, lease, release_on_exit):
         save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, now))
-    except BaseException:
-        if release_on_exit:
-            release_quietly(ctx, lease)
-        raise
-    released = release_quietly(ctx, lease) if release_on_exit else False
+    released, swept = _released_swept(ctx, lease, release_on_exit, list(snap.swept))
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=code, duration_s=duration, released=released,
-        warnings=warnings, swept=list(snap.swept),
+        warnings=warnings, swept=swept,
     )
     return Outcome(result, exit_code=code, human=_human(result))
 
@@ -242,7 +262,7 @@ def _interrupted(
     started_at: int,
 ) -> Outcome:
     exit_code: int | None = None
-    try:
+    with _release_on_error(ctx, lease, release_on_exit):
         try:
             ctx.box.signal_job(target, job.id, "INT")
             deadline = ctx.mono() + INTERRUPT_WAIT_S
@@ -260,14 +280,10 @@ def _interrupted(
         if exit_code is not None:
             code = exit_code
             save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, now))
-    except BaseException:
-        if release_on_exit:
-            release_quietly(ctx, lease)
-        raise
-    released = release_quietly(ctx, lease) if release_on_exit else False
+    released, swept = _released_swept(ctx, lease, release_on_exit, list(snap.swept))
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=exit_code, duration_s=max(0, now - started_at),
-        released=released, warnings=warnings, swept=list(snap.swept),
+        released=released, warnings=warnings, swept=swept,
     )
     return Outcome(result, exit_code=INTERRUPT_EXIT, human=_human(result))
 

@@ -313,6 +313,36 @@ def test_auto_run_uses_run_ttl_and_releases(harness: Harness, reserve: FakeReser
     assert lease.jobs[0].exit == 0
 
 
+def _expire_other_lease_during_job(harness: Harness, interrupt: bool) -> None:
+    real = harness.box.attach_job
+
+    def attach(target: SshTarget, job_id: str, out: TextIO) -> int | None:
+        add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
+        if interrupt:
+            raise KeyboardInterrupt
+        return real(target, job_id, out)
+
+    harness.box.attach_job = attach  # type: ignore[method-assign]
+
+
+def test_auto_run_reports_release_refresh_sweep(harness: Harness, reserve: FakeReserve) -> None:
+    _expire_other_lease_during_job(harness, interrupt=False)
+    code, data, _ = run(harness, "--", "python", "train.py")
+    assert code == 0
+    assert data["released"] is True
+    assert [(s["lease"], s["name"], s["ok"]) for s in data["swept"]] == [("l-0000a009", "old", True)]
+    assert sorted(harness.provider.destroyed) == [1001, 1002]
+
+
+def test_sigint_reports_release_refresh_sweep(harness: Harness, reserve: FakeReserve) -> None:
+    _expire_other_lease_during_job(harness, interrupt=True)
+    code, data, _ = run(harness, "--", "python", "train.py")
+    assert code == 130
+    assert data["released"] is True
+    assert [(s["lease"], s["name"], s["ok"]) for s in data["swept"]] == [("l-0000a009", "old", True)]
+    assert sorted(harness.provider.destroyed) == [1001, 1002]
+
+
 def test_auto_run_ttl_flag_overrides_run_ttl(harness: Harness, reserve: FakeReserve) -> None:
     run(harness, "--ttl", "45m", "--", "ls")
     assert reserve.calls[0]["ttl"] == 2700
