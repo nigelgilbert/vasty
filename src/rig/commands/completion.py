@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from rig import ids
 from rig.cli import Outcome, build_parser
 from rig.context import Context
 from rig.errors import RigError, invalid
@@ -86,7 +87,11 @@ def _read_cache(path: Path) -> dict[str, Any]:
 
 
 def cached_names(path: Path, kind: str) -> list[str]:
-    """Return active lease ids and names, or group names, from the cache file."""
+    """Return active lease ids and names, or group names, from the cache file.
+
+    Keep only ids that match `ids.LEASE_ID` and names that match `ids.VALUE`.
+    The bash script passes these words to `compgen -W`, which expands `$(...)`.
+    """
     out: list[str] = []
     for lease_id, entry in _read_cache(path).items():
         if not isinstance(entry, dict) or entry.get("state") in HISTORY:
@@ -94,11 +99,11 @@ def cached_names(path: Path, kind: str) -> list[str]:
         label = entry.get("label")
         label = label if isinstance(label, dict) else {}
         if kind == "leases":
-            values = [lease_id, label.get("name")]
+            values = [(lease_id, ids.LEASE_ID), (label.get("name"), ids.VALUE)]
         else:
-            values = [label.get("group")]
-        for value in values:
-            if isinstance(value, str) and value and value not in out:
+            values = [(label.get("group"), ids.VALUE)]
+        for value, pattern in values:
+            if isinstance(value, str) and pattern.fullmatch(value) and value not in out:
                 out.append(value)
     return sorted(out)
 

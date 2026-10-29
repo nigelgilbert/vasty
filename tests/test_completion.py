@@ -143,10 +143,50 @@ def _clean_env(home: Path) -> dict[str, str]:
 def test_bash_completes_from_cache(
     harness: Harness, tmp_path: Path, words: list[str], expected: list[str]
 ) -> None:
+    write_cache(harness.home, CACHE)
+    result = _bash_complete(harness, tmp_path, words)
+    assert sorted(result.stdout.split()) == sorted(expected)
+
+
+HOSTILE = {
+    "leases": {
+        "l-00000001": {"state": "running", "label": {"name": "ft", "group": "exp42"}},
+        "l-0$(echo PWNED >&2)": {"state": "running", "label": {}},
+        "l-00000002": {"state": "running",
+                       "label": {"name": "x y$(echo PWNED >&2)", "group": "`echo PWNED >&2`"}},
+        "l-00000003": {"state": "running", "label": {"name": "-n", "group": "a b"}},
+    }
+}
+
+
+def test_list_drops_hostile_values(harness: Harness) -> None:
+    write_cache(harness.home, HOSTILE)
+    assert harness.run("completion", "--list", "leases") == (
+        0, "ft\nl-00000001\nl-00000002\nl-00000003\n", "")
+    assert harness.run("completion", "--list", "groups") == (0, "exp42\n", "")
+
+
+@pytest.mark.parametrize(
+    ("words", "expected"),
+    [
+        (["rig", "status", ""], ["ft", "l-00000001", "l-00000002", "l-00000003"]),
+        (["rig", "release", "--group", ""], ["exp42"]),
+    ],
+)
+def test_bash_skips_hostile_names(
+    harness: Harness, tmp_path: Path, words: list[str], expected: list[str]
+) -> None:
+    write_cache(harness.home, HOSTILE)
+    result = _bash_complete(harness, tmp_path, words)
+    assert "PWNED" not in result.stderr
+    assert sorted(result.stdout.split()) == sorted(expected)
+
+
+def _bash_complete(harness: Harness, tmp_path: Path,
+                   words: list[str]) -> subprocess.CompletedProcess[str]:
     bash = shutil.which("bash")
     if bash is None:
         pytest.skip("bash not installed")
-    write_cache(harness.home, CACHE)
     script = _render(harness, "bash", tmp_path)
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -162,9 +202,8 @@ def test_bash_completes_from_cache(
         "_rig\n"
         'printf "%s\\n" "${COMPREPLY[@]}"\n'
     )
-    result = subprocess.run([bash, "--norc", "--noprofile", "-c", program], env=env,
-                            capture_output=True, text=True, check=True)
-    assert sorted(result.stdout.split()) == sorted(expected)
+    return subprocess.run([bash, "--norc", "--noprofile", "-c", program], env=env,
+                          capture_output=True, text=True, check=True)
 
 
 @pytest.mark.parametrize(

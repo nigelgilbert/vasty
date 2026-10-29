@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from rig import ids
 from rig.errors import invalid
 from rig.models import Label
 
@@ -18,16 +19,18 @@ PREFIX = "rig:"
 VERSION = "v1"
 MAX_LEN = 1024
 MISS_SEP = ","
+MAX_EPOCH = 253402300799
 
 KNOWN_KEYS = ("lease", "name", "owner", "group", "created", "ttl", "expires", "miss")
 _REQUIRED = ("lease", "owner", "created", "ttl")
 _UINT = re.compile(r"[0-9]+")
 _KEY = re.compile(r"[A-Za-z0-9_.-]+")
+_PAST_MAX = "time is past 9999-12-31T23:59:59Z"
 
 
 @dataclass(frozen=True)
 class Unreadable:
-    """A `rig:` label with an unknown version or missing fields."""
+    """A `rig:` label with an unknown version, missing fields or a bad value."""
 
     raw: str
     reason: str
@@ -59,12 +62,23 @@ def parse(raw: str | None) -> Label | Unreadable | None:
     missing = [k for k in _REQUIRED if not fields.get(k)]
     if missing:
         return Unreadable(raw, "missing " + ", ".join(missing))
+    if not ids.LEASE_ID.fullmatch(fields["lease"]):
+        return Unreadable(raw, f"malformed lease {fields['lease']!r}")
+    for key in ("owner", "name", "group"):
+        if fields.get(key) and not ids.VALUE.fullmatch(fields[key]):
+            return Unreadable(raw, f"malformed {key} {fields[key]!r}")
     for key in ("created", "ttl", "expires"):
         if key in fields and not _UINT.fullmatch(fields[key]):
             return Unreadable(raw, f"{key} is not an integer")
+        if len(fields.get(key, "").lstrip("0")) > len(str(MAX_EPOCH)):
+            return Unreadable(raw, _PAST_MAX)
+    created = int(fields["created"])
     ttl = int(fields["ttl"])
     if ttl <= 0:
         return Unreadable(raw, "ttl is not positive")
+    expires = int(fields["expires"]) if "expires" in fields else None
+    if max(created + ttl, expires or 0) > MAX_EPOCH:
+        return Unreadable(raw, _PAST_MAX)
     miss_text = fields.get("miss", "")
     miss = miss_text.split(MISS_SEP) if miss_text else []
     if any(not layer for layer in miss):
@@ -72,11 +86,11 @@ def parse(raw: str | None) -> Label | Unreadable | None:
     return Label(
         lease=fields["lease"],
         owner=fields["owner"],
-        created=int(fields["created"]),
+        created=created,
         ttl=ttl,
         name=fields.get("name") or None,
         group=fields.get("group") or None,
-        expires=int(fields["expires"]) if "expires" in fields else None,
+        expires=expires,
         miss=miss,
         extra={k: v for k, v in fields.items() if k not in KNOWN_KEYS},
     )

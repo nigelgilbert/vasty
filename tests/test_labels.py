@@ -112,6 +112,18 @@ def test_exact_limit_is_allowed() -> None:
         "rig:v1;lease=l-1;owner=o;created=1;ttl=60;x=1;x=2",
         "rig:v1;lease=l-1;owner=o;created=1;ttl=60;junk",
         "rig:v1;lease=l-1;owner=o;created=1;ttl=60;miss=a,,b",
+        "rig:v1;lease=l-xyz;owner=o;created=1;ttl=60",
+        "rig:v1;lease=l-7F3A;owner=o;created=1;ttl=60",
+        "rig:v1;lease=l-aa$(id);owner=o;created=1;ttl=60",
+        "rig:v1;lease=l-aa;owner=a b;created=1;ttl=60",
+        "rig:v1;lease=l-aa;owner=-o;created=1;ttl=60",
+        "rig:v1;lease=l-aa;owner=a;name=x y$(id);created=1;ttl=5",
+        "rig:v1;lease=l-aa;owner=a;group=`id`;created=1;ttl=5",
+        "rig:v1;lease=l-aa;owner=a;name=" + "n" * 64 + ";created=1;ttl=5",
+        "rig:v1;lease=l-0000aaaa;owner=a;created=1;ttl=5;expires=999999999999999999999",
+        "rig:v1;lease=l-0000aaaa;owner=a;created=253402300800;ttl=5",
+        "rig:v1;lease=l-0000aaaa;owner=a;created=253402300795;ttl=5",
+        "rig:v1;lease=l-0000aaaa;owner=a;created=1;ttl=" + "9" * 5000,
     ],
 )
 def test_unreadable(raw: str) -> None:
@@ -119,6 +131,13 @@ def test_unreadable(raw: str) -> None:
     assert isinstance(result, Unreadable)
     assert result.raw == raw
     assert result.reason
+
+
+def test_max_epoch_is_allowed() -> None:
+    raw = "rig:v1;lease=l-0000aaaa;owner=a;created=253402300794;ttl=5;expires=253402300799"
+    label = parse(raw)
+    assert isinstance(label, Label)
+    assert label.expires == labels.MAX_EPOCH
 
 
 def test_format_rejects_separator_in_value() -> None:
