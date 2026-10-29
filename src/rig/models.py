@@ -182,6 +182,8 @@ class CachedLease:
     expired_at: int | None = None
     last_provider_error: str | None = None
     startup_interrupted: bool = False
+    adopted: bool = False
+    """Set by `tag` on an adopted orphan; networked commands retry its missing guard steps."""
 
 
 # Output shapes.

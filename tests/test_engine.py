@@ -1,0 +1,444 @@
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import Any
+
+import pytest
+
+from fakes import NOW, Harness, add_lease, lease_label
+from rig import engine
+from rig.errors import RigError
+from rig.labels import parse
+from rig.models import Instance, Job, Label
+
+
+def label_of(harness: Harness, instance_id: int) -> Label:
+    parsed = parse(harness.provider.instances[instance_id].label)
+    assert isinstance(parsed, Label)
+    return parsed
+
+
+def refresh(harness: Harness, probe: bool = True) -> engine.Snapshot:
+    return engine.refresh(harness.context(), probe=probe)
+
+
+def edit_cache(harness: Harness, lease_id: str, **fields: Any) -> None:
+    ctx = harness.context()
+    data = ctx.cache.load()
+    for key, value in fields.items():
+        setattr(data.leases[lease_id], key, value)
+    ctx.cache.save(data)
+
+
+# Sweep.
+
+
+def test_sweep_destroys_past_expires(harness: Harness) -> None:
+    row = add_lease(harness, label={"name": "ft", "expires": NOW - 10})
+    snap = refresh(harness)
+    assert harness.provider.destroyed == [row.id]
+    assert len(snap.swept) == 1
+    entry = snap.swept[0]
+    assert (entry.lease, entry.name, entry.ok, entry.error) == ("l-0000a001", "ft", True, None)
+    assert entry.expired_at == "2026-10-29T00:59:50Z"
+    lease = snap.leases["l-0000a001"]
+    assert lease.state == "expired"
+    assert lease.history_since == NOW
+    assert snap.active() == []
+
+
+def test_sweep_uses_created_plus_ttl_without_expires(harness: Harness) -> None:
+    old = add_lease(harness, "l-0000a001", label={"created": NOW - 4000, "ttl": 3600, "expires": None})
+    fresh = add_lease(harness, "l-0000a002", label={"created": NOW - 100, "ttl": 3600, "expires": None})
+    snap = refresh(harness)
+    assert harness.provider.destroyed == [old.id]
+    assert [lease.lease for lease in snap.active()] == ["l-0000a002"]
+    assert fresh.id in harness.provider.instances
+
+
+def test_sweep_not_past_at_exact_expiry(harness: Harness) -> None:
+    add_lease(harness, label={"expires": NOW})
+    snap = refresh(harness)
+    assert snap.swept == []
+    assert harness.provider.destroyed == []
+
+
+def test_sweep_aborts_when_expires_moved(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": NOW - 10})
+    real_get = harness.provider.get_instance
+    extended = lease_label(expires=NOW + 1800)
+
+    def get_instance(instance_id: int) -> Instance | None:
+        harness.provider.instances[instance_id].label = extended
+        return real_get(instance_id)
+
+    harness.provider.get_instance = get_instance  # type: ignore[method-assign]
+    snap = refresh(harness)
+    assert harness.provider.destroyed == []
+    assert snap.swept == []
+    lease = snap.leases["l-0000a001"]
+    assert lease.state == "running"
+    assert lease.label.expires == NOW + 1800
+    assert harness.box.state(row.id).clock == NOW + 1800
+
+
+def test_sweep_failed_destroy_reports_error(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": NOW - 10})
+    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    snap = refresh(harness)
+    assert snap.swept[0].ok is False
+    assert snap.swept[0].error == "provider_error"
+    assert row.id in harness.provider.instances
+    lease = snap.leases["l-0000a001"]
+    assert lease.state == "expired"
+    assert lease.last_provider_error == "destroy failed: provider_error"
+    again = refresh(harness)
+    assert again.swept[0].ok is True
+    assert harness.provider.destroyed == [row.id]
+
+
+def test_sweep_skips_unreadable_rows(harness: Harness) -> None:
+    row = harness.provider.add_instance(label=f"rig:v1;lease=l-1;created={NOW - 9000}")
+    snap = refresh(harness)
+    assert harness.provider.destroyed == []
+    assert snap.unreadable == [row]
+    assert snap.orphans == []
+    codes = [(w.code, w.lease) for w in snap.warnings]
+    assert ("label_unreadable", f"i-{row.id}") in codes
+
+
+def test_duplicate_lease_id_row_is_unreadable(harness: Harness) -> None:
+    first = add_lease(harness)
+    second = add_lease(harness)
+    snap = refresh(harness)
+    assert snap.leases["l-0000a001"].instance_id == first.id
+    assert snap.unreadable == [second]
+
+
+# Reconciliation.
+
+
+def test_reconcile_released_clears_destroy_pending(harness: Harness) -> None:
+    row = add_lease(harness)
+    refresh(harness)
+    edit_cache(harness, "l-0000a001", state="released", released_here=True, destroy_pending=True)
+    still = refresh(harness)
+    assert still.leases["l-0000a001"].state == "released"
+    assert still.leases["l-0000a001"].destroy_pending is True
+    del harness.provider.instances[row.id]
+    harness.time.advance(30)
+    snap = refresh(harness)
+    lease = snap.leases["l-0000a001"]
+    assert (lease.state, lease.destroy_pending, lease.history_since) == ("released", False, NOW + 30)
+
+
+def test_reconcile_released_here_moves_to_released(harness: Harness) -> None:
+    row = add_lease(harness)
+    refresh(harness)
+    edit_cache(harness, "l-0000a001", released_here=True)
+    del harness.provider.instances[row.id]
+    assert refresh(harness).leases["l-0000a001"].state == "released"
+
+
+def test_reconcile_expired_when_past_effective_expiry(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": NOW + 10})
+    refresh(harness)
+    del harness.provider.instances[row.id]
+    harness.time.advance(20)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert lease.state == "expired"
+    assert lease.expired_at == NOW + 10
+
+
+def test_reconcile_gone_with_time_left(harness: Harness) -> None:
+    row = add_lease(harness)
+    refresh(harness)
+    del harness.provider.instances[row.id]
+    snap = refresh(harness)
+    assert snap.leases["l-0000a001"].state == "gone"
+    assert snap.active() == []
+
+
+def test_reconcile_adopts_another_machines_lease(harness: Harness) -> None:
+    add_lease(harness, "l-0000b001", label={"owner": "nick", "name": "scratch"},
+              gpu_name="RTX 4090", dph_total=Decimal("0.38"), image="rig/base:cuda12.4")
+    snap = refresh(harness)
+    lease = snap.leases["l-0000b001"]
+    assert lease.state == "running"
+    assert (lease.gpu, lease.price_per_hr, lease.image) == ("RTX 4090", Decimal("0.38"),
+                                                             "rig/base:cuda12.4")
+    assert (lease.ssh_host, lease.ssh_port) == ("198.51.100.9", 40022)
+    assert lease.ports == {22: 40022, 8000: 40080, 8080: 40081}
+    assert "l-0000b001" in harness.context().cache.load().leases
+    assert snap.warnings == []
+
+
+def test_history_pruned_24h_after_first_seen_gone(harness: Harness) -> None:
+    row = add_lease(harness, label={"ttl": 7200})
+    refresh(harness)
+    harness.time.advance(600)
+    del harness.provider.instances[row.id]
+    gone_at = refresh(harness).leases["l-0000a001"].history_since
+    assert gone_at == NOW + 600
+    harness.time.advance(86_400 - 1)
+    assert "l-0000a001" in refresh(harness).leases
+    harness.time.advance(1)
+    assert "l-0000a001" not in refresh(harness).leases
+
+
+def test_reappearing_gone_lease_is_active_again(harness: Harness) -> None:
+    row = add_lease(harness)
+    refresh(harness)
+    saved = harness.provider.instances.pop(row.id)
+    assert refresh(harness).leases["l-0000a001"].state == "gone"
+    harness.provider.instances[row.id] = saved
+    lease = refresh(harness).leases["l-0000a001"]
+    assert lease.state == "running"
+    assert lease.history_since is None
+
+
+def test_cache_rebuilt_warning(harness: Harness) -> None:
+    ctx = harness.context()
+    ctx.cache.path.parent.mkdir(parents=True, exist_ok=True)
+    ctx.cache.path.write_text("{not json")
+    add_lease(harness)
+    snap = refresh(harness)
+    assert [w.code for w in snap.warnings] == ["cache_rebuilt"]
+    assert "l-0000a001" in snap.leases
+    assert [w.code for w in refresh(harness).warnings] == []
+
+
+def test_clock_unverified_warning(harness: Harness) -> None:
+    harness.provider.date_header = False
+    snap = refresh(harness)
+    assert [(w.code, w.lease, w.fix) for w in snap.warnings] == [
+        ("clock_unverified", None, "rig status")
+    ]
+
+
+def test_cache_saved_with_cached_at(harness: Harness) -> None:
+    add_lease(harness)
+    refresh(harness)
+    data = harness.context().cache.load()
+    assert data.cached_at == NOW
+    assert len(data.instances) == 1
+
+
+# Probe.
+
+
+def test_probe_copies_clock_file_to_label(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": None})
+    harness.box.state(row.id).clock = NOW + 1234
+    snap = refresh(harness)
+    assert label_of(harness, row.id).expires == NOW + 1234
+    assert snap.leases["l-0000a001"].label.expires == NOW + 1234
+    assert snap.leases["l-0000a001"].reachable_at == NOW
+
+
+def test_probe_writes_and_clears_miss(harness: Harness) -> None:
+    row = add_lease(harness)
+    box = harness.box.state(row.id)
+    box.guard_missing = ["destroy_key", "watchdog"]
+    snap = refresh(harness)
+    assert label_of(harness, row.id).miss == ["watchdog", "destroy_key"]
+    assert snap.leases["l-0000a001"].guard_missing == ["watchdog", "destroy_key"]
+    writes = [c for c in harness.provider.calls if c[0] == "set_label"]
+    refresh(harness)
+    assert [c for c in harness.provider.calls if c[0] == "set_label"] == writes
+    box.guard_missing = []
+    snap = refresh(harness)
+    assert label_of(harness, row.id).miss == []
+    assert snap.leases["l-0000a001"].guard_missing == []
+
+
+def test_probe_label_write_aborts_when_expires_moved(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": None})
+    harness.box.state(row.id).clock = NOW + 1234
+    real_get = harness.provider.get_instance
+    moved = lease_label(expires=NOW + 999)
+
+    def get_instance(instance_id: int) -> Instance | None:
+        harness.provider.instances[instance_id].label = moved
+        return real_get(instance_id)
+
+    harness.provider.get_instance = get_instance  # type: ignore[method-assign]
+    snap = refresh(harness)
+    assert not [c for c in harness.provider.calls if c[0] == "set_label"]
+    assert snap.leases["l-0000a001"].label.expires == NOW + 999
+
+
+def test_unreachable_after_answered_and_jobs_unknown(harness: Harness) -> None:
+    row = add_lease(harness)
+    box = harness.box.state(row.id)
+    box.jobs["j-1"] = Job(id="j-1", cmd="python train.py", started_at=NOW - 60, exit=None,
+                          state="running")
+    assert refresh(harness).leases["l-0000a001"].state == "running"
+    box.reachable = False
+    harness.time.advance(360)
+    snap = refresh(harness)
+    lease = snap.leases["l-0000a001"]
+    assert lease.state == "unreachable"
+    assert lease.reachable_at == NOW
+    from rig.views import lease_view
+
+    view = lease_view(lease, snap.now)
+    assert [(j.id, j.state, j.exit) for j in view.jobs] == [("j-1", "unknown", None)]
+
+
+def test_never_answered_is_pending(harness: Harness) -> None:
+    add_lease(harness, reachable=False)
+    assert refresh(harness).leases["l-0000a001"].state == "pending"
+
+
+def test_startup_running_is_pending(harness: Harness) -> None:
+    row = add_lease(harness)
+    harness.box.state(row.id).startup_exit = None
+    assert refresh(harness).leases["l-0000a001"].state == "pending"
+
+
+def test_startup_cut_off_by_restart(harness: Harness) -> None:
+    row = add_lease(harness)
+    harness.box.state(row.id).startup_exit = -1
+    lease = refresh(harness).leases["l-0000a001"]
+    assert lease.state == "running"
+    assert lease.startup_interrupted is True
+    assert lease.startup_exit is None
+
+
+def test_probe_skipped_when_not_running(harness: Harness) -> None:
+    add_lease(harness, actual_status="loading")
+    assert refresh(harness).leases["l-0000a001"].state == "pending"
+    add_lease(harness, "l-0000a002", actual_status="stopped")
+    assert refresh(harness).leases["l-0000a002"].state == "stopped"
+
+
+def test_probe_false_keeps_state(harness: Harness) -> None:
+    row = add_lease(harness)
+    refresh(harness)
+    harness.box.state(row.id).reachable = False
+    assert refresh(harness, probe=False).leases["l-0000a001"].state == "running"
+
+
+def test_jobs_merge_by_id(harness: Harness) -> None:
+    row = add_lease(harness)
+    box = harness.box.state(row.id)
+    box.jobs["j-1"] = Job(id="j-1", cmd="a", started_at=NOW, exit=None, state="running")
+    refresh(harness)
+    box.jobs = {"j-2": Job(id="j-2", cmd="b", started_at=NOW, exit=None, state="running")}
+    snap = refresh(harness)
+    assert [j.id for j in snap.leases["l-0000a001"].jobs] == ["j-1", "j-2"]
+
+
+def test_adopted_lease_retries_guard_steps(harness: Harness) -> None:
+    row = add_lease(harness)
+    box = harness.box.state(row.id)
+    box.guard_missing = ["watchdog"]
+    refresh(harness)
+    assert label_of(harness, row.id).miss == ["watchdog"]
+    edit_cache(harness, "l-0000a001", adopted=True)
+    box.adopt_missing = []
+    snap = refresh(harness)
+    assert snap.leases["l-0000a001"].guard_missing == []
+    assert label_of(harness, row.id).miss == []
+
+
+# SSH endpoint.
+
+
+def test_ssh_target_direct_and_proxy(harness: Harness) -> None:
+    add_lease(harness, "l-0000a001")
+    add_lease(harness, "l-0000a002", runtype="ssh_proxy", ssh_host="ssh5.vast.ai", ssh_port=12345)
+    add_lease(harness, "l-0000a003", reachable=False, public_ipaddr=None, ports={})
+    snap = refresh(harness)
+    direct = engine.ssh_target(snap.leases["l-0000a001"])
+    assert (direct.host, direct.port) == ("198.51.100.9", 40022)
+    proxy = engine.ssh_target(snap.leases["l-0000a002"])
+    assert (proxy.host, proxy.port) == ("ssh5.vast.ai", 12345)
+    with pytest.raises(RigError) as exc:
+        engine.ssh_target(snap.leases["l-0000a003"])
+    assert exc.value.code == "lease_pending"
+
+
+# Spend and budget.
+
+
+def test_spend_sources_and_charges_cache(harness: Harness) -> None:
+    add_lease(harness, dph_total=Decimal("0.60"))
+    harness.provider.billed = {999: Decimal("1.00")}
+    harness.provider.covered_through = NOW - 1800
+    ctx = harness.context()
+    snap = engine.refresh(ctx)
+    spent, source = engine.spend(ctx, snap)
+    assert spent == Decimal("1.30")
+    assert source == "mixed"
+    charge_calls = lambda: [c for c in harness.provider.calls if c[0] == "charges"]  # noqa: E731
+    assert len(charge_calls()) == 1
+    harness.time.advance(30)
+    engine.spend(ctx, engine.refresh(ctx))
+    assert len(charge_calls()) == 1
+    harness.time.advance(31)
+    engine.spend(ctx, engine.refresh(ctx))
+    assert len(charge_calls()) == 2
+
+
+def test_spend_billing_and_estimated(harness: Harness) -> None:
+    ctx = harness.context()
+    harness.provider.billed = {1: Decimal("2.00")}
+    harness.provider.covered_through = NOW
+    snap = engine.refresh(ctx)
+    assert engine.spend(ctx, snap) == (Decimal("2.00"), "billing")
+    add_lease(harness, label={"ttl": 7200}, dph_total=Decimal("1.00"))
+    harness.provider.billed = {}
+    harness.time.advance(3600)
+    snap = engine.refresh(ctx)
+    spent, source = engine.spend(ctx, snap)
+    assert (spent, source) == (Decimal("1.00"), "estimated")
+
+
+def test_spend_unknown_coverage(harness: Harness) -> None:
+    ctx = harness.context()
+    snap = engine.refresh(ctx)
+    assert engine.spend(ctx, snap) == (None, None)
+    with pytest.raises(RigError) as exc:
+        engine.budget_check(ctx, snap, Decimal("1"))
+    assert exc.value.code == "spend_unavailable"
+
+
+def test_budget_check_refuses_and_reports(harness: Harness) -> None:
+    add_lease(harness, label={"expires": NOW + 3600}, dph_total=Decimal("2.00"))
+    harness.provider.billed = {1: Decimal("5.00")}
+    harness.provider.covered_through = NOW
+    ctx = harness.context()
+    snap = engine.refresh(ctx)
+    projected, daily = engine.budget_check(ctx, snap, Decimal("1.00"))
+    assert (projected, daily) == (Decimal("8.00"), Decimal("10.00"))
+    with pytest.raises(RigError) as exc:
+        engine.budget_check(ctx, snap, Decimal("4.00"))
+    assert exc.value.code == "budget_exceeded"
+    assert exc.value.details == {"projected": 11.0, "remaining": 3.0, "daily_budget": 10.0}
+
+
+def test_budget_check_replace_expiry(harness: Harness) -> None:
+    add_lease(harness, label={"expires": NOW + 3600}, dph_total=Decimal("2.00"))
+    harness.provider.covered_through = NOW
+    ctx = harness.context()
+    snap = engine.refresh(ctx)
+    projected, _ = engine.budget_check(ctx, snap, replace={"l-0000a001": NOW + 7200})
+    assert projected == Decimal("4.00")
+    with pytest.raises(RigError):
+        engine.budget_check(ctx, snap, replace={"l-0000a001": NOW + 6 * 3600})
+    shorter, _ = engine.budget_check(ctx, snap, replace={"l-0000a001": NOW + 60})
+    assert shorter < Decimal("2.00")
+
+
+def test_write_label_checks_expires(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": NOW + 60})
+    ctx = harness.context()
+    new = Label(lease="l-0000a001", owner="claude", created=NOW - 600, ttl=3600, expires=NOW + 99)
+    assert engine.write_label(ctx, row.id, NOW + 1, new) is False
+    assert engine.write_label(ctx, row.id, NOW + 60, new) is True
+    assert label_of(harness, row.id).expires == NOW + 99
+    assert engine.destroy_checked(ctx, row.id, NOW + 60) is False
+    assert engine.destroy_checked(ctx, row.id, NOW + 99) is True
+    assert harness.provider.destroyed == [row.id]

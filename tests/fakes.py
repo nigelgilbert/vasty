@@ -16,11 +16,24 @@ from typing import Any, Callable, Mapping, TextIO
 
 from rig.context import Context
 from rig.errors import RigError
-from rig.models import Charges, CreateRequest, Instance, Job, Offer, OfferQuery, ProbeResult, SshKey
+from rig.labels import format_label
+from rig.models import (
+    Charges,
+    CreateRequest,
+    Instance,
+    Job,
+    Label,
+    Offer,
+    OfferQuery,
+    ProbeResult,
+    SshKey,
+)
 from rig.provider import ProviderTimeout
 from rig.remote import BoxUnreachableError, ExecResult, SshTarget
 
 START = 1_793_232_000  # 2026-10-29T00:00:00Z
+NOW = START + 3600  # FakeTime's default start
+_AUTO: Any = object()
 
 
 class FakeTime:
@@ -362,3 +375,38 @@ class Harness:
         err = holder[0].stderr
         assert isinstance(out, io.StringIO) and isinstance(err, io.StringIO)
         return code, out.getvalue(), err.getvalue()
+
+
+def lease_label(
+    lease: str = "l-0000a001",
+    *,
+    owner: str = "claude",
+    created: int = NOW - 600,
+    ttl: int = 3600,
+    expires: int | None = _AUTO,
+    **kw: Any,
+) -> str:
+    """Render a `rig:v1` label. `expires` defaults to `created + ttl`; pass None to leave it out."""
+    if expires is _AUTO:
+        expires = created + ttl
+    return format_label(Label(lease=lease, owner=owner, created=created, ttl=ttl, expires=expires, **kw))
+
+
+def add_lease(
+    harness: Harness,
+    lease: str = "l-0000a001",
+    *,
+    reachable: bool = True,
+    label: dict[str, Any] | None = None,
+    **inst: Any,
+) -> Instance:
+    """Add a managed instance and, when `reachable`, a box whose clock matches the label."""
+    text = lease_label(lease, **(label or {}))
+    row = harness.provider.add_instance(label=text, **inst)
+    if reachable:
+        from rig.labels import parse
+
+        parsed = parse(text)
+        assert isinstance(parsed, Label)
+        harness.box.state(row.id).clock = parsed.expires
+    return row

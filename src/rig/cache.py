@@ -1,6 +1,8 @@
 """The local cache `~/.local/state/rig/leases.json` (spec §8.1).
 
-The file holds `{"version": 1, "cached_at": EPOCH, "leases": {ID: LEASE}}`.
+The file holds `{"version": 1, "cached_at": EPOCH, "leases": {ID: LEASE}}` plus
+the last instance listing and today's billed charges, which `status --cached`
+reads. Files without those keys load with empty values.
 Each lease serializes every `CachedLease` field by its type hints: Decimal as a
 string, dataclasses as objects, int dict keys as strings. Load restores the
 types, fills defaults for absent fields and ignores unknown keys. A value of
@@ -23,7 +25,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import IO, Any, Literal, Union, get_args, get_origin, get_type_hints
 
-from rig.models import CachedLease
+from rig.models import CachedLease, Charges, Instance
 
 FORMAT_VERSION = 1
 
@@ -33,6 +35,12 @@ class CacheData:
     leases: dict[str, CachedLease] = field(default_factory=dict)
     cached_at: int | None = None
     rebuilt: bool = False
+    instances: list[Instance] = field(default_factory=list)
+    charges: Charges | None = None
+    charges_at: int | None = None
+    """When `charges` was fetched; billing data is fresh for 60s."""
+    charges_start: int | None = None
+    """The start of the UTC day `charges` covers."""
 
 
 class CorruptCache(ValueError):
@@ -117,6 +125,10 @@ def encode(data: CacheData) -> str:
         "version": FORMAT_VERSION,
         "cached_at": data.cached_at,
         "leases": {key: _to_json(lease) for key, lease in data.leases.items()},
+        "instances": _to_json(data.instances),
+        "charges": _to_json(data.charges),
+        "charges_at": data.charges_at,
+        "charges_start": data.charges_start,
     }
     return json.dumps(body, indent=1, sort_keys=False) + "\n"
 
@@ -134,7 +146,14 @@ def decode(text: str) -> CacheData:
     if not isinstance(raw_leases, dict):
         raise CorruptCache("leases is not an object")
     leases = {str(k): _from_json(v, CachedLease) for k, v in raw_leases.items()}
-    return CacheData(leases=leases, cached_at=cached_at)
+    return CacheData(
+        leases=leases,
+        cached_at=cached_at,
+        instances=_from_json(body.get("instances", []), list[Instance]),
+        charges=_from_json(body.get("charges"), Union[Charges, None]),
+        charges_at=_from_json(body.get("charges_at"), Union[int, None]),
+        charges_start=_from_json(body.get("charges_start"), Union[int, None]),
+    )
 
 
 def _to_json(value: Any) -> Any:
