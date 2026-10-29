@@ -56,6 +56,7 @@ from typing import TYPE_CHECKING
 from rig import budget, labels
 from rig.errors import RigError
 from rig.ids import orphan_id
+from rig.keys import public_key
 from rig.models import (
     HISTORY_STATES,
     CachedLease,
@@ -427,8 +428,6 @@ def _key_retry_due(lease: CachedLease, now: int) -> bool:
 
 
 def _retry_key(ctx: Context, lease: CachedLease, now: int) -> None:
-    from rig.commands.reserve import public_key
-
     key = public_key(ctx)
     if key is None:
         return
@@ -663,13 +662,12 @@ def spend(ctx: Context, snap: Snapshot) -> tuple[Decimal | None, str | None]:
 def locked_active(ctx: Context, snap: Snapshot) -> list[CachedLease]:
     """Return the active leases from `leases.json` merged with the snapshot's, sorted by id.
 
-    Call it under the `leases.json` lock so a reserve, release or extend by
+    The caller holds the `leases.json` lock so a reserve, release or extend by
     another local process since `refresh` counts. The cache copy replaces the
     snapshot copy of the same lease. A snapshot lease the cache lacks, for
     example after a corrupt file, stays in.
     """
-    with ctx.cache.lock():
-        cached = ctx.cache.load().leases
+    cached = ctx.cache.load().leases
     merged = {lease.lease: lease for lease in snap.active()}
     merged.update(cached)
     return sorted(

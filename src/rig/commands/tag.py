@@ -23,6 +23,7 @@ from rig.commands._common import taken_ids
 from rig.context import Context
 from rig.errors import RigError, invalid
 from rig.ids import orphan_id
+from rig.keys import public_key
 from rig.models import HISTORY_STATES, CachedLease, Instance, Label, TagResult, WarningItem
 from rig.state import GUARD_LAYERS, derive_state, effective_expiry
 from rig.timeutil import format_duration, parse_duration
@@ -238,8 +239,6 @@ def adopt(
 
 def _guard_steps(ctx: Context, lease: CachedLease) -> None:
     """Attach the SSH key and run the adoption script. Set the missing guard layers."""
-    from rig.commands.reserve import public_key
-
     key = public_key(ctx)
     if key is None:
         ctx.warn("rig: no SSH public key found next to ssh_key; skipping key attach")

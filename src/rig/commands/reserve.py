@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from decimal import Decimal
-from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
 from rig import budget, engine, ids, labels, onstart, views
@@ -27,6 +26,7 @@ from rig.cli import Outcome
 from rig.commands._common import taken_ids
 from rig.context import Context
 from rig.errors import RigError, invalid
+from rig.keys import public_key
 from rig.models import (
     HISTORY_STATES,
     CachedLease,
@@ -272,20 +272,6 @@ def choose_offer(ctx: Context, query: OfferQuery) -> Offer:
 
 def _key_body(text: str) -> str:
     return " ".join(text.split()[:2])
-
-
-def public_key(ctx: Context) -> str | None:
-    """Return the public key next to `ssh_key`, or None when there is none."""
-    private = ctx.settings.ssh_key
-    if not private:
-        return None
-    path = Path(private)
-    pub = path if path.suffix == ".pub" else path.with_name(path.name + ".pub")
-    try:
-        text = pub.read_text(encoding="utf-8").strip()
-    except (OSError, UnicodeDecodeError):
-        return None
-    return text or None
 
 
 def register_key(ctx: Context) -> None:
