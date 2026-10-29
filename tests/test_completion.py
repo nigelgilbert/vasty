@@ -95,6 +95,26 @@ def test_list_profiles_with_bad_config(harness: Harness) -> None:
     assert harness.run("completion", "--list", "profiles") == (0, "", "")
 
 
+def _hostile_profile(harness: Harness, tmp_path: Path) -> Path:
+    marker = tmp_path / "pwned"
+    path = harness.home / ".config" / "rig" / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text(f'[profiles.small]\ngpu = "4090"\n[profiles."$(touch {marker})"]\ngpu = "A100"\n')
+    return marker
+
+
+def test_list_profiles_drops_hostile_names(harness: Harness, tmp_path: Path) -> None:
+    _hostile_profile(harness, tmp_path)
+    assert harness.run("completion", "--list", "profiles") == (0, "small\n", "")
+
+
+def test_bash_skips_hostile_profile_names(harness: Harness, tmp_path: Path) -> None:
+    marker = _hostile_profile(harness, tmp_path)
+    result = _bash_complete(harness, tmp_path, ["rig", "reserve", "--profile", ""])
+    assert result.stdout.split() == ["small"]
+    assert not marker.exists()
+
+
 def _render(harness: Harness, shell: str, tmp_path: Path) -> Path:
     code, out, _ = harness.run("completion", shell)
     assert code == 0

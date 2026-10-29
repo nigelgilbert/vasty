@@ -109,8 +109,9 @@ def cached_names(path: Path, kind: str) -> list[str]:
 
 
 def _profile_names(ctx: Context) -> list[str]:
+    """Return profile names that match `ids.VALUE`, since `compgen -W` expands `$(...)`."""
     try:
-        return sorted(ctx.settings.profiles)
+        return sorted(n for n in ctx.settings.profiles if ids.VALUE.fullmatch(n))
     except RigError:
         return []
 
