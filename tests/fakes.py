@@ -328,6 +328,11 @@ class Harness:
     http_status: int = 200
     http_calls: list[str] = field(default_factory=list)
     hex_values: list[str] = field(default_factory=list)
+    http_statuses: list[int] = field(default_factory=list)
+    """Statuses `http_get` returns in order before it falls back to `http_status`."""
+    http_headers: list[dict[str, str]] = field(default_factory=list)
+    missing_tools: set[str] = field(default_factory=set)
+    """Tool names `which` reports as absent."""
 
     def __post_init__(self) -> None:
         self.provider = FakeProvider(time=self.time)
@@ -338,6 +343,9 @@ class Harness:
 
     def http_get(self, url: str, headers: Mapping[str, str], timeout: float) -> int:
         self.http_calls.append(url)
+        self.http_headers.append(dict(headers))
+        if self.http_statuses:
+            return self.http_statuses.pop(0)
         return self.http_status
 
     def random_hex(self, nbytes: int) -> str:
@@ -351,7 +359,8 @@ class Harness:
             stdin=io.StringIO(stdin), stdout=io.StringIO(), stderr=io.StringIO(),
             stdin_tty=tty, stdout_tty=tty,
             wall=self.time.wall, mono=self.time.mono, sleep=self.time.sleep,
-            random_hex=self.random_hex, which=lambda name: f"/usr/bin/{name}",
+            random_hex=self.random_hex,
+            which=lambda name: None if name in self.missing_tools else f"/usr/bin/{name}",
             http_get=self.http_get,
             provider_factory=lambda ctx: self.provider,
             box_factory=lambda ctx: self.box,
@@ -412,3 +421,78 @@ def add_lease(
         assert isinstance(parsed, Label)
         harness.box.state(row.id).clock = parsed.expires
     return row
+
+
+@dataclass
+class FakeReserve:
+    """A stand-in for `rig.commands.reserve.reserve_lease` on the `run` and `serve` auto-reserve paths.
+
+    Each call adds a running lease to the fake provider and box with
+    `add_lease`, refreshes, and returns `Reserved`. A `--name` that matches an
+    active lease of the current owner returns that lease with `reused`.
+    `calls` records `ttl`, `wait`, `name` and the resolved `vram`, `gpu` and
+    `image`. Set `fail` to raise that error instead. `row` adds instance fields.
+    """
+
+    harness: Harness
+    lease_ids: list[str] = field(default_factory=lambda: ["l-0000b001", "l-0000b002"])
+    calls: list[dict[str, Any]] = field(default_factory=list)
+    fail: RigError | None = None
+    row: dict[str, Any] = field(default_factory=dict)
+
+    def install(self, monkeypatch: Any) -> FakeReserve:
+        monkeypatch.setattr("rig.commands.reserve.reserve_lease", self)
+        return self
+
+    def __call__(self, ctx: Context, args: Any, snap: Any, *, ttl: int, wait: bool = True) -> Any:
+        from rig import engine
+        from rig.commands.reserve import Reserved
+
+        settings = ctx.settings
+        name = getattr(args, "name", None)
+        self.calls.append({
+            "ttl": ttl, "wait": wait, "name": name,
+            "vram": settings.vram, "gpu": settings.gpu, "image": settings.image,
+        })
+        if self.fail is not None:
+            raise self.fail
+        if name:
+            for lease in snap.active():
+                if lease.label.name == name and lease.label.owner == settings.owner:
+                    return Reserved(reserve_result(lease, snap.now, True, [], []), lease)
+        lease_id = self.lease_ids.pop(0)
+        now = ctx.clock.now()
+        label: dict[str, Any] = {
+            "owner": settings.owner, "created": now, "ttl": ttl, "expires": now + ttl,
+        }
+        if name:
+            label["name"] = name
+        fields: dict[str, Any] = {
+            "gpu_name": "RTX 4090", "dph_total": Decimal("0.38"),
+            "public_ipaddr": "198.51.100.7", "ports": {22: 41022, 8000: 41080, 8080: 41081},
+        }
+        fields.update(self.row)
+        add_lease(self.harness, lease_id, label=label, **fields)
+        fresh = engine.refresh(ctx)
+        lease = fresh.leases[lease_id]
+        return Reserved(reserve_result(lease, fresh.now, False, fresh.warnings, fresh.swept), lease)
+
+
+def reserve_result(lease: Any, now: int, reused: bool, warnings: list[Any], swept: list[Any]) -> Any:
+    """Build a `ReserveResult` for a cached lease."""
+    from rig.models import ReserveResult
+    from rig.state import effective_expiry, guard
+    from rig.timeutil import iso
+    from rig.views import endpoint_fields
+
+    level, missing = guard(lease)
+    point = endpoint_fields(lease)
+    expiry = effective_expiry(lease.label)
+    return ReserveResult(
+        lease=lease.lease, name=lease.label.name, owner=lease.label.owner,
+        group=lease.label.group, state=lease.state, guard=level, guard_missing=missing,
+        reused=reused, gpu=lease.gpu, gpus=lease.gpus, vram_gb=lease.vram_gb,
+        price_per_hr=lease.price_per_hr, expires_at=iso(expiry),
+        ttl_remaining_s=max(0, expiry - now), ssh=point.ssh, rsync_target=point.rsync_target,
+        ssh_port=point.ssh_port, ports=point.ports, warnings=list(warnings), swept=list(swept),
+    )
