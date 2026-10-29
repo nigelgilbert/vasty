@@ -12,7 +12,8 @@ computes the new expiry and the budget from that copy. A target another local
 process released since `refresh` returns `lease_expired` and keeps its cache
 entry.
 
-A lease is writable when the refresh's probe reached it. A `pending` lease
+A lease is writable when the refresh's probe reached it. `extend` checks the
+snapshot copy and again the copy reloaded under the lock. A `pending` lease
 that SSH has never answered returns `lease_pending`. An `unreachable` or
 `stopped` lease returns `box_unreachable` and changes nothing.
 """
@@ -130,13 +131,15 @@ def check_writable(lease: CachedLease) -> None:
 def _reload(cached: Mapping[str, CachedLease], lease: CachedLease) -> CachedLease:
     """Return the copy of `lease` in `cached`, or `lease` when `cached` lacks it.
 
-    Pass the leases from `leases.json` read under its lock, so a release or
-    extend by another local process since `refresh` counts. Raise
-    `lease_expired` when that copy is in history or has `destroy_pending`.
+    Pass the leases from `leases.json` read under its lock, so a release,
+    extend or probe by another local process since `refresh` counts. Raise
+    `lease_expired` when that copy has `destroy_pending`, then apply
+    `check_writable` to it.
     """
     found = cached.get(lease.lease, lease)
-    if found.state in HISTORY_STATES or found.destroy_pending:
+    if found.destroy_pending:
         raise _expired(found)
+    check_writable(found)
     return found
 
 

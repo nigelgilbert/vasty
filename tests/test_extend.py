@@ -399,6 +399,56 @@ def test_release_between_refresh_and_lock_is_expired(
     assert h.box.clock_writes == []
 
 
+def edit_after_refresh(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, lease: str, **fields: Any
+) -> None:
+    """Set `fields` on the cache copy of `lease` right after the next refresh returns."""
+    import dataclasses
+
+    from rig import engine
+
+    real = engine.refresh
+
+    def refresh_then_edit(ctx: Any, probe: bool = True) -> engine.Snapshot:
+        snap = real(ctx, probe)
+        monkeypatch.setattr(engine, "refresh", real)
+        with ctx.cache.lock():
+            data = ctx.cache.load()
+            data.leases[lease] = dataclasses.replace(data.leases[lease], **fields)
+            ctx.cache.save(data)
+        return snap
+
+    monkeypatch.setattr(engine, "refresh", refresh_then_edit)
+
+
+UNWRITABLE_UNDER_LOCK = [
+    pytest.param({"state": "unreachable"}, 2, "box_unreachable", id="unreachable"),
+    pytest.param({"state": "stopped"}, 2, "box_unreachable", id="stopped"),
+    pytest.param({"state": "pending", "reachable_at": None}, 1, "lease_pending", id="pending"),
+]
+
+
+@pytest.mark.parametrize("change", [["--by", "30m"], ["--to", "10m"]], ids=["by", "to"])
+@pytest.mark.parametrize(("fields", "exit_code", "error"), UNWRITABLE_UNDER_LOCK)
+def test_unwritable_between_refresh_and_lock_changes_nothing(
+    h: Harness,
+    monkeypatch: pytest.MonkeyPatch,
+    change: list[str],
+    fields: dict[str, Any],
+    exit_code: int,
+    error: str,
+) -> None:
+    row = add_lease(h, label={"expires": NOW + 1800})
+    edit_after_refresh(h, monkeypatch, "l-0000a001", **fields)
+    code, data = run_json(h, "extend", "l-0000a001", *change)
+    assert (code, data["error"]) == (exit_code, error)
+    assert label_of(h, row.id).expires == NOW + 1800
+    assert h.box.state(row.id).clock == NOW + 1800
+    assert [c for c in h.provider.calls if c[0] == "set_label"] == []
+    assert h.box.clock_writes == []
+    assert "clock_file" not in cached(h, "l-0000a001").guard_missing
+
+
 # Bulk.
 
 
@@ -458,6 +508,36 @@ def test_bulk_release_between_refresh_and_lock_is_expired(
     assert label_of(h, b.id).expires == NOW + 600
     assert [c[1][0] for c in h.provider.calls if c[0] == "set_label"] == [a.id]
     assert h.box.clock_writes == [(a.id, NOW + 2400)]
+
+
+@pytest.mark.parametrize(
+    ("change", "expires"), [(["--by", "30m"], NOW + 3600), (["--to", "10m"], NOW + 600)],
+    ids=["by", "to"],
+)
+@pytest.mark.parametrize(("fields", "exit_code", "error"), UNWRITABLE_UNDER_LOCK)
+def test_bulk_unwritable_between_refresh_and_lock_changes_nothing(
+    h: Harness,
+    monkeypatch: pytest.MonkeyPatch,
+    change: list[str],
+    expires: int,
+    fields: dict[str, Any],
+    exit_code: int,
+    error: str,
+) -> None:
+    a = add_lease(h, "l-0000a001", label={"group": "exp", "expires": NOW + 1800})
+    b = add_lease(h, "l-0000a002", label={"group": "exp", "expires": NOW + 1800})
+    edit_after_refresh(h, monkeypatch, "l-0000a002", **fields)
+    code, data = run_json(h, "extend", "--group", "exp", *change)
+    assert code == exit_code
+    results = {r["lease"]: r for r in data["results"]}
+    assert results["l-0000a001"]["ok"] is True
+    assert (results["l-0000a002"]["ok"], results["l-0000a002"]["error"]) == (False, error)
+    assert label_of(h, a.id).expires == expires
+    assert label_of(h, b.id).expires == NOW + 1800
+    assert h.box.state(b.id).clock == NOW + 1800
+    assert [c[1][0] for c in h.provider.calls if c[0] == "set_label"] == [a.id]
+    assert h.box.clock_writes == [(a.id, expires)]
+    assert "clock_file" not in cached(h, "l-0000a002").guard_missing
 
 
 def test_bulk_budget_is_atomic(h: Harness) -> None:
