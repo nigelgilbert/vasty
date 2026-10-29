@@ -9,7 +9,10 @@ Every job starts under tmux in `/workspace` and is recorded in the cache. An
 attached run streams the log to stdout in human mode and to stderr in JSON
 mode, then exits with the remote exit code. A lost attach refreshes the
 account: a lease now in history returns `lease_expired`, anything else
-`box_unreachable`, both with exit 2. An exception from the attach prints
+`box_unreachable`, both with exit 2. Any other error from the attach counts
+as a lost attach and leaves the box up with the job running. A reader that
+closed the stream, as in `vasty run ... | head`, gets the stream pointed at
+`/dev/null` so the exit is clean. An exception from the attach prints
 the lease, job id, expiry and recovery commands on stderr, leaves the box up
 and propagates. SIGINT forwards `INT` to the job, waits
 up to 10s for it to exit, and exits 130. After the job exits or SIGINT
@@ -211,9 +214,11 @@ def _attach(
         code = ctx.box.attach_job(target, job.id, out)
     except KeyboardInterrupt:
         return _interrupted(ctx, lease, target, job, release_on_exit, warnings, swept, started_at)
-    except Exception:
+    except Exception as exc:
         _warn_attach_lost(ctx, lease, job)
-        raise
+        if isinstance(exc, BrokenPipeError):
+            discard_stream(out)
+        code = None
     now = ctx.clock.now()
     duration = max(0, now - started_at)
     if code is None:
@@ -228,12 +233,31 @@ def _attach(
     return Outcome(result, exit_code=code, human=_human(result))
 
 
-def _warn_attach_lost(ctx: Context, lease: CachedLease, job: Job) -> None:
-    """Print the lease, job id, expiry and recovery commands on stderr, ignoring a broken stderr."""
-    expires = iso(effective_expiry(lease.label))
+def discard_stream(stream: TextIO) -> None:
+    """Point the file descriptor under `stream` at `/dev/null` so later writes and the exit flush succeed."""
     try:
-        ctx.warn(f"vasty: lost the attach to {job.id} on {lease.lease}; the box stays up until {expires}. "
-                 f"Check it with vasty status {lease.lease}. Release it with vasty release {lease.lease}.")
+        fd = stream.fileno()
+    except (OSError, ValueError):
+        return
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, fd)
+    finally:
+        os.close(devnull)
+
+
+def _warn_attach_lost(ctx: Context, lease: CachedLease, job: Job) -> None:
+    """Print the lease, job id, expiry and recovery commands on stderr."""
+    expires = iso(effective_expiry(lease.label))
+    _warn_quietly(ctx, f"vasty: lost the attach to {job.id} on {lease.lease}; the box stays up until "
+                       f"{expires}. Check it with vasty status {lease.lease}. "
+                       f"Release it with vasty release {lease.lease}.")
+
+
+def _warn_quietly(ctx: Context, message: str) -> None:
+    """Write a warning to stderr and ignore a broken stderr."""
+    try:
+        ctx.warn(message)
     except Exception:
         pass
 
@@ -257,8 +281,8 @@ def _lost(
         if now_lease is None or now_lease.state in HISTORY_STATES:
             error = "lease_expired"
     if error == "box_unreachable":
-        ctx.warn(f"vasty: lost the connection to {lease.lease}; the box stays up. "
-                 f"Check it with vasty status {lease.lease}.")
+        _warn_quietly(ctx, f"vasty: lost the connection to {lease.lease}; the box stays up. "
+                           f"Check it with vasty status {lease.lease}.")
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=None, duration_s=duration, released=False,
         warnings=warnings, swept=swept, error=error,

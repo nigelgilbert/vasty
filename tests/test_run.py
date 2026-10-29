@@ -9,6 +9,7 @@ import pytest
 
 from fakes import NOW, FakeReserve, Harness, add_lease
 from vasty import engine
+from vasty.context import Context
 from vasty.errors import VastyError
 from vasty.models import Job
 from vasty.remote import SshTarget
@@ -489,8 +490,8 @@ def test_auto_run_attach_error_keeps_box_and_prints_recovery(
     harness: Harness, reserve: FakeReserve
 ) -> None:
     harness.box.attach_job = _broken_attach  # type: ignore[method-assign]
-    with pytest.raises(OSError, match="broken pipe"):
-        run(harness, "--", "python", "train.py")
+    code, data, _ = run(harness, "--", "python", "train.py")
+    assert code == 2 and data["error"] == "box_unreachable" and data["exit"] is None
     assert harness.provider.destroyed == []
     assert harness.box.state(1001).jobs["j-1"].state == "running"
     assert harness.last_ctx is not None
@@ -507,24 +508,21 @@ def test_auto_run_attach_error_survives_broken_stderr(
 ) -> None:
     def attach(target: SshTarget, job_id: str, out: TextIO) -> int | None:
         assert harness.last_ctx is not None
-        harness.last_ctx.stderr.close()
+        _break_stderr(harness.last_ctx)
         raise OSError("broken pipe")
 
     harness.box.attach_job = attach  # type: ignore[method-assign]
-    with pytest.raises(OSError, match="broken pipe"):
-        run(harness, "--", "python", "train.py")
+    code, data, _ = run(harness, "--", "python", "train.py")
+    assert code == 2 and data["error"] == "box_unreachable"
     assert harness.provider.destroyed == []
 
 
 def test_attach_error_reports_sweep_on_stderr(harness: Harness, reserve: FakeReserve) -> None:
     add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
     harness.box.attach_job = _broken_attach  # type: ignore[method-assign]
-    with pytest.raises(OSError, match="broken pipe"):
-        run(harness, "--", "python", "train.py")
-    assert harness.last_ctx is not None
-    err = harness.last_ctx.stderr
-    assert isinstance(err, io.StringIO)
-    assert "vasty: SWEPT  l-0000a009 old" in err.getvalue()
+    code, data, _ = run(harness, "--", "python", "train.py")
+    assert code == 2 and data["error"] == "box_unreachable"
+    assert [(s["lease"], s["ok"]) for s in data["swept"]] == [("l-0000a009", True)]
 
 
 def test_attach_error_with_sweep_survives_broken_stderr(
@@ -534,12 +532,25 @@ def test_attach_error_with_sweep_survives_broken_stderr(
 
     def attach(target: SshTarget, job_id: str, out: TextIO) -> int | None:
         assert harness.last_ctx is not None
-        harness.last_ctx.stderr.close()
+        _break_stderr(harness.last_ctx)
         raise OSError("broken pipe")
 
     harness.box.attach_job = attach  # type: ignore[method-assign]
-    with pytest.raises(OSError, match="broken pipe"):
-        run(harness, "--", "python", "train.py")
+    code, data, _ = run(harness, "--", "python", "train.py")
+    assert code == 2 and data["error"] == "box_unreachable"
+    assert [(s["lease"], s["ok"]) for s in data["swept"]] == [("l-0000a009", True)]
+    assert harness.provider.destroyed == [1001]
+
+
+def _break_stderr(ctx: Context) -> None:
+    """Make every later write to the context's stderr raise, as a closed pipe would."""
+    err = ctx.stderr
+    assert isinstance(err, io.StringIO)
+
+    def write(text: str) -> int:
+        raise OSError("broken pipe")
+
+    err.write = write  # type: ignore[method-assign]
 
 
 def test_auto_run_reports_box_the_release_refresh_swept_as_released(

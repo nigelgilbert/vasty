@@ -473,6 +473,18 @@ def test_custom_image_installs_python3_venv_when_python_lacks_it(
         assert not (box.tmp / "apt.log").exists()
 
 
+def test_custom_image_without_apt_skips_python3_venv(box: Box) -> None:
+    stubs = box.tmp / "stubs"
+    stubs.mkdir()
+    write_exe(stubs / "python3", "#!/bin/sh\nexit 1\n")
+    essentials = (("python3", "python3"),)
+    box.run(box.payload(custom=True, apt=str(box.tmp / "no-apt"), essentials=essentials),
+            env={"PATH": f"{stubs}:{os.environ['PATH']}"})
+    unsupported = box.root / "unsupported"
+    words = unsupported.read_text().split() if unsupported.exists() else []
+    assert "apt-get" not in words
+
+
 def test_custom_image_without_apt_is_unsupported(box: Box) -> None:
     essentials = (("vasty-missing-tool", "vasty-pkg"),)
     box.run(box.payload(custom=True, apt=str(box.tmp / "no-apt"), essentials=essentials))

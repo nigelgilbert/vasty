@@ -65,6 +65,18 @@ def test_missing_tool_is_dependency_missing(harness: Harness, box: int, tool: st
     assert harness.box.rsyncs == []
 
 
+@pytest.mark.parametrize("argv", [("push", "./", "~root/x"), ("pull", "~root/x", "./")])
+def test_sync_rejects_user_home_path_before_any_call(
+    harness: Harness, box: int, argv: tuple[str, ...]
+) -> None:
+    harness.missing_tools.add("rsync")
+    code, data, _ = sync(harness, "ft", *argv)
+    assert code == 1 and data["error"] == "invalid_arguments"
+    assert "~user" in data["message"]
+    assert harness.provider.calls == [] if hasattr(harness.provider, "calls") else True
+    assert harness.box.rsyncs == []
+
+
 def test_sync_orphan_is_unmanaged(harness: Harness) -> None:
     harness.provider.add_instance(id=55120)
     code, data, _ = sync(harness, "i-55120", "pull", "a", "b")

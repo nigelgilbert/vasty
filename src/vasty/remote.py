@@ -365,6 +365,12 @@ def parse_probe(stdout: str, label_expires: int | None, root: str) -> ProbeResul
     )
 
 
+def check_remote_path(path: str) -> None:
+    """Raise `invalid_arguments` for a `~user` remote path."""
+    if path.startswith("~") and path != "~" and not path.startswith("~/"):
+        raise invalid(f"Remote path {path} uses ~user.", "Use an absolute path or ~/.")
+
+
 class SshBox:
     """`BoxAccess` over the local `ssh` and `rsync` binaries.
 
@@ -710,11 +716,10 @@ class SshBox:
         remote paths in the login user's home. Without `-s` the path is
         shell-quoted. Raise `invalid_arguments` for a `~user` path.
         """
+        check_remote_path(path)
         resolved = self.remote_path(path)
         if resolved == "~" or resolved.startswith("~/"):
             resolved = "." + resolved[1:]
-        if resolved.startswith("~"):
-            raise invalid(f"Remote path {path} uses ~user.", "Use an absolute path or ~/.")
         if protect:
             return resolved
         return shlex.quote(resolved)

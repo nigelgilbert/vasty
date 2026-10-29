@@ -17,9 +17,11 @@ from vasty.commands._common import DEFAULT_EXCLUDES, lease_warnings, pick_lease,
 from vasty.context import Context
 from vasty.errors import VastyError
 from vasty.models import SyncResult
+from vasty.remote import check_remote_path
 
 
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
+    check_remote_path(args.dest if args.direction == "push" else args.src)
     require_tools(ctx, "ssh", "rsync")
     snap = engine.refresh(ctx)
     lease = pick_lease(ctx, snap, args.lease)
