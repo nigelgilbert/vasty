@@ -1,11 +1,13 @@
 """`rig tag` (spec §4.5, §8.0, §5.2).
 
 On a lease, `tag` rewrites `name`, `group` and `owner` in the label and keeps
-unknown fields and the clock. Every target is checked for name conflicts
-before the first write. On an orphan, `tag` writes a new `rig:` label with
-`expires = now + ttl`, then attaches the SSH key and runs the adoption script
-over SSH. The label stays when a later step fails; the lease then shows
-`guard: partial` and later networked commands retry the missing steps.
+unknown fields and the clock. Before the first write, `tag` checks every
+target whose name or owner changes for name conflicts and formats every new
+label. On an orphan, `tag` writes a new `rig:` label with `expires = now + ttl`
+and `miss` listing every guard layer, then attaches the SSH key and runs the
+adoption script over SSH. The label stays when a later step fails; the lease
+then shows `guard: partial` and later networked commands retry the missing
+steps (see `engine`).
 """
 
 from __future__ import annotations
@@ -148,7 +150,13 @@ def update(
                 "Run rig status to list active leases.",
             )
     planned = {lease.lease: relabel(lease.label, setters) for lease in leases}
-    check_names(snap, planned)
+    current = {lease.lease: lease.label for lease in leases}
+    check_names(snap, {
+        lease_id: label for lease_id, label in planned.items()
+        if (label.name, label.owner) != (current[lease_id].name, current[lease_id].owner)
+    })
+    for label in planned.values():
+        labels.format_label(label)
     written: list[str] = []
     for lease in leases:
         label = planned[lease.lease]
@@ -204,6 +212,7 @@ def adopt(
     label = Label(
         lease=lease_id, owner=owner, created=now, ttl=ttl,
         name=setters.name or None, group=setters.group or None, expires=now + ttl,
+        miss=list(GUARD_LAYERS),
     )
     check_names(snap, {lease_id: label})
     text = labels.format_label(label)
@@ -227,6 +236,7 @@ def adopt(
         lease.reachable_at = now
         if (row.actual_status or "").strip().lower() == "running":
             lease.state = "running"
+        _record_miss(ctx, lease)
     except (RigError, OSError) as err:
         lease.last_provider_error = str(err)
     finally:
@@ -249,6 +259,15 @@ def _guard_steps(ctx: Context, lease: CachedLease) -> None:
     missing = ctx.box.adopt(engine.ssh_target(lease), effective_expiry(lease.label))
     present = set(missing)
     lease.guard_missing = [layer for layer in GUARD_LAYERS if layer in present]
+
+
+def _record_miss(ctx: Context, lease: CachedLease) -> None:
+    """Write the layers the adoption script left missing to the label's `miss`."""
+    if lease.guard_missing == lease.label.miss:
+        return
+    label = dataclasses.replace(lease.label, miss=list(lease.guard_missing))
+    if engine.write_label(ctx, lease.instance_id, lease.label.expires, label):
+        lease.label = label
 
 
 def _budget_warnings(ctx: Context, snap: engine.Snapshot, extra: Decimal) -> list[WarningItem]:

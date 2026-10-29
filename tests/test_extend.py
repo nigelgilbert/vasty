@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from fakes import NOW, Harness, add_lease
+from fakes import NOW, Harness, add_lease, lease_label
 from rig.errors import RigError
 from rig.labels import parse
 from rig.models import Label
@@ -244,6 +244,22 @@ def test_label_moved_since_read_aborts(h: Harness, monkeypatch: pytest.MonkeyPat
 
 
 # Refusals.
+
+
+def test_label_over_limit_is_invalid_before_any_write(h: Harness) -> None:
+    from rig import engine
+    from rig.commands import extend
+
+    base = len(lease_label(expires=None, extra={"note": ""}))
+    row = add_lease(h, label={"expires": None, "extra": {"note": "x" * (1020 - base)}})
+    ctx = h.context()
+    lease = engine.refresh(ctx, probe=False).leases["l-0000a001"]
+    with pytest.raises(RigError) as exc:
+        extend.apply(ctx, lease, NOW + 7200)
+    assert exc.value.code == "invalid_arguments"
+    assert h.box.clock_writes == []
+    assert [c for c in h.provider.calls if c[0] == "set_label"] == []
+    assert label_of(h, row.id).expires is None
 
 
 def test_history_lease_is_expired(h: Harness) -> None:

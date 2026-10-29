@@ -501,6 +501,103 @@ def test_adopted_lease_retries_guard_steps(harness: Harness) -> None:
     assert label_of(harness, row.id).miss == []
 
 
+PUB = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample test@host"
+ALL_LAYERS = ["watchdog", "destroy_key", "clock_file"]
+
+
+def add_key(harness: Harness) -> None:
+    ssh = harness.home / ".ssh"
+    ssh.mkdir()
+    (ssh / "id_ed25519").write_text("PRIVATE\n")
+    (ssh / "id_ed25519.pub").write_text(PUB + "\n")
+
+
+def adopted_orphan(harness: Harness, reachable: bool) -> Instance:
+    """Add a row with the label `tag` writes before its guard steps, and no cache entry."""
+    label = lease_label("l-abababab", created=NOW, ttl=1800, miss=list(ALL_LAYERS))
+    row = harness.provider.add_instance(id=55120, label=label)
+    if reachable:
+        box = harness.box.state(row.id)
+        box.startup_started, box.startup_exit = False, None
+    return row
+
+
+def test_failed_probe_retries_key_attach_on_main_thread_with_backoff(harness: Harness) -> None:
+    import threading
+
+    add_key(harness)
+    row = adopted_orphan(harness, reachable=False)
+    threads: list[threading.Thread] = []
+    real_attach = harness.provider.attach_ssh_key
+
+    def attach(public_key: str, instance_id: int | None = None) -> None:
+        threads.append(threading.current_thread())
+        real_attach(public_key, instance_id)
+
+    harness.provider.attach_ssh_key = attach  # type: ignore[method-assign]
+    counts = []
+    for step in (0, 0, 5, 5, 5):
+        harness.time.advance(step)
+        refresh(harness)
+        counts.append(len(harness.provider.attached))
+    assert counts == [1, 1, 2, 2, 3]
+    assert harness.provider.attached[0] == (PUB, row.id)
+    assert threads == [threading.main_thread()] * 3
+    assert harness.box.adopts == []
+
+
+def test_failed_key_attach_records_the_error(harness: Harness) -> None:
+    add_key(harness)
+    adopted_orphan(harness, reachable=False)
+    harness.provider.fail["attach_ssh_key"] = RigError("provider_error", "boom", "Run rig status.")
+    lease = refresh(harness).leases["l-abababab"]
+    assert (lease.key_attempts, lease.key_attach_at) == (1, NOW)
+    assert lease.last_provider_error == "key attach failed: provider_error"
+
+
+def test_successful_probe_reruns_adoption_and_resets_backoff(harness: Harness) -> None:
+    add_key(harness)
+    row = adopted_orphan(harness, reachable=False)
+    refresh(harness)
+    box = harness.box.state(row.id)
+    box.startup_started, box.startup_exit = False, None
+    lease = refresh(harness).leases["l-abababab"]
+    assert harness.box.adopts == [row.id]
+    assert (lease.adopted, lease.guard_missing, lease.key_attempts) == (True, [], 0)
+    assert label_of(harness, row.id).miss == []
+
+
+def test_failed_adoption_rerun_keeps_layers_in_label(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rig.remote import BoxUnreachableError, SshTarget
+
+    row = adopted_orphan(harness, reachable=True)
+
+    def fail(target: SshTarget, expires: int) -> list[str]:
+        raise BoxUnreachableError("adopt failed")
+
+    monkeypatch.setattr(harness.box, "adopt", fail)
+    lease = refresh(harness).leases["l-abababab"]
+    assert label_of(harness, row.id).miss == ["watchdog", "destroy_key"]
+    assert lease.adopted is True
+
+
+def test_reserve_lease_with_missing_layers_skips_adoption_retries(harness: Harness) -> None:
+    add_key(harness)
+    row = add_lease(harness)
+    box = harness.box.state(row.id)
+    box.guard_missing = ["destroy_key"]
+    refresh(harness)
+    assert label_of(harness, row.id).miss == ["destroy_key"]
+    refresh(harness)
+    box.reachable = False
+    harness.time.advance(60)
+    refresh(harness)
+    assert harness.box.adopts == []
+    assert harness.provider.attached == []
+
+
 # SSH endpoint.
 
 

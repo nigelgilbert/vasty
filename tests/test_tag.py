@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from fakes import NOW, Harness, add_lease
+from fakes import NOW, Harness, add_lease, lease_label
 from rig.errors import RigError
 from rig.labels import parse
 from rig.models import Label
@@ -135,6 +135,46 @@ def test_bulk_set_owner_conflict_writes_nothing(h: Harness) -> None:
     assert label_of(h, a.id).owner == "claude"
 
 
+def test_unchanged_shared_name_is_not_a_conflict(h: Harness) -> None:
+    a = add_lease(h, "l-0000a001", label={"name": "ft"})
+    add_lease(h, "l-0000a002", label={"name": "ft"})
+    code, data = run_json(h, "tag", "l-0000a001", "--set-group", "g")
+    assert code == 0, data
+    assert label_of(h, a.id).group == "g"
+
+
+def test_bulk_group_change_keeps_shared_names(h: Harness) -> None:
+    a = add_lease(h, "l-0000a001", label={"name": "ft", "group": "old"})
+    b = add_lease(h, "l-0000a002", label={"name": "ft", "group": "old"})
+    code, data = run_json(h, "tag", "--group", "old", "--set-group", "new")
+    assert code == 0, data
+    assert (label_of(h, a.id).group, label_of(h, b.id).group) == ("new", "new")
+
+
+def test_rename_onto_an_unchanged_lease_name_conflicts(h: Harness) -> None:
+    add_lease(h, "l-0000a001", label={"name": "ft", "group": "g"})
+    row = add_lease(h, "l-0000a002", label={"name": "other", "group": "g"})
+    code, data = run_json(h, "tag", "l-0000a002", "--set-name", "ft")
+    assert (code, data["error"]) == (1, "name_conflict")
+    assert label_of(h, row.id).name == "other"
+
+
+def padded_label(length: int, lease: str, **label: Any) -> dict[str, Any]:
+    """Return `add_lease` label fields whose rendered label is `length` characters."""
+    base = len(lease_label(lease, **label, extra={"note": ""}))
+    return {**label, "extra": {"note": "x" * (length - base)}}
+
+
+def test_label_over_limit_is_invalid_and_writes_nothing(h: Harness) -> None:
+    a = add_lease(h, "l-0000a001", label=padded_label(1000, "l-0000a001", group="g1"))
+    b = add_lease(h, "l-0000a002", label=padded_label(1023, "l-0000a002", group="g1"))
+    assert len(h.provider.instances[b.id].label or "") == 1023
+    code, data = run_json(h, "tag", "--group", "g1", "--set-group", "g12345")
+    assert (code, data["error"]) == (1, "invalid_arguments")
+    assert [c for c in h.provider.calls if c[0] == "set_label"] == []
+    assert (label_of(h, a.id).group, label_of(h, b.id).group) == ("g1", "g1")
+
+
 def test_ttl_on_lease_points_at_extend(h: Harness) -> None:
     add_lease(h)
     code, data = run_json(h, "tag", "l-0000a001", "--ttl", "30m")
@@ -185,6 +225,7 @@ def test_adopt_orphan_writes_label_clock_and_key(h: Harness) -> None:
     assert (label.lease, label.owner, label.created, label.ttl, label.expires) == (
         "l-abababab", "claude", NOW, 1800, NOW + 1800)
     assert h.box.state(iid).clock == NOW + 1800
+    assert label.miss == []
     assert h.provider.attached == [(PUB, iid)]
     lease = h.context().cache.load().leases["l-abababab"]
     assert lease.adopted is True
@@ -226,6 +267,7 @@ def test_adopt_partial_guard_keeps_label(h: Harness) -> None:
     assert [w["code"] for w in data["warnings"]] == ["guard_partial"]
     assert data["warnings"][0]["fix"] == "rig release l-abababab"
     assert label_of(h, iid).lease == "l-abababab"
+    assert label_of(h, iid).miss == ["destroy_key"]
 
 
 def test_adopt_unreachable_box_keeps_label_with_partial_guard(h: Harness) -> None:
@@ -237,6 +279,7 @@ def test_adopt_unreachable_box_keeps_label_with_partial_guard(h: Harness) -> Non
     assert entry["guard_missing"] == ["watchdog", "destroy_key", "clock_file"]
     assert "guard_partial" in [w["code"] for w in data["warnings"]]
     assert label_of(h, iid).expires == NOW + 1800
+    assert label_of(h, iid).miss == ["watchdog", "destroy_key", "clock_file"]
     lease = h.context().cache.load().leases["l-abababab"]
     assert lease.adopted is True
 
@@ -249,6 +292,42 @@ def test_adopt_retried_by_later_probe(h: Harness) -> None:
     h.box.state(iid).adopt_missing = []
     _, data = run_json(h, "status", "l-abababab")
     assert data["leases"][0]["guard"] == "full"
+
+
+def test_failed_key_attach_is_retried_and_adoption_finishes(h: Harness) -> None:
+    add_key(h)
+    iid = orphan(h, reachable=False)
+    h.provider.fail["attach_ssh_key"] = RigError("provider_error", "boom", "Run rig status.")
+    code, data = run_json(h, "tag", "i-55120", "--ttl", "30m")
+    assert code == 0
+    assert data["results"][0]["guard"] == "partial"
+    assert h.provider.attached == []
+    run_json(h, "status")
+    assert h.provider.attached == [(PUB, iid)]
+    box = h.box.state(iid)
+    box.startup_started, box.startup_exit = False, None
+    h.time.advance(5)
+    _, data = run_json(h, "status", "l-abababab")
+    assert data["leases"][0]["guard"] == "full"
+    assert h.box.adopts == [iid]
+    assert label_of(h, iid).miss == []
+
+
+def test_adoption_retry_survives_cache_loss(h: Harness) -> None:
+    iid = orphan(h, reachable=False)
+    run_json(h, "tag", "i-55120", "--ttl", "30m")
+    ctx = h.context()
+    data = ctx.cache.load()
+    data.leases.clear()
+    ctx.cache.save(data)
+    box = h.box.state(iid)
+    box.startup_started, box.startup_exit = False, None
+    _, status = run_json(h, "status", "l-abababab")
+    assert status["leases"][0]["guard"] == "full"
+    assert h.box.adopts == [iid]
+    assert box.clock == NOW + 1800
+    assert label_of(h, iid).miss == []
+    assert h.context().cache.load().leases["l-abababab"].adopted is True
 
 
 def test_adopt_never_refused_by_budget(h: Harness) -> None:

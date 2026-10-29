@@ -220,6 +220,8 @@ class FakeBox:
     rsync_exit: int = 0
     interactive_calls: list[tuple[int, list[str] | None, list[str]]] = field(default_factory=list)
     clock_writes: list[tuple[int, int]] = field(default_factory=list)
+    adopts: list[int] = field(default_factory=list)
+    """Instance ids `adopt` ran on, in call order."""
 
     def state(self, instance_id: int) -> BoxState:
         return self.boxes.setdefault(instance_id, BoxState())
@@ -262,7 +264,11 @@ class FakeBox:
 
     def adopt(self, target: SshTarget, expires: int) -> list[str]:
         box = self._get(target)
+        self.adopts.append(target.instance_id)
         box.clock = expires
+        box.startup_started = True
+        if box.startup_exit is None:
+            box.startup_exit = 0
         box.guard_missing = list(box.adopt_missing)
         return list(box.adopt_missing)
 

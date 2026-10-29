@@ -187,7 +187,11 @@ class CachedLease:
     last_provider_error: str | None = None
     startup_interrupted: bool = False
     adopted: bool = False
-    """Set by `tag` on an adopted orphan; networked commands retry its missing guard steps."""
+    """Set by `tag` on an adopted orphan and by a probe that reruns the adoption script."""
+    key_attempts: int = 0
+    """Key attach retries sent since the lease last answered SSH; sets the retry backoff."""
+    key_attach_at: int | None = None
+    """When the last key attach retry was sent."""
     unsupported: list[str] = field(default_factory=list)
     """What the last probe found missing from a custom image; non-empty maps to `image_unsupported`."""
 

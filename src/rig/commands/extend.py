@@ -18,7 +18,7 @@ import argparse
 import dataclasses
 import shlex
 
-from rig import budget, engine, views
+from rig import budget, engine, labels, views
 from rig.cli import Outcome
 from rig.context import Context
 from rig.errors import EXIT_CODES, RigError, invalid
@@ -129,10 +129,13 @@ def _write_clock(ctx: Context, lease: CachedLease, expires: int) -> None:
         raise RigError("box_unreachable", f"Clock write failed: {exc}.", "Run rig status.") from exc
 
 
-def _write_label(ctx: Context, lease: CachedLease, read_expires: int | None, expires: int) -> None:
-    label = dataclasses.replace(
+def _next_label(lease: CachedLease, expires: int) -> Label:
+    return dataclasses.replace(
         lease.label, expires=expires, miss=[m for m in lease.label.miss if m != "clock_file"]
     )
+
+
+def _write_label(ctx: Context, lease: CachedLease, read_expires: int | None, label: Label) -> None:
     if not engine.write_label(ctx, lease.instance_id, read_expires, label):
         raise RigError(
             "provider_error",
@@ -145,21 +148,24 @@ def _write_label(ctx: Context, lease: CachedLease, read_expires: int | None, exp
 def apply(ctx: Context, lease: CachedLease, expires: int) -> None:
     """Write `expires` to the clock file and the label in the §6 order and update the cache.
 
-    Raise `box_unreachable` when the first write is a failed clock write, and
+    Raise `invalid_arguments` before any write when the new label is too long,
+    `box_unreachable` when the first write is a failed clock write, and
     `provider_error` when the label write fails or a second write fails.
     """
     old_label = lease.label
+    new_label = _next_label(lease, expires)
+    labels.format_label(new_label)
     old = effective_expiry(old_label)
     lengthen = expires >= old
     try:
         if lengthen:
             _write_clock(ctx, lease, expires)
             try:
-                _write_label(ctx, lease, old_label.expires, expires)
+                _write_label(ctx, lease, old_label.expires, new_label)
             except RigError as err:
                 _restore_clock(ctx, lease, old, expires, err)
         else:
-            _write_label(ctx, lease, old_label.expires, expires)
+            _write_label(ctx, lease, old_label.expires, new_label)
             try:
                 _write_clock(ctx, lease, expires)
             except RigError as err:

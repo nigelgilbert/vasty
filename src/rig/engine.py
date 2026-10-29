@@ -30,6 +30,18 @@ destroy and a list call still shows.
 - The probe skips leases with `destroy_pending`. `release` on a history lease
   whose row is still listed sends the destroy again and returns
   `provider_error` when the call fails.
+
+Adoption retries (spec §4.5). `tag` writes `miss` with every guard layer when
+it adopts an orphan. A lease whose label `miss` lists `watchdog` or
+`destroy_key` gets the missing adoption steps again.
+
+- A failed probe retries `attach_ssh_key` on the main thread after the probe
+  pool, while the cache records no SSH answer for the lease. The wait between
+  calls follows `retry_delay`.
+- A successful probe reruns the adoption script when the box is an adopted
+  orphan: the cache marks it `adopted`, or the box lacks `startup.started`.
+  `onstart` writes that marker on every box `reserve` makes, so the script
+  skips `reserve` boxes.
 """
 
 from __future__ import annotations
@@ -69,6 +81,7 @@ MAX_PROBE_THREADS = 16
 ZERO = Decimal("0")
 DESTROY_RETRY_BASE_S = 5
 DESTROY_RETRY_CAP_S = 60
+ADOPT_LAYERS = ("watchdog", "destroy_key")
 BUDGET_HINT = "Run rig status to see today's spend, then release a lease or shorten the TTL."
 
 
@@ -281,7 +294,7 @@ def _clear_destroy(lease: CachedLease) -> None:
 
 
 def retry_delay(attempts: int) -> int:
-    """Return the wait after `attempts` destroy calls: 5s doubling per call, capped at 60s."""
+    """Return the wait after `attempts` retried calls: 5s doubling per call, capped at 60s."""
     if attempts <= 0:
         return 0
     return min(DESTROY_RETRY_CAP_S, DESTROY_RETRY_BASE_S << (attempts - 1))
@@ -369,7 +382,19 @@ def _to_history(lease: CachedLease, now: int) -> None:
 @dataclass
 class _Probed:
     result: ProbeResult | None
+    adopt_ran: bool = False
     adopt_missing: list[str] | None = None
+
+
+def _adoption_listed(names: list[str]) -> bool:
+    return any(layer in ADOPT_LAYERS for layer in names)
+
+
+def _reruns_adoption(lease: CachedLease, result: ProbeResult) -> bool:
+    """Return True when this probe reruns the adoption script on the box."""
+    if not _adoption_listed(lease.label.miss + result.guard_missing):
+        return False
+    return lease.adopted or not result.startup_started
 
 
 def _probe_one(ctx: Context, lease: CachedLease) -> _Probed:
@@ -381,12 +406,36 @@ def _probe_one(ctx: Context, lease: CachedLease) -> _Probed:
     if result.startup_exit == -1:
         result = dataclasses.replace(result, startup_interrupted=True)
     probed = _Probed(result)
-    if lease.adopted and _layers(result.guard_missing):
+    if _reruns_adoption(lease, result):
+        probed.adopt_ran = True
         try:
             probed.adopt_missing = _layers(ctx.box.adopt(target, effective_expiry(lease.label)))
         except (RigError, OSError):
             pass
     return probed
+
+
+def _key_retry_due(lease: CachedLease, now: int) -> bool:
+    """Return True when a failed probe retries the SSH key attach for this lease."""
+    if lease.reachable_at is not None or not _adoption_listed(lease.label.miss):
+        return False
+    if lease.key_attach_at is None:
+        return True
+    return now - lease.key_attach_at >= retry_delay(lease.key_attempts)
+
+
+def _retry_key(ctx: Context, lease: CachedLease, now: int) -> None:
+    from rig.commands.reserve import public_key
+
+    key = public_key(ctx)
+    if key is None:
+        return
+    lease.key_attempts += 1
+    lease.key_attach_at = now
+    try:
+        ctx.provider.attach_ssh_key(key, lease.instance_id)
+    except RigError as err:
+        lease.last_provider_error = f"key attach failed: {err.code}"
 
 
 def _layers(names: list[str]) -> list[str]:
@@ -409,14 +458,23 @@ def _apply_probe(ctx: Context, lease: CachedLease, probed: _Probed, now: int) ->
         lease.guard_missing = _layers(lease.guard_missing + lease.label.miss)
         return
     lease.reachable_at = now
+    lease.key_attempts = 0
+    lease.key_attach_at = None
     lease.unsupported = list(result.unsupported)
     lease.startup_started = result.startup_started
     lease.startup_interrupted = result.startup_interrupted
     lease.startup_exit = None if result.startup_exit == -1 else result.startup_exit
     lease.jobs = _merge_jobs(lease.jobs, result.jobs)
-    missing = probed.adopt_missing if probed.adopt_missing is not None else _layers(result.guard_missing)
-    lease.guard_missing = missing
     label = lease.label
+    if probed.adopt_missing is not None:
+        missing = probed.adopt_missing
+    elif probed.adopt_ran:
+        missing = _layers(result.guard_missing + [m for m in label.miss if m in ADOPT_LAYERS])
+    else:
+        missing = _layers(result.guard_missing)
+    if probed.adopt_ran:
+        lease.adopted = True
+    lease.guard_missing = missing
     wanted = dataclasses.replace(label, miss=list(missing))
     if label.expires is None and result.clock_expires is not None:
         wanted.expires = result.clock_expires
@@ -440,6 +498,8 @@ def _probe_all(ctx: Context, leases: list[CachedLease], now: int) -> None:
     with ThreadPoolExecutor(max_workers=min(MAX_PROBE_THREADS, len(leases))) as pool:
         results = list(pool.map(lambda lease: _probe_one(ctx, lease), leases))
     for lease, probed in zip(leases, results):
+        if probed.result is None and _key_retry_due(lease, now):
+            _retry_key(ctx, lease, now)
         _apply_probe(ctx, lease, probed, now)
 
 
