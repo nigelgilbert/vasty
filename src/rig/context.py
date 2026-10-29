@@ -22,6 +22,7 @@ from rig.errors import RigError
 if TYPE_CHECKING:
     from rig.cache import Cache
     from rig.config import Settings
+    from rig.models import SweptEntry
     from rig.provider import Provider
     from rig.remote import BoxAccess
     from rig.timeutil import Clock
@@ -64,6 +65,8 @@ class Context:
     http_get: Callable[[str, Mapping[str, str], float], int] = default_http_get
     provider_factory: Callable[[Context], Provider] | None = None
     box_factory: Callable[[Context], BoxAccess] | None = None
+    # Collect the `swept` entries of every refresh so a failing command can report them.
+    swept: list[SweptEntry] = field(default_factory=list)
     _settings: Settings | None = None
     _provider: Provider | None = None
     _box: BoxAccess | None = None

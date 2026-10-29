@@ -298,6 +298,15 @@ def emit_error(ctx_mode: str, stdout: Any, stderr: Any, err: RigError) -> None:
         print(f"hint: {err.hint}", file=stderr)
 
 
+def _report_swept(ctx: Context) -> None:
+    """Write one `rig: ` line to stderr for each entry the command's refreshes swept."""
+    from rig.commands._common import merge_swept
+    from rig.commands.status import swept_lines
+
+    for line in swept_lines(merge_swept(ctx.swept)):
+        print(f"rig: {line}", file=ctx.stderr)
+
+
 def _guess_mode(argv: Sequence[str], tty: bool) -> str:
     head, _ = split_command(argv)
     if "--json" in head:
@@ -327,12 +336,17 @@ def run(
         return outcome.exit_code
     except RigError as err:
         if ctx is not None:
+            _report_swept(ctx)
             emit_error(ctx.mode, ctx.stdout, ctx.stderr, err)
         else:
             out = stdout if stdout is not None else sys.stdout
             errs = stderr if stderr is not None else sys.stderr
             emit_error(_guess_mode(argv, out.isatty()), out, errs, err)
         return err.exit_code
+    except BaseException:
+        if ctx is not None:
+            _report_swept(ctx)
+        raise
 
 
 def main(argv: Sequence[str] | None = None) -> int:

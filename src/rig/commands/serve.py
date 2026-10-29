@@ -27,6 +27,7 @@ from rig.cli import Outcome
 from rig.commands._common import (
     finish_job,
     lease_warnings,
+    merge_swept,
     merge_warnings,
     next_job_id,
     pick_lease,
@@ -130,6 +131,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
 
     snap = engine.refresh(ctx)
     warnings: list[WarningItem] = []
+    swept = list(snap.swept)
     created = False
     if auto:
         from rig.commands import reserve
@@ -138,6 +140,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         reserved = reserve.reserve_lease(ctx, args, snap, ttl=auto_ttl(ctx), wait=True)
         lease = reserved.lease
         warnings = list(reserved.result.warnings)
+        swept = merge_swept(swept, reserved.result.swept)
         created = not reserved.result.reused
     else:
         lease = pick_lease(ctx, snap, args.on)
@@ -150,6 +153,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
 
             release_quietly(ctx, lease)
         raise
+    result.swept = swept
     result.warnings = merge_warnings(warnings, lease_warnings(ctx, snap, lease, ctx.clock.now()))
     return Outcome(result, human=_human(result))
 
@@ -192,7 +196,7 @@ def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Pl
         api_key=key,
         expires_at=iso(effective_expiry(lease.label)),
         warnings=[],
-        swept=list(snap.swept),
+        swept=[],
     )
 
 

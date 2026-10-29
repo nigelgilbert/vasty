@@ -6,8 +6,9 @@ from typing import Any
 
 import pytest
 
-from fakes import FakeReserve, Harness, add_lease
+from fakes import NOW, FakeReserve, Harness, add_lease
 from rig.commands import serve
+from rig.errors import RigError
 from rig.models import Job
 from rig.remote import BoxUnreachableError, ExecResult, SshTarget
 
@@ -279,6 +280,38 @@ def test_serve_failure_keeps_reused_box(harness: Harness, reserve: FakeReserve, 
     code, data, _ = run_serve(harness, "--model", QWEN, "--name", "ft")
     assert code == 2 and data["error"] == "serve_failed"
     assert harness.provider.destroyed == []
+
+
+@pytest.mark.parametrize("ok", [True, False])
+def test_serve_reports_reserve_wait_sweep(
+    harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch, ok: bool
+) -> None:
+    def wait(ctx: Any, args: Any, snap: Any, *, ttl: int, wait: bool = True) -> Any:
+        add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
+        return reserve(ctx, args, snap, ttl=ttl, wait=wait)
+
+    monkeypatch.setattr("rig.commands.reserve.reserve_lease", wait)
+    if not ok:
+        harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    code, data, _ = run_serve(harness, "--model", QWEN)
+    assert code == 0
+    error = None if ok else "provider_error"
+    assert [(s["lease"], s["name"], s["ok"], s["error"]) for s in data["swept"]] == [
+        ("l-0000a009", "old", ok, error)
+    ]
+    assert (1001 in harness.provider.destroyed) is ok
+
+
+def test_serve_failure_reports_failed_sweep_on_stderr(harness: Harness, box: int) -> None:
+    add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
+    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    harness.box.state(box).exec_results["V="] = ExecResult(1, "", "pip exploded")
+    code, data, err = run_serve(harness, "--on", "ft", "--model", QWEN)
+    assert code == 2 and data["error"] == "serve_failed"
+    assert "swept" not in data
+    assert err.splitlines() == [
+        "rig: SWEPT  l-0000a009 old  expired 2026-10-29T00:59:50Z  destroy failed (provider_error)"
+    ]
 
 
 def test_serve_vllm_pin_parsing() -> None:

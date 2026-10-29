@@ -655,6 +655,7 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
         data.cached_at = now
         data.rebuilt = False
         ctx.cache.save(data)
+        ctx.swept.extend(swept)
         return Snapshot(
             now=now,
             instances=instances,

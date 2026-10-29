@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from fakes import Harness
+from fakes import NOW, Harness, add_lease, make_offer
 from rig.cli import parse
 from rig.context import Context
 from rig.errors import RigError
@@ -91,3 +91,47 @@ def test_status_without_api_key_is_auth_missing(
     assert result["error"] == "auth_missing"
     assert key_env in result["hint"]
     assert harness.http_calls == []
+
+
+# Sweep entries of a failing command.
+
+FAILED_SWEEP = (
+    "rig: SWEPT  l-0000a009 old  expired 2026-10-29T00:59:50Z  destroy failed (provider_error)"
+)
+
+
+def _fail_next_destroy(harness: Harness) -> None:
+    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+
+
+def test_failing_run_reports_failed_sweep_on_stderr(harness: Harness) -> None:
+    add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
+    _fail_next_destroy(harness)
+    code, out, err = harness.run("run", "--on", "nope", "--", "ls")
+    assert code == 1
+    assert json.loads(out)["error"] == "lease_not_found"
+    assert err.splitlines() == [FAILED_SWEEP]
+
+
+def test_failing_command_without_sweep_writes_no_stderr(harness: Harness) -> None:
+    code, out, err = harness.run("run", "--on", "nope", "--", "ls")
+    assert code == 1
+    assert json.loads(out)["error"] == "lease_not_found"
+    assert err == ""
+
+
+def test_reserve_wait_error_reports_failed_sweep_on_stderr(harness: Harness) -> None:
+    from rig.models import CreateRequest, Instance
+
+    def lacking(inst: Instance, request: CreateRequest) -> None:
+        add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
+        harness.box.state(inst.id).unsupported = ["apt-get"]
+
+    harness.provider.covered_through = NOW
+    harness.provider.offers = [make_offer(1)]
+    harness.provider.on_create = lacking
+    _fail_next_destroy(harness)
+    code, out, err = harness.run("reserve", "--image", "alpine:3")
+    assert code == 1
+    assert json.loads(out)["error"] == "image_unsupported"
+    assert FAILED_SWEEP in err.splitlines()
