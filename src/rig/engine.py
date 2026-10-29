@@ -43,8 +43,8 @@ label has none.
   unreadable label returns `provider_error` and changes nothing.
 - `run` releases an auto-reserved box through `release_lease` when the job
   exits or SIGINT arrives, and also when the post-exit save or the SIGINT
-  wait raises. The `run` result's `swept` includes the entries of the
-  reserve wait and the release refresh, one per lease, `ok` and `error`.
+  wait raises. The `run` result's `swept` lists the entries of every refresh
+  the call made.
 - `extend` reloads its targets from `leases.json` under the lock. A target
   with `destroy_pending` returns `lease_expired` and keeps its cache entry.
   Every other target then gets `check_writable` on the reloaded copy: a
