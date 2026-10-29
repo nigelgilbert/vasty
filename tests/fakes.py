@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import io
 import itertools
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Mapping, TextIO
@@ -29,7 +29,7 @@ from rig.models import (
     SshKey,
 )
 from rig.provider import ProviderTimeout
-from rig.remote import BoxUnreachableError, ExecResult, SshTarget
+from rig.remote import BoxUnreachableError, ExecResult, SshTarget, following_job_id
 
 START = 1_793_232_000  # 2026-10-29T00:00:00Z
 NOW = START + 3600  # FakeTime's default start
@@ -265,6 +265,8 @@ class FakeBox:
 
     def start_job(self, target: SshTarget, job: Job, command: str) -> Job:
         box = self._get(target)
+        while job.id in box.jobs and (following := following_job_id(job.id)) is not None:
+            job = replace(job, id=following)
         started = Job(**{**vars(job), "started_at": int(self.time.wall_now), "state": "running",
                          "log_path": f"/workspace/.rig/jobs/{job.id}/log", "pid": 4242})
         box.jobs[job.id] = started

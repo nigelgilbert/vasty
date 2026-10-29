@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -18,14 +19,17 @@ from typing import TextIO
 
 import pytest
 
+import rig.remote as remote_module
 from rig.errors import RigError
 from rig.models import Job
 from rig.remote import (
+    JOB_CLAIM_TRIES,
     BoxUnreachableError,
     ExecResult,
     RunMode,
     SshBox,
     SshTarget,
+    parse_rsync_version,
     probe_script,
     subprocess_runner,
 )
@@ -84,8 +88,14 @@ class LocalRunner:
         return ExecResult(done.returncode, done.stdout, done.stderr)
 
 
-def fake_box(tmp_path: Path, runner: FakeRunner, key: str | None = "~/.ssh/id_ed25519") -> SshBox:
-    return SshBox(key, str(tmp_path / "state" / "known_hosts"), runner=runner)
+def fake_box(
+    tmp_path: Path, runner: FakeRunner, key: str | None = "~/.ssh/id_ed25519",
+    protect_args: bool = True,
+) -> SshBox:
+    return SshBox(
+        key, str(tmp_path / "state" / "known_hosts"), runner=runner,
+        rsync_protect_args=protect_args,
+    )
 
 
 # SSH options and argv.
@@ -196,6 +206,130 @@ def test_rsync_pull_keeps_absolute_paths_and_trailing_slash(tmp_path: Path) -> N
 def test_rsync_returns_its_exit_code(tmp_path: Path) -> None:
     runner = FakeRunner([ExecResult(23, "", "")])
     assert fake_box(tmp_path, runner).rsync(TARGET, True, "a", "b", False, []) == 23
+
+
+@pytest.mark.parametrize(
+    ("dest", "rule"),
+    [
+        ("./", "/.rig/***"),
+        (".", "/.rig/***"),
+        ("/workspace/", "/.rig/***"),
+        ("/workspace", "/.rig/***"),
+        ("/", "/workspace/.rig/***"),
+        ("sub/", None),
+        ("/data/", None),
+        ("~/", None),
+        ("/workspace/.rig/", None),
+    ],
+)
+def test_rsync_push_delete_protects_the_state_dir(
+    tmp_path: Path, dest: str, rule: str | None
+) -> None:
+    argv = fake_box(tmp_path, FakeRunner()).rsync_argv(TARGET, True, "./", dest, True, [".git"])
+    filters = [a for a in argv if a.startswith("--filter=")]
+    if rule is None:
+        assert filters == []
+    else:
+        assert filters == [f"--filter=P {rule}"]
+        assert argv.index(filters[0]) < argv.index("-e")
+
+
+def test_rsync_protects_the_state_dir_only_on_push_with_delete(tmp_path: Path) -> None:
+    box = fake_box(tmp_path, FakeRunner())
+    pushed = box.rsync_argv(TARGET, True, "./", "/workspace/", False, [])
+    pulled = box.rsync_argv(TARGET, False, "/workspace/", "./", True, [])
+    assert not any(a.startswith("--filter=") for a in pushed + pulled)
+
+
+def test_rsync_path_with_a_space_uses_protect_args(tmp_path: Path) -> None:
+    box = fake_box(tmp_path, FakeRunner(), protect_args=True)
+    argv = box.rsync_argv(TARGET, True, "./my src/", "my dir/", False, [])
+    assert argv[3] == "-s"
+    assert argv[-2:] == ["./my src/", "root@198.51.100.7:/workspace/my dir/"]
+    argv = box.rsync_argv(TARGET, False, "~/a b", "./", False, [])
+    assert argv[-2:] == ["root@198.51.100.7:./a b", "./"]
+
+
+def test_rsync_path_with_a_space_is_quoted_on_old_rsync(tmp_path: Path) -> None:
+    box = fake_box(tmp_path, FakeRunner(), protect_args=False)
+    argv = box.rsync_argv(TARGET, True, "./my src/", "my dir/", False, [])
+    assert "-s" not in argv
+    assert argv[-2:] == ["./my src/", "root@198.51.100.7:'/workspace/my dir/'"]
+    pulls = {
+        "/data/out/": "/data/out/",
+        "~": ".",
+        "~/a b/": "'./a b/'",
+        "~bob/a b": "~bob/'a b'",
+        "~bob": "~bob",
+    }
+    for src, remote in pulls.items():
+        argv = box.rsync_argv(TARGET, False, src, "./", False, [])
+        assert argv[-2] == f"root@198.51.100.7:{remote}"
+
+
+@pytest.mark.parametrize(
+    ("version", "protect"), [((3, 2, 7), True), ((3, 0, 0), True), ((2, 6, 9), False), (None, False)]
+)
+def test_rsync_picks_protect_args_from_the_local_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    version: tuple[int, int, int] | None, protect: bool,
+) -> None:
+    calls: list[int] = []
+
+    def fake_version() -> tuple[int, int, int] | None:
+        calls.append(1)
+        return version
+
+    monkeypatch.setattr(remote_module, "local_rsync_version", fake_version)
+    box = SshBox(None, str(tmp_path / "kh"), runner=FakeRunner())
+    for _ in range(2):
+        argv = box.rsync_argv(TARGET, True, "a", "b c", False, [])
+        assert ("-s" in argv) is protect
+    assert calls == [1]
+
+
+def test_parse_rsync_version() -> None:
+    assert parse_rsync_version("rsync  version 3.2.7  protocol version 31\n") == (3, 2, 7)
+    assert parse_rsync_version("rsync  version v3.4.1  protocol version 32\n") == (3, 4, 1)
+    assert parse_rsync_version(
+        "openrsync: protocol version 29\nrsync version 2.6.9 compatible\n"
+    ) == (2, 6, 9)
+    assert parse_rsync_version("rsync version 3.1 protocol\n") == (3, 1, 0)
+    assert parse_rsync_version("") is None
+
+
+@pytest.mark.skipif(shutil.which("rsync") is None, reason="rsync is not on PATH")
+def test_rsync_push_delete_runs_against_a_path_with_a_space(tmp_path: Path) -> None:
+    """Run the real local rsync with an ssh stub that runs the remote command in `sh -c`."""
+    workspace = tmp_path / "box dir" / "workspace"
+    (workspace / ".rig" / "jobs").mkdir(parents=True)
+    (workspace / ".rig" / "clock").write_text("1\n")
+    (workspace / "stale").write_text("old\n")
+    src = tmp_path / "src"
+    (src / "pkg").mkdir(parents=True)
+    (src / "pkg" / "a.py").write_text("print(1)\n")
+    stub = tmp_path / "ssh"
+    stub.write_text(
+        "#!/bin/sh\n"
+        "while [ $# -gt 0 ]; do\n"
+        '  case "$1" in -p|-o|-i|-l) shift 2;; -*) shift;; *) break;; esac\n'
+        "done\n"
+        "shift\n"
+        'exec sh -c "$*"\n'
+    )
+    stub.chmod(0o755)
+    box = SshBox(
+        None, str(tmp_path / "kh"), runner=FakeRunner(), root=f"{workspace}/.rig",
+        workdir=str(workspace),
+    )
+    argv = box.rsync_argv(TARGET, True, f"{src}/", f"{workspace}/", True, [".git"])
+    argv[argv.index("-e") + 1] = str(stub)
+    done = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert (workspace / "pkg" / "a.py").read_text() == "print(1)\n"
+    assert not (workspace / "stale").exists()
+    assert (workspace / ".rig" / "clock").read_text() == "1\n"
+    assert (workspace / ".rig" / "jobs").is_dir()
 
 
 # Probe with a fake runner.
@@ -494,11 +628,48 @@ def test_job_lifecycle(local: LocalBox) -> None:
     assert local.box.log_tail(TARGET, "j-1", 2) == ["out", "err"]
 
 
-def test_start_job_twice_is_refused(local: LocalBox) -> None:
+def test_start_job_claims_the_next_free_id(local: LocalBox) -> None:
+    (local.root / "jobs" / "j-2").mkdir()
     job = Job("j-1", "demo", None, None, "running")
+    assert local.box.start_job(TARGET, job, "true").id == "j-1"
+    again = local.box.start_job(TARGET, job, "true")
+    assert again.id == "j-3"
+    assert again.log_path == f"{local.root}/jobs/j-3/log"
+    assert local.read("jobs/j-3/cmd") == "demo"
+    assert not (local.root / "jobs" / "j-2" / "started").exists()
+
+
+def test_start_job_with_a_taken_custom_id_is_refused(local: LocalBox) -> None:
+    job = Job("custom", "demo", None, None, "running")
     local.box.start_job(TARGET, job, "true")
     with pytest.raises(RigError, match="already exists"):
         local.box.start_job(TARGET, job, "true")
+
+
+def test_start_job_gives_up_after_the_claim_limit(local: LocalBox) -> None:
+    for n in range(1, JOB_CLAIM_TRIES + 1):
+        (local.root / "jobs" / f"j-{n}").mkdir()
+    job = Job("j-1", "demo", None, None, "running")
+    with pytest.raises(RigError, match=f"Job j-{JOB_CLAIM_TRIES} already exists"):
+        local.box.start_job(TARGET, job, "true")
+
+
+def test_start_job_keeps_other_mkdir_failures(local: LocalBox) -> None:
+    (local.root / "jobs").rmdir()
+    (local.root / "jobs").write_text("")
+    job = Job("j-1", "demo", None, None, "running")
+    with pytest.raises(RigError, match="Could not start job j-1") as caught:
+        local.box.start_job(TARGET, job, "true")
+    assert "already exists" not in str(caught.value)
+
+
+def test_start_script_claims_the_job_dir_with_mkdir(tmp_path: Path) -> None:
+    box = fake_box(tmp_path, FakeRunner())
+    script = box.start_script(Job("j-1", "demo", None, None, "running"), "true")
+    lines = script.splitlines()
+    assert lines[1] == "mkdir -p /workspace/.rig/jobs || exit 3"
+    assert lines[2] == 'mkdir "$J" || { [ -e "$J" ] && echo rig_job=exists; exit 3; }'
+    bash_n(script)
 
 
 def test_serve_job_records_kind_and_port(local: LocalBox) -> None:

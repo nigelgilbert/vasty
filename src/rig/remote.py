@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import base64
 import codecs
+import dataclasses
+import functools
 import os
 import posixpath
 import re
@@ -65,7 +67,11 @@ class BoxAccess(Protocol):
         ...
 
     def start_job(self, target: SshTarget, job: Job, command: str) -> Job:
-        """Start a job under tmux in `/workspace`, write its record and return it."""
+        """Start a job under tmux in `/workspace`, write its record and return it.
+
+        When another client holds the `j-N` id on the box, claim the next free
+        id. The returned job carries the id it started under.
+        """
         ...
 
     def attach_job(self, target: SshTarget, job_id: str, out: TextIO) -> int | None:
@@ -153,7 +159,11 @@ def subprocess_runner(
 
 _JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SIGNAL = re.compile(r"^(?:[A-Z][A-Z0-9+-]*|[0-9]{1,2})$")
+_JOB_NUMBER = re.compile(r"j-([0-9]+)")
+_RSYNC_VERSION = re.compile(r"version\s+v?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?")
 WATCHDOG_STALE_S = 180
+JOB_CLAIM_TRIES = 10
+"""How many job ids `SshBox.start_job` tries before it reports the id as taken."""
 
 
 def _b64(text: str) -> str:
@@ -164,6 +174,35 @@ def _job_id(job_id: str) -> str:
     if not _JOB_ID.match(job_id):
         raise ValueError(f"invalid job id {job_id!r}")
     return job_id
+
+
+def following_job_id(job_id: str) -> str | None:
+    """Return `j-(N+1)` for a `j-N` id, or None for any other id."""
+    match = _JOB_NUMBER.fullmatch(job_id)
+    return None if match is None else f"j-{int(match.group(1)) + 1}"
+
+
+def parse_rsync_version(text: str) -> tuple[int, int, int] | None:
+    """Return the version from `rsync --version` output.
+
+    openrsync prints `rsync version 2.6.9 compatible`, so it reads as 2.6.9.
+    """
+    match = _RSYNC_VERSION.search(text)
+    if match is None:
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3) or 0))
+
+
+@functools.lru_cache(maxsize=1)
+def local_rsync_version() -> tuple[int, int, int] | None:
+    """Run `rsync --version` once per process and return the parsed version."""
+    try:
+        done = subprocess.run(
+            ["rsync", "--version"], capture_output=True, text=True, timeout=10, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_rsync_version(done.stdout)
 
 
 def _int(text: str | None) -> int | None:
@@ -326,7 +365,9 @@ class SshBox:
     `runner` wraps `subprocess` so tests can check argv and scripts without a
     network. `root`, `workdir`, `tmux` and `poll` set the box paths, the tmux
     command and the attach poll interval. `services` set to False skips the
-    cron and sshd steps in `adopt`.
+    cron and sshd steps in `adopt`. `rsync_protect_args` picks how rsync
+    passes the remote path: True adds `-s`, False shell-quotes the path, and
+    None decides from the local `rsync --version` on first use.
     """
 
     def __init__(
@@ -340,8 +381,10 @@ class SshBox:
         tmux: str = "tmux",
         poll: float = 1.0,
         services: bool = True,
+        rsync_protect_args: bool | None = None,
     ) -> None:
         self.ssh_key = ssh_key
+        self.rsync_protect_args = rsync_protect_args
         self.known_hosts = known_hosts
         self.runner = runner
         self.root = root
@@ -470,8 +513,8 @@ class SshBox:
         tmux_cmd = shlex.quote(f"exec bash {j}/run.sh")
         lines = [
             f"J={j}",
-            '[ -e "$J/started" ] && { echo rig_job=exists; exit 0; }',
-            'mkdir -p "$J" || exit 3',
+            f"mkdir -p {shlex.quote(posixpath.dirname(jdir))} || exit 3",
+            'mkdir "$J" || { [ -e "$J" ] && echo rig_job=exists; exit 3; }',
             f'printf %s {_b64(job.cmd)} | base64 -d >"$J/cmd"',
             f'(umask 077; printf %s {_b64(command)} | base64 -d >"$J/script")',
             f'printf %s {_b64(run_sh)} | base64 -d >"$J/run.sh"',
@@ -492,12 +535,28 @@ class SshBox:
         return "\n".join(lines) + "\n"
 
     def start_job(self, target: SshTarget, job: Job, command: str) -> Job:
-        jdir = self._job_dir(job.id)
+        values, result = self._start_once(target, job, command)
+        for _ in range(JOB_CLAIM_TRIES - 1):
+            following = following_job_id(job.id)
+            if values.get("rig_job") != "exists" or following is None:
+                break
+            job = dataclasses.replace(job, id=following)
+            values, result = self._start_once(target, job, command)
+        return self._started(job, values, result)
+
+    def _start_once(
+        self, target: SshTarget, job: Job, command: str
+    ) -> tuple[dict[str, str], ExecResult]:
         result = self._script(target, self.start_script(job, command), timeout=30.0)
         values: dict[str, str] = {}
         for line in result.stdout.splitlines():
             key, _, value = line.partition("=")
             values[key] = value
+        return values, result
+
+    def _started(self, job: Job, values: dict[str, str], result: ExecResult) -> Job:
+        """Return the started job, or raise for a start the box refused."""
+        jdir = self._job_dir(job.id)
         status = values.get("rig_job")
         if status != "ok":
             reasons = {
@@ -609,18 +668,65 @@ class SshBox:
     def rsync_argv(
         self, target: SshTarget, push: bool, src: str, dest: str, delete: bool, excludes: list[str]
     ) -> list[str]:
-        """Return the rsync argv for one transfer over the lease's ssh options."""
+        """Return the rsync argv for one transfer over the lease's ssh options.
+
+        A push with `delete` protects rig's state directory when it sits
+        under the destination. The remote path goes through `-s` on rsync
+        3.0 or later and is shell-quoted on older rsync.
+        """
+        protect = self._rsync_protect_args()
         argv = ["rsync", "-az", "--partial"]
+        if protect:
+            argv.append("-s")
         if delete:
             argv.append("--delete")
         argv += [f"--exclude={e}" for e in excludes]
+        if push and delete:
+            rule = self._protect_rule(dest)
+            if rule is not None:
+                argv.append(f"--filter=P {rule}")
         argv += ["-e", shlex.join(["ssh", *self.ssh_options(target)])]
         remote = f"{target.user}@{target.host}:"
         if push:
-            argv += [src, remote + self.remote_path(dest)]
+            argv += [src, remote + self._rsync_path(dest, protect)]
         else:
-            argv += [remote + self.remote_path(src), dest]
+            argv += [remote + self._rsync_path(src, protect), dest]
         return argv
+
+    def _rsync_protect_args(self) -> bool:
+        if self.rsync_protect_args is None:
+            version = local_rsync_version()
+            self.rsync_protect_args = version is not None and version >= (3, 0, 0)
+        return self.rsync_protect_args
+
+    def _rsync_path(self, path: str, protect: bool) -> str:
+        """Return the remote path part of an rsync argument.
+
+        A leading `~` or `~/` becomes `.` because rsync resolves relative
+        remote paths in the login user's home. Without `-s` the path is
+        shell-quoted, leaving any `~user/` prefix outside the quotes.
+        """
+        resolved = self.remote_path(path)
+        if resolved == "~" or resolved.startswith("~/"):
+            resolved = "." + resolved[1:]
+        if protect:
+            return resolved
+        if resolved.startswith("~"):
+            head, sep, tail = resolved.partition("/")
+            return head + sep + (shlex.quote(tail) if tail else "")
+        return shlex.quote(resolved)
+
+    def _protect_rule(self, dest: str) -> str | None:
+        """Return the anchored filter pattern for the state directory under `dest`, if any."""
+        resolved = self.remote_path(dest)
+        if not resolved.startswith("/"):
+            return None
+        base = posixpath.normpath(resolved)
+        root = posixpath.normpath(self.root)
+        prefix = base.rstrip("/") + "/"
+        if not root.startswith(prefix):
+            return None
+        return f"/{root[len(prefix):]}/***"
 
     def rsync(
         self, target: SshTarget, push: bool, src: str, dest: str, delete: bool, excludes: list[str]

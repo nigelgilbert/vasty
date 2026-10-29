@@ -1,9 +1,10 @@
 """`rig sync` (spec §4.8).
 
 `push SRC DEST` and `pull SRC DEST` run rsync over the lease's SSH options
-with the default excludes. `--delete` on push mirrors the local tree. A
-relative remote path resolves under `/workspace`, and rsync's trailing-slash
-rules apply. rsync output goes to stderr.
+with the default excludes. `--delete` on push mirrors the local tree and
+keeps the box's `/workspace/.rig`. A relative remote path resolves under
+`/workspace`, and rsync's trailing-slash rules apply. rsync output goes to
+stderr.
 """
 
 from __future__ import annotations
