@@ -1833,29 +1833,6 @@ wheels = [
 ]
 
 [[package]]
-name = "rig"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "vastai" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "vastai", specifier = "==1.9.1" }]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.10" },
-    { name = "pytest", specifier = ">=8" },
-]
-
-[[package]]
 name = "setuptools"
 version = "84.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1927,6 +1904,29 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f4/2b/efc429050d2ffe0e7b84f6d0f90bb6797f25bd1109f92fcb3e7fbedc9e85/vastai-1.9.1.tar.gz", hash = "sha256:e863ac4335492cc79f0dc5f8bcb6c9e23b92e6fc10045e7cb8d795f75a1b700b", size = 283456, upload-time = "2026-10-23T23:07:29.428Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/70/a1/350e4d0bcfc144532e9f5c7972babe944fab2e6bf8cab6364e61acb8ac30/vastai-1.9.1-py3-none-any.whl", hash = "sha256:426dee7da85ce29b798c57c55d23178242c7da5d27b39958a5cbd86dcbbec0f7", size = 324525, upload-time = "2026-10-23T23:07:30.601Z" },
+]
+
+[[package]]
+name = "vasty"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "vastai" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "vastai", specifier = "==1.9.1" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.10" },
+    { name = "pytest", specifier = ">=8" },
 ]
 
 [[package]]
