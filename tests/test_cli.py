@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from typing import Any
 
 import pytest
 
 from fakes import Harness
 from rig.cli import parse
+from rig.context import Context
 from rig.errors import RigError
 
 
@@ -58,3 +61,33 @@ def test_target_selector_rules(argv: list[str]) -> None:
 def test_everyone_with_group_is_allowed() -> None:
     ns = parse(["release", "--group", "g", "--everyone"])
     assert ns.group == "g" and ns.everyone
+
+
+@pytest.mark.parametrize(
+    ("extra_env", "key_env"), [({}, "VAST_API_KEY"), ({"RIG_API_KEY_ENV": "MY_KEY"}, "MY_KEY")]
+)
+def test_status_without_api_key_is_auth_missing(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, extra_env: dict[str, str], key_env: str
+) -> None:
+    import rig.provider
+
+    def no_provider(*args: Any, **kw: Any) -> Any:
+        raise AssertionError("VastProvider constructed")
+
+    monkeypatch.setattr(rig.provider, "VastProvider", no_provider)
+    for name in ("VAST_API_KEY", "MY_KEY", "RIG_API_KEY_ENV"):
+        monkeypatch.delenv(name, raising=False)
+        harness.env.pop(name, None)
+    harness.env.update(extra_env)
+    make = harness.context
+
+    def context(stdin: str = "", tty: bool = False) -> Context:
+        return replace(make(stdin=stdin, tty=tty), provider_factory=None)
+
+    monkeypatch.setattr(harness, "context", context)
+    code, out, _ = harness.run("status")
+    result = json.loads(out)
+    assert code == 1
+    assert result["error"] == "auth_missing"
+    assert key_env in result["hint"]
+    assert harness.http_calls == []
