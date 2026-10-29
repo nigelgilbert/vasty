@@ -63,14 +63,6 @@ def model_entry(ctx: Context, model: str) -> ModelEntry | None:
     return settings.models.get(model)
 
 
-def resolve_with_model(ctx: Context, model: str) -> None:
-    """Fix `ctx.settings` with the model's entry as the `model` layer below the flags."""
-    ctx._settings = resolve(
-        ctx.flags, ctx.stdin_json, ctx.profile, ctx.env, ctx.cwd, ctx.home,
-        stdin_text=ctx.stdin.read, model=model,
-    )
-
-
 def vllm_pin(entry: ModelEntry | None) -> str:
     """Return the vLLM version from the entry's image tag, else `DEFAULT_VLLM`."""
     if entry is None or entry.image is None or ":" not in entry.image:
@@ -131,7 +123,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
                 f"Model {args.model!r} has no [models] entry.",
                 f'Pass --vram GB and --image IMAGE, or add [models."{args.model}"] to config.',
             )
-        resolve_with_model(ctx, args.model)
+        ctx.model = args.model
     quant = args.quant if args.quant is not None else (entry.quant if entry else None)
     plan = _Plan(args.model, quant, entry, bool(args.bind_local))
     require_tools(ctx, "ssh")
