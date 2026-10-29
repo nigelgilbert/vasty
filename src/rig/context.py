@@ -79,7 +79,8 @@ class Context:
             from rig.config import resolve
 
             self._settings = resolve(
-                self.flags, self.stdin_json, self.profile, self.env, self.cwd, self.home
+                self.flags, self.stdin_json, self.profile, self.env, self.cwd, self.home,
+                stdin_text=self.stdin.read,
             )
         return self._settings
 
