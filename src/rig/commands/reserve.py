@@ -20,7 +20,7 @@ import argparse
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from rig import budget, engine, ids, labels, onstart, views
 from rig.cli import Outcome
@@ -377,17 +377,28 @@ def _new_cached(
     return lease
 
 
-def _give_up(ctx: Context, lease: CachedLease, created: bool, err: RigError) -> RigError:
-    """Destroy a box this call created and return `err` to raise."""
+_E = TypeVar("_E", bound=BaseException)
+
+
+def _give_up(ctx: Context, lease: CachedLease, created: bool, err: _E) -> _E:
+    """Destroy a box this call created and return `err` to raise.
+
+    The lease turns `released` only when Vast accepts the destroy or the row
+    is already gone. Otherwise it stays active and a stderr line names the
+    `rig release` fix.
+    """
     if not created:
         return err
+    fix = f"Run rig release {lease.lease}."
     try:
-        engine.destroy_checked(ctx, lease.instance_id, lease.label.expires)
-        lease.released_here = True
-        lease.destroy_pending = True
+        destroyed = engine.destroy_checked(ctx, lease.instance_id, lease.label.expires)
+        if not destroyed and ctx.provider.get_instance(lease.instance_id) is not None:
+            ctx.warn(f"rig: {lease.lease} changed before it could be destroyed. {fix}")
+            return err
+        engine.mark_released(lease, ctx.clock.now())
         engine.store_lease(ctx, lease)
     except RigError as failure:
-        ctx.warn(f"rig: could not destroy {lease.lease}: {failure.message}")
+        ctx.warn(f"rig: could not destroy {lease.lease}: {failure.message} {fix}")
     return err
 
 
@@ -398,12 +409,16 @@ def wait_ready(
 
     Return the lease, the entries every refresh swept and the latest account
     warnings. Raise `box_unreachable`, `image_unsupported` or
-    `port_mapping_missing`.
+    `port_mapping_missing`. A refresh error or Ctrl-C during the wait destroys
+    a box this call created and re-raises.
     """
     swept: list[SweptEntry] = []
     ready_at: int | None = None
     while True:
-        snap = engine.refresh(ctx)
+        try:
+            snap = engine.refresh(ctx)
+        except (RigError, KeyboardInterrupt) as exc:
+            raise _give_up(ctx, lease, created, exc)
         swept += snap.swept
         now = snap.now
         fresh = snap.leases.get(lease.lease)
@@ -442,7 +457,10 @@ def wait_ready(
                 f"Lease {lease.lease} did not become ready before its clock ran out.",
                 "Run rig reserve again, or pick another offer with --gpu or --region.",
             ))
-        ctx.sleep(WAIT_POLL_S)
+        try:
+            ctx.sleep(WAIT_POLL_S)
+        except (RigError, KeyboardInterrupt) as exc:
+            raise _give_up(ctx, lease, created, exc)
 
 
 def reserve_result(

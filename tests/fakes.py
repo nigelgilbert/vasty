@@ -85,6 +85,8 @@ class FakeProvider:
     start_status: str | None = "running"
     created: list[CreateRequest] = field(default_factory=list)
     on_create: Callable[[Instance, CreateRequest], None] | None = None
+    keep_rows: bool = False
+    """When set, `destroy` accepts the call and leaves the row listed."""
     _ids: Any = field(default_factory=lambda: itertools.count(1001))
     _date: tuple[float, float] | None = None
 
@@ -147,7 +149,8 @@ class FakeProvider:
 
     def destroy(self, instance_id: int) -> None:
         self._call("destroy", instance_id)
-        self.instances.pop(instance_id, None)
+        if not self.keep_rows:
+            self.instances.pop(instance_id, None)
         self.destroyed.append(instance_id)
 
     def set_label(self, instance_id: int, label: str) -> None:

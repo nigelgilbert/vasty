@@ -6,8 +6,30 @@ commands (spec §5.2). `cached_snapshot` answers `status --cached` from the
 local file and imports only the standard library.
 
 Reconciliation keeps history leases in `Snapshot.leases` for 24h from the
-moment rig first sees them gone. A lease listed by Vast is active unless this
-machine released it (`destroy_pending`) or the sweep could not destroy it.
+moment rig first sees them gone. A lease listed by Vast is active unless it
+has `destroy_pending`.
+
+Destroy lifecycle. `destroy_pending` marks a lease whose row rig has decided to
+destroy and a list call still shows.
+
+- `release` and the `reserve` give-up path set it with `released_here` and
+  state `released` once Vast accepts the destroy call. A give-up whose destroy
+  fails or finds the row changed leaves the lease active.
+- The sweep sets it with state `expired` when it sends a destroy, whether Vast
+  accepts the call or fails it.
+- `refresh` resends the destroy while the row stays listed, and sets
+  `destroy_pending` again on a listed `released` lease. The wait between calls
+  starts at 5s and doubles per call up to 60s (spec §6). A failed call sets
+  `last_provider_error`; an accepted one clears it. The retry runs before the
+  probe pool starts.
+- A swept lease whose label is no longer past its clock drops
+  `destroy_pending` and turns active again. A `released_here` lease keeps
+  retrying.
+- Reconciliation clears `destroy_pending` and starts the history window when
+  a list call no longer shows the row.
+- The probe skips leases with `destroy_pending`. `release` on a history lease
+  whose row is still listed sends the destroy again and returns
+  `provider_error` when the call fails.
 """
 
 from __future__ import annotations
@@ -45,6 +67,8 @@ HISTORY_KEEP_S = 86_400
 PROBE_TIMEOUT_S = 5.0
 MAX_PROBE_THREADS = 16
 ZERO = Decimal("0")
+DESTROY_RETRY_BASE_S = 5
+DESTROY_RETRY_CAP_S = 60
 BUDGET_HINT = "Run rig status to see today's spend, then release a lease or shorten the TTL."
 
 
@@ -230,23 +254,74 @@ def store_lease(ctx: Context, lease: CachedLease) -> None:
         ctx.cache.save(data)
 
 
+def mark_destroy_sent(lease: CachedLease, now: int, error: str | None = None) -> None:
+    """Record one destroy call for `lease` and keep it `destroy_pending`.
+
+    `error` is the provider error code of a failed call, or None when Vast
+    accepted it.
+    """
+    lease.destroy_pending = True
+    lease.destroy_attempts += 1
+    lease.destroy_at = now
+    lease.last_provider_error = None if error is None else f"destroy failed: {error}"
+
+
+def mark_released(lease: CachedLease, now: int) -> None:
+    """Record an accepted destroy for a lease this machine released."""
+    lease.state = "released"
+    lease.released_here = True
+    lease.history_since = None
+    mark_destroy_sent(lease, now)
+
+
+def _clear_destroy(lease: CachedLease) -> None:
+    lease.destroy_pending = False
+    lease.destroy_attempts = 0
+    lease.destroy_at = None
+
+
+def retry_delay(attempts: int) -> int:
+    """Return the wait after `attempts` destroy calls: 5s doubling per call, capped at 60s."""
+    if attempts <= 0:
+        return 0
+    return min(DESTROY_RETRY_CAP_S, DESTROY_RETRY_BASE_S << (attempts - 1))
+
+
+def _retry_destroy(ctx: Context, lease: CachedLease, inst: Instance, label: Label, now: int) -> None:
+    if not lease.released_here and not past_clock(label, now):
+        _clear_destroy(lease)
+        return
+    lease.destroy_pending = True
+    if lease.destroy_at is not None and now - lease.destroy_at < retry_delay(lease.destroy_attempts):
+        return
+    error = None
+    try:
+        destroy_checked(ctx, inst.id, label.expires)
+    except RigError as err:
+        error = err.code
+    mark_destroy_sent(lease, now, error)
+
+
 def _sweep(
     ctx: Context, rows: _Rows, leases: dict[str, CachedLease], now: int
-) -> tuple[list[SweptEntry], dict[int, Instance | None]]:
-    """Destroy managed rows past their clock.
+) -> tuple[list[SweptEntry], dict[int, Instance | None], set[int]]:
+    """Destroy managed rows past their clock and retry pending destroys.
 
-    Return the swept entries and the rows to replace in the listing: None for
-    a destroyed or vanished row, the re-read row when `expires` moved.
+    Return the swept entries, the rows to replace in the listing and the ids
+    destroyed this call. A replacement is None for a vanished row and the
+    re-read row when `expires` moved.
     """
     swept: list[SweptEntry] = []
     replaced: dict[int, Instance | None] = {}
+    destroyed: set[int] = set()
     for inst, label in rows.managed:
         cached = leases.get(label.lease)
-        if cached is not None and cached.destroy_pending:
+        if cached is not None and (cached.destroy_pending or cached.state == "released"):
+            _retry_destroy(ctx, cached, inst, label, now)
             continue
         if not past_clock(label, now):
             continue
-        ok, error = True, None
+        error = None
         try:
             row = ctx.provider.get_instance(inst.id)
             if row is None:
@@ -258,38 +333,36 @@ def _sweep(
                 continue
             ctx.provider.destroy(inst.id)
         except RigError as err:
-            ok, error = False, err.code
+            error = err.code
         lease = cached if cached is not None else _new_lease(inst, label)
         _copy_row(lease, inst, label)
         lease.state = "expired"
         lease.expired_at = effective_expiry(label)
-        if ok:
-            replaced[inst.id] = None
-            lease.history_since = now
-            lease.last_provider_error = None
-        else:
-            lease.last_provider_error = f"destroy failed: {error}"
+        lease.history_since = None
+        mark_destroy_sent(lease, now, error)
+        if error is None:
+            destroyed.add(inst.id)
         leases[label.lease] = lease
-        swept.append(SweptEntry(lease.lease, label.name, iso(effective_expiry(label)), ok, error))
-    return swept, replaced
+        expired_at = iso(effective_expiry(label))
+        swept.append(SweptEntry(lease.lease, label.name, expired_at, error is None, error))
+    return swept, replaced, destroyed
 
 
 def _to_history(lease: CachedLease, now: int) -> None:
+    """Move a lease whose row a list call no longer shows into history."""
     if lease.state in HISTORY_STATES:
-        if lease.state == "released" and lease.destroy_pending:
-            lease.destroy_pending = False
-            lease.history_since = now
-        elif lease.history_since is None:
+        if lease.destroy_pending or lease.history_since is None:
+            _clear_destroy(lease)
             lease.history_since = now
         return
     if lease.released_here:
         lease.state = "released"
-        lease.destroy_pending = False
     elif now > effective_expiry(lease.label):
         lease.state = "expired"
         lease.expired_at = effective_expiry(lease.label)
     else:
         lease.state = "gone"
+    _clear_destroy(lease)
     lease.history_since = now
 
 
@@ -387,14 +460,15 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
             ))
         rows = classify(instances)
         leases = data.leases
-        swept, replaced = _sweep(ctx, rows, leases, now)
+        swept, replaced, destroyed = _sweep(ctx, rows, leases, now)
         instances = [
             row for row in (replaced.get(inst.id, inst) for inst in instances) if row is not None
         ]
+        listed = {label.lease for _, label in classify(instances).managed}
+        instances = [inst for inst in instances if inst.id not in destroyed]
         rows = classify(instances)
         warnings.extend(unreadable_warning(inst, reason) for inst, reason in rows.unreadable)
 
-        listed = {label.lease for _, label in rows.managed}
         for lease_id, lease in list(leases.items()):
             if lease_id not in listed:
                 _to_history(lease, now)
@@ -402,7 +476,6 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
                     del leases[lease_id]
 
         to_probe: list[CachedLease] = []
-        swept_ids = {entry.lease for entry in swept}
         for inst, label in rows.managed:
             found = leases.get(label.lease)
             if found is None:
@@ -411,9 +484,7 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
             else:
                 _copy_row(found, inst, label)
             lease = found
-            if lease.lease in swept_ids:
-                continue
-            if lease.state == "released" or lease.destroy_pending:
+            if lease.destroy_pending:
                 continue
             if lease.state in HISTORY_STATES:
                 lease.state = "pending"

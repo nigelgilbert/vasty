@@ -94,6 +94,43 @@ def test_release_history_lease_returns_summary_with_already_absent(harness: Harn
     assert harness.provider.destroyed == [row.id]
 
 
+def test_release_after_failed_sweep_destroy_is_provider_error(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": NOW - 10})
+    harness.provider.fail["destroy"] = [RigError("provider_error", "boom", "retry")] * 2
+    code, data, _ = release(harness, "l-0000a001")
+    assert code == 2
+    assert data["error"] == "provider_error"
+    assert row.id in harness.provider.instances
+    lease = cached(harness, "l-0000a001")
+    assert (lease.state, lease.destroy_pending) == ("expired", True)
+
+
+def test_release_after_failed_sweep_destroy_sends_destroy(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": NOW - 10})
+    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    code, data, _ = release(harness, "l-0000a001")
+    assert code == 0
+    assert harness.provider.destroyed == [row.id]
+    assert data["destroy_pending"] is True
+    assert "already_absent" not in data
+    assert [s["ok"] for s in data["swept"]] == [False]
+    lease = cached(harness, "l-0000a001")
+    assert (lease.state, lease.destroy_pending, lease.last_provider_error) == ("expired", True, None)
+
+
+def test_release_of_released_lease_still_listed_resends_destroy(harness: Harness) -> None:
+    harness.provider.keep_rows = True
+    row = add_lease(harness)
+    release(harness, "l-0000a001")
+    code, data, _ = release(harness, "l-0000a001")
+    assert code == 0
+    assert harness.provider.destroyed == [row.id, row.id]
+    assert data["destroy_pending"] is True
+    assert "already_absent" not in data
+    lease = cached(harness, "l-0000a001")
+    assert (lease.state, lease.destroy_attempts) == ("released", 2)
+
+
 def test_release_unreachable_lease(harness: Harness) -> None:
     row = add_lease(harness)
     harness.run("status")

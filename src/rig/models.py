@@ -178,6 +178,10 @@ class CachedLease:
     jobs: list[Job] = field(default_factory=list)
     released_here: bool = False
     destroy_pending: bool = False
+    destroy_attempts: int = 0
+    """Destroy calls sent since `destroy_pending` was set; sets the retry backoff."""
+    destroy_at: int | None = None
+    """When the last destroy call was sent."""
     history_since: int | None = None
     expired_at: int | None = None
     last_provider_error: str | None = None

@@ -324,6 +324,97 @@ def test_wait_ends_with_box_unreachable_when_loading_never_ends(h: Harness) -> N
     assert len(h.provider.destroyed) == 1
 
 
+def cached_lease(h: Harness) -> Any:
+    return h.context().cache.load().leases["l-abababab"]
+
+
+def unsupported_image(h: Harness) -> None:
+    def lacking(inst: Instance, req: CreateRequest) -> None:
+        boot(h, inst, req)
+        h.box.state(inst.id).unsupported = ["apt-get"]
+
+    h.provider.on_create = lacking
+
+
+def test_give_up_keeps_lease_active_when_destroy_skipped(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unsupported_image(h)
+    monkeypatch.setattr("rig.engine.destroy_checked", lambda ctx, iid, expires: False)
+    code, out, err = h.run("reserve", "--image", "alpine:3")
+    assert code == 1
+    assert json.loads(out)["error"] == "image_unsupported"
+    assert "rig: l-abababab changed before it could be destroyed. Run rig release l-abababab." in err
+    (iid,) = h.provider.instances
+    lease = cached_lease(h)
+    assert (lease.state, lease.released_here, lease.destroy_pending) == ("running", False, False)
+    monkeypatch.undo()
+    code, data = run_json(h, "release", "l-abababab")
+    assert code == 0, data
+    assert h.provider.destroyed == [iid]
+
+
+def test_give_up_marks_released_when_row_already_gone(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unsupported_image(h)
+
+    def vanish(ctx: Any, iid: int, expires: int | None) -> bool:
+        del h.provider.instances[iid]
+        return False
+
+    monkeypatch.setattr("rig.engine.destroy_checked", vanish)
+    code, out, err = h.run("reserve", "--image", "alpine:3")
+    assert code == 1
+    assert "changed before" not in err
+    lease = cached_lease(h)
+    assert (lease.state, lease.released_here, lease.destroy_pending) == ("released", True, True)
+
+
+def test_give_up_failed_destroy_names_release_fix(h: Harness) -> None:
+    unsupported_image(h)
+    h.provider.fail["destroy"] = RigError("provider_error", "boom.", "retry")
+    code, out, err = h.run("reserve", "--image", "alpine:3")
+    assert code == 1
+    assert json.loads(out)["error"] == "image_unsupported"
+    assert "rig: could not destroy l-abababab: boom. Run rig release l-abababab." in err
+    lease = cached_lease(h)
+    assert (lease.released_here, lease.destroy_pending) == (False, False)
+
+
+def test_ctrl_c_during_wait_destroys_box(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    h.provider.start_status = "loading"
+
+    def interrupt(seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(h.time, "sleep", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        h.run("reserve")
+    assert h.provider.destroyed == [1001]
+    assert h.provider.instances == {}
+    lease = cached_lease(h)
+    assert (lease.state, lease.released_here, lease.destroy_pending) == ("released", True, True)
+
+
+def test_refresh_error_during_wait_destroys_box(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h.provider.start_status = "loading"
+    real_sleep = h.time.sleep
+
+    def sleep(seconds: float) -> None:
+        h.provider.fail["list_instances"] = RigError("provider_error", "list failed", "retry")
+        real_sleep(seconds)
+
+    monkeypatch.setattr(h.time, "sleep", sleep)
+    code, data = run_json(h, "reserve")
+    assert code == 2
+    assert (data["error"], data["message"]) == ("provider_error", "list failed")
+    assert h.provider.destroyed == [1001]
+    assert calls(h, "destroy") == [1001]
+
+
 # Name idempotency.
 
 
@@ -443,6 +534,14 @@ def test_skips_registration_when_key_exists(h: Harness) -> None:
     h.provider.ssh_keys = [SshKey(id=1, public_key=PUB.rsplit(" ", 1)[0] + " other@host")]
     run_json(h, "reserve")
     assert h.provider.attached == []
+
+
+def test_reserve_without_public_key_skips_registration(h: Harness) -> None:
+    code, out, err = h.run("reserve")
+    assert code == 0, out
+    assert err.count("skipping key registration") == 1
+    assert calls(h, "list_ssh_keys") == []
+    assert calls(h, "attach_ssh_key") == []
 
 
 # Create recovery.

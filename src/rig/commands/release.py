@@ -3,13 +3,16 @@
 `release` destroys the box and returns once the provider accepts the destroy
 call. The lease is then `released` with `destroy_pending` until a list call
 shows it gone; `released_here` lets reconciliation record `released`.
-Uptime, cost and jobs come from the local cache.
+Uptime, cost and jobs come from the local cache. The engine module docstring
+describes the destroy lifecycle.
 
 A LEASE that matches nothing returns `{lease, already_absent: true}`. A lease
-already in history returns its summary with `already_absent: true` and sends
-no destroy call. An orphan or unreadable row released by instance id needs
-`--yes` or a TTY confirmation. Before destroying, `release` re-reads the row
-and aborts with `provider_error` when its `expires` moved (spec §6).
+already in history returns its summary with `already_absent: true` once Vast
+no longer lists its row. While the row is listed, `release` sends the destroy
+again and keeps the history state. An orphan or unreadable row released by
+instance id needs `--yes` or a TTY confirmation. Before destroying, `release`
+re-reads the row and aborts with `provider_error` when its `expires` moved
+(spec §6).
 """
 
 from __future__ import annotations
@@ -84,11 +87,14 @@ def _release_one(ctx: Context, snap: Snapshot, ref: str, yes: bool) -> Outcome:
 def release_lease(ctx: Context, snap: Snapshot, lease: CachedLease) -> ReleaseSummary:
     """Destroy one managed lease and return its summary.
 
-    A lease in history, or one whose row vanished, returns its summary with
-    `already_absent`. Raise `provider_error` when the destroy call fails or the
-    row's `expires` moved since `lease` was read.
+    A lease in history whose row Vast no longer lists, or one whose row
+    vanished, returns its summary with `already_absent`. A lease in history
+    whose row is still listed gets the destroy again. Raise `provider_error`
+    when the destroy call fails or the row's `expires` moved since `lease` was
+    read.
     """
-    if lease.state in HISTORY_STATES or lease.destroy_pending:
+    in_history = lease.state in HISTORY_STATES or lease.destroy_pending
+    if in_history and snap.instance(lease.instance_id) is None:
         return summarize(lease, max(snap.now, ctx.clock.now()), snap, already_absent=True)
     with ctx.cache.lock():
         destroyed = engine.destroy_checked(ctx, lease.instance_id, lease.label.expires)
@@ -100,15 +106,12 @@ def release_lease(ctx: Context, snap: Snapshot, lease: CachedLease) -> ReleaseSu
                     f"Run rig status {lease.lease}, then rig release {lease.lease} again.",
                 )
             return summarize(lease, max(snap.now, ctx.clock.now()), snap, already_absent=True)
-        save_lease(ctx, lease, _mark_released)
+        now = ctx.clock.now()
+        if lease.state in HISTORY_STATES:
+            save_lease(ctx, lease, lambda found: engine.mark_destroy_sent(found, now))
+        else:
+            save_lease(ctx, lease, lambda found: engine.mark_released(found, now))
     return summarize(lease, max(snap.now, ctx.clock.now()), snap)
-
-
-def _mark_released(lease: CachedLease) -> None:
-    lease.state = "released"
-    lease.released_here = True
-    lease.destroy_pending = True
-    lease.history_since = None
 
 
 def summarize(

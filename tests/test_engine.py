@@ -42,9 +42,12 @@ def test_sweep_destroys_past_expires(harness: Harness) -> None:
     assert (entry.lease, entry.name, entry.ok, entry.error) == ("l-0000a001", "ft", True, None)
     assert entry.expired_at == "2026-10-29T00:59:50Z"
     lease = snap.leases["l-0000a001"]
-    assert lease.state == "expired"
-    assert lease.history_since == NOW
+    assert (lease.state, lease.destroy_pending, lease.history_since) == ("expired", True, None)
     assert snap.active() == []
+    assert snap.instances == []
+    harness.time.advance(5)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert (lease.state, lease.destroy_pending, lease.history_since) == ("expired", False, NOW + 5)
 
 
 def test_sweep_uses_created_plus_ttl_without_expires(harness: Harness) -> None:
@@ -90,11 +93,165 @@ def test_sweep_failed_destroy_reports_error(harness: Harness) -> None:
     assert snap.swept[0].error == "provider_error"
     assert row.id in harness.provider.instances
     lease = snap.leases["l-0000a001"]
-    assert lease.state == "expired"
+    assert (lease.state, lease.destroy_pending, lease.destroy_attempts) == ("expired", True, 1)
     assert lease.last_provider_error == "destroy failed: provider_error"
+    assert snap.active() == []
+    same = refresh(harness)
+    assert same.swept == []
+    assert harness.provider.destroyed == []
+    harness.time.advance(5)
     again = refresh(harness)
-    assert again.swept[0].ok is True
+    assert again.swept == []
     assert harness.provider.destroyed == [row.id]
+    lease = again.leases["l-0000a001"]
+    assert (lease.destroy_pending, lease.last_provider_error) == (True, None)
+    harness.time.advance(1)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert (lease.state, lease.destroy_pending, lease.history_since) == ("expired", False, NOW + 6)
+
+
+# Destroy lifecycle.
+
+
+def release_in_cache(harness: Harness, lease_id: str = "l-0000a001") -> None:
+    edit_cache(harness, lease_id, state="released", released_here=True, destroy_pending=True,
+               destroy_attempts=1, destroy_at=NOW)
+
+
+def test_retry_delay_doubles_and_caps_at_60s() -> None:
+    assert [engine.retry_delay(n) for n in range(8)] == [0, 5, 10, 20, 40, 60, 60, 60]
+
+
+def test_sweep_does_not_redestroy_a_listed_row(harness: Harness) -> None:
+    harness.provider.keep_rows = True
+    row = add_lease(harness, "l-0000a003", label={"expires": NOW - 10})
+    swept = [[e.lease for e in refresh(harness).swept] for _ in range(3)]
+    assert swept == [["l-0000a003"], [], []]
+    assert harness.provider.destroyed == [row.id]
+    lease = refresh(harness).leases["l-0000a003"]
+    assert (lease.state, lease.destroy_pending, lease.destroy_attempts) == ("expired", True, 1)
+
+
+def test_listed_row_retries_with_backoff_capped_at_60s(harness: Harness) -> None:
+    harness.provider.keep_rows = True
+    row = add_lease(harness, label={"expires": NOW - 10})
+    refresh(harness)
+    sent = [NOW]
+    for _ in range(200):
+        harness.time.advance(1)
+        before = len(harness.provider.destroyed)
+        snap = refresh(harness)
+        assert snap.swept == []
+        if len(harness.provider.destroyed) > before:
+            sent.append(snap.now)
+    assert set(harness.provider.destroyed) == {row.id}
+    gaps = [b - a for a, b in zip(sent, sent[1:])]
+    assert gaps == [5, 10, 20, 40, 60, 60]
+    lease = harness.context().cache.load().leases["l-0000a001"]
+    assert (lease.destroy_pending, lease.destroy_attempts, lease.destroy_at) == (True, 7, sent[-1])
+
+
+def test_released_lease_retries_until_row_gone(harness: Harness) -> None:
+    harness.provider.keep_rows = True
+    row = add_lease(harness)
+    refresh(harness)
+    release_in_cache(harness)
+    harness.time.advance(4)
+    refresh(harness)
+    assert harness.provider.destroyed == []
+    harness.time.advance(1)
+    snap = refresh(harness)
+    assert harness.provider.destroyed == [row.id]
+    lease = snap.leases["l-0000a001"]
+    assert (lease.state, lease.destroy_pending, lease.destroy_attempts) == ("released", True, 2)
+    assert lease.history_since is None
+    del harness.provider.instances[row.id]
+    harness.time.advance(1)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert (lease.state, lease.destroy_pending, lease.history_since) == ("released", False, NOW + 6)
+    assert (lease.destroy_attempts, lease.destroy_at) == (0, None)
+
+
+def test_failed_retry_records_error_and_backs_off(harness: Harness) -> None:
+    harness.provider.keep_rows = True
+    add_lease(harness)
+    refresh(harness)
+    release_in_cache(harness)
+    harness.time.advance(5)
+    harness.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    lease = refresh(harness).leases["l-0000a001"]
+    assert (lease.destroy_pending, lease.destroy_attempts) == (True, 2)
+    assert lease.last_provider_error == "destroy failed: provider_error"
+    assert harness.provider.destroyed == []
+    harness.time.advance(9)
+    refresh(harness)
+    assert harness.provider.destroyed == []
+    harness.time.advance(1)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert len(harness.provider.destroyed) == 1
+    assert lease.last_provider_error is None
+
+
+def test_released_lease_listed_without_pending_is_destroyed(harness: Harness) -> None:
+    harness.provider.keep_rows = True
+    row = add_lease(harness)
+    refresh(harness)
+    edit_cache(harness, "l-0000a001", state="released", released_here=True)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert harness.provider.destroyed == [row.id]
+    assert (lease.state, lease.destroy_pending) == ("released", True)
+
+
+def test_swept_lease_extended_elsewhere_turns_active(harness: Harness) -> None:
+    harness.provider.keep_rows = True
+    row = add_lease(harness, label={"expires": NOW - 10})
+    refresh(harness)
+    harness.provider.instances[row.id].label = lease_label(expires=NOW + 1800)
+    harness.time.advance(5)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert harness.provider.destroyed == [row.id]
+    assert (lease.state, lease.destroy_pending, lease.destroy_attempts) == ("running", False, 0)
+
+
+def test_released_lease_retries_after_label_moved(harness: Harness) -> None:
+    harness.provider.keep_rows = True
+    row = add_lease(harness)
+    refresh(harness)
+    release_in_cache(harness)
+    harness.provider.instances[row.id].label = lease_label(expires=NOW + 7200)
+    harness.time.advance(5)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert harness.provider.destroyed == [row.id]
+    assert (lease.state, lease.destroy_pending) == ("released", True)
+
+
+def test_destroy_retry_runs_outside_the_probe_pool(harness: Harness) -> None:
+    import threading
+
+    harness.provider.keep_rows = True
+    add_lease(harness, "l-0000a001")
+    add_lease(harness, "l-0000a002")
+    refresh(harness)
+    release_in_cache(harness)
+    threads: list[threading.Thread] = []
+    real_destroy = harness.provider.destroy
+
+    def destroy(instance_id: int) -> None:
+        threads.append(threading.current_thread())
+        real_destroy(instance_id)
+
+    harness.provider.destroy = destroy  # type: ignore[method-assign]
+    harness.time.advance(5)
+    refresh(harness)
+    assert threads == [threading.main_thread()]
+
+
+def test_destroy_fields_survive_the_cache(harness: Harness) -> None:
+    add_lease(harness)
+    refresh(harness)
+    edit_cache(harness, "l-0000a001", destroy_attempts=3, destroy_at=NOW - 7)
+    lease = harness.context().cache.load().leases["l-0000a001"]
+    assert (lease.destroy_attempts, lease.destroy_at) == (3, NOW - 7)
 
 
 def test_sweep_skips_unreadable_rows(harness: Harness) -> None:
@@ -121,7 +278,8 @@ def test_duplicate_lease_id_row_is_unreadable(harness: Harness) -> None:
 def test_reconcile_released_clears_destroy_pending(harness: Harness) -> None:
     row = add_lease(harness)
     refresh(harness)
-    edit_cache(harness, "l-0000a001", state="released", released_here=True, destroy_pending=True)
+    edit_cache(harness, "l-0000a001", state="released", released_here=True, destroy_pending=True,
+               destroy_attempts=1, destroy_at=NOW)
     still = refresh(harness)
     assert still.leases["l-0000a001"].state == "released"
     assert still.leases["l-0000a001"].destroy_pending is True
