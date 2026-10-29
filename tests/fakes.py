@@ -202,6 +202,7 @@ class BoxState:
     signals: list[tuple[str, str]] = field(default_factory=list)
     execs: list[str] = field(default_factory=list)
     exec_results: dict[str, ExecResult] = field(default_factory=dict)
+    unsupported: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -243,6 +244,7 @@ class FakeBox:
             startup_exit=box.startup_exit,
             alive_mtime=box.alive_mtime,
             jobs=[Job(**vars(j)) for j in box.jobs.values()],
+            unsupported=list(box.unsupported),
         )
 
     def write_clock(self, target: SshTarget, expires: int) -> None:

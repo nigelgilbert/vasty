@@ -217,6 +217,19 @@ def _new_lease(inst: Instance, label: Label) -> CachedLease:
     return lease
 
 
+def lease_from_row(inst: Instance, label: Label) -> CachedLease:
+    """Return a `pending` cached lease built from an instance row and its label."""
+    return _new_lease(inst, label)
+
+
+def store_lease(ctx: Context, lease: CachedLease) -> None:
+    """Write one lease into `leases.json` under the lock, keeping every other entry."""
+    with ctx.cache.lock():
+        data = ctx.cache.load()
+        data.leases[lease.lease] = lease
+        ctx.cache.save(data)
+
+
 def _sweep(
     ctx: Context, rows: _Rows, leases: dict[str, CachedLease], now: int
 ) -> tuple[list[SweptEntry], dict[int, Instance | None]]:
@@ -323,6 +336,7 @@ def _apply_probe(ctx: Context, lease: CachedLease, probed: _Probed, now: int) ->
         lease.guard_missing = _layers(lease.guard_missing + lease.label.miss)
         return
     lease.reachable_at = now
+    lease.unsupported = list(result.unsupported)
     lease.startup_started = result.startup_started
     lease.startup_interrupted = result.startup_interrupted
     lease.startup_exit = None if result.startup_exit == -1 else result.startup_exit

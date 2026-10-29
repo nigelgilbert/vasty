@@ -184,6 +184,8 @@ class CachedLease:
     startup_interrupted: bool = False
     adopted: bool = False
     """Set by `tag` on an adopted orphan; networked commands retry its missing guard steps."""
+    unsupported: list[str] = field(default_factory=list)
+    """What the last probe found missing from a custom image; non-empty maps to `image_unsupported`."""
 
 
 # Output shapes.
