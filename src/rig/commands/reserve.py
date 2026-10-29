@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, TypeVar
 
 from rig import budget, engine, ids, labels, onstart, views
 from rig.cli import Outcome
-from rig.commands._common import taken_ids
+from rig.commands._common import merge_swept, taken_ids
 from rig.context import Context
 from rig.errors import RigError, invalid
 from rig.keys import public_key
@@ -132,7 +132,7 @@ def reserve_lease(
 
     if wait and lease.state == "pending":
         lease, more_swept, account = wait_ready(ctx, lease, required, created)
-        swept += more_swept
+        swept = merge_swept(swept, more_swept)
         warnings = account + warnings
     else:
         warnings = list(snap.warnings) + warnings
@@ -320,7 +320,10 @@ def create_with_recovery(ctx: Context, request: CreateRequest, lease_id: str) ->
                 try:
                     ctx.provider.destroy(inst.id)
                 except RigError as err:
-                    ctx.warn(f"rig: could not destroy duplicate instance {inst.id}: {err.message}")
+                    ctx.warn(
+                        f"rig: could not destroy duplicate instance {inst.id}: {err.message}"
+                        f" Run rig release i-{inst.id} --yes."
+                    )
             return keep
         if waited >= RECOVER_WINDOW_S:
             break
@@ -406,7 +409,7 @@ def wait_ready(
             snap = engine.refresh(ctx)
         except (RigError, KeyboardInterrupt) as exc:
             raise _give_up(ctx, lease, created, exc)
-        swept += snap.swept
+        swept = merge_swept(swept, snap.swept)
         now = snap.now
         fresh = snap.leases.get(lease.lease)
         if fresh is None or fresh.state in HISTORY_STATES:

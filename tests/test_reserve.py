@@ -282,6 +282,60 @@ def test_wait_polls_until_startup_finishes(h: Harness, monkeypatch: pytest.Monke
     assert sleeps == [reserve.WAIT_POLL_S] * 3
 
 
+def _past_clock_lease(h: Harness) -> None:
+    add_lease(h, label={"name": "old", "expires": NOW - 10})
+
+
+def _released_lease_with_time_left(h: Harness) -> None:
+    add_lease(h, label={"name": "old", "expires": NOW + 3000})
+    ctx = h.context()
+    engine.refresh(ctx)
+    cache = ctx.cache.load()
+    lease = cache.leases["l-0000a001"]
+    lease.state, lease.released_here, lease.destroy_pending = "released", True, True
+    lease.destroy_attempts, lease.destroy_at = 1, NOW - 60
+    ctx.cache.save(cache)
+
+
+@pytest.mark.parametrize("setup", [_past_clock_lease, _released_lease_with_time_left])
+def test_wait_lists_failed_destroy_retry_once(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, setup: Any
+) -> None:
+    setup(h)
+    h.provider.fail["destroy"] = [RigError("provider_error", "boom", "retry")] * 50
+
+    def slow(inst: Instance, req: CreateRequest) -> None:
+        boot(h, inst, req)
+        h.box.state(inst.id).startup_exit = None
+
+    h.provider.on_create = slow
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        h.time.advance(seconds)
+        if len(sleeps) == 6:
+            for box in h.box.boxes.values():
+                box.startup_exit = 0
+
+    monkeypatch.setattr(h.time, "sleep", sleep)
+    waited: list[list[Any]] = []
+    real_wait = reserve.wait_ready
+
+    def wait_ready(*args: Any) -> Any:
+        out = real_wait(*args)
+        waited.append(out[1])
+        return out
+
+    monkeypatch.setattr(reserve, "wait_ready", wait_ready)
+    code, data = run_json(h, "reserve")
+    assert code == 0, data
+    assert len(sleeps) == 6
+    assert [(e.lease, e.ok, e.error) for e in waited[0]] == [("l-0000a001", False, "provider_error")]
+    entries = [(s["lease"], s["ok"], s["error"]) for s in data["swept"]]
+    assert entries == [("l-0000a001", False, "provider_error")]
+
+
 def test_image_unsupported_destroys_box(h: Harness) -> None:
     def lacking(inst: Instance, req: CreateRequest) -> None:
         boot(h, inst, req)
@@ -710,6 +764,18 @@ def test_create_timeout_two_matches_keep_lowest(h: Harness) -> None:
     (kept,) = h.provider.instances
     assert h.provider.destroyed == [kept + 1]
     assert data["lease"] == "l-abababab"
+
+
+def test_create_timeout_failed_duplicate_destroy_names_release_fix(h: Harness) -> None:
+    _timing_out_create(h, 2)
+    h.provider.fail["destroy"] = RigError("provider_error", "boom", "retry")
+    code, out, err = h.run("reserve")
+    assert code == 0, out
+    kept = min(h.provider.instances)
+    assert (
+        f"rig: could not destroy duplicate instance {kept + 1}: boom"
+        f" Run rig release i-{kept + 1} --yes."
+    ) in err
 
 
 def test_create_timeout_no_match_returns_provider_error(h: Harness) -> None:
