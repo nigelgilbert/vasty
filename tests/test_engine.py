@@ -709,6 +709,32 @@ def test_box_marker_sets_adopted_without_a_rerun(harness: Harness) -> None:
     assert lease.adopted is True
 
 
+def test_marker_without_guard_file_or_startup_keeps_layers_and_reruns(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rig.remote import BoxUnreachableError, SshTarget
+
+    row = adopted_orphan(harness, reachable=True)
+    box = harness.box.state(row.id)
+    box.adopted = True
+    real_adopt = harness.box.adopt
+
+    def fail(target: SshTarget, expires: int) -> list[str]:
+        raise BoxUnreachableError("adopt failed")
+
+    monkeypatch.setattr(harness.box, "adopt", fail)
+    lease = refresh(harness).leases["l-abababab"]
+    assert (box.guard_file, box.startup_started) == (False, False)
+    assert label_of(harness, row.id).miss == ["watchdog", "destroy_key"]
+    assert lease.guard_missing == ["watchdog", "destroy_key"]
+    assert lease.adopted is True
+    monkeypatch.setattr(harness.box, "adopt", real_adopt)
+    harness.time.advance(5)
+    lease = refresh(harness).leases["l-abababab"]
+    assert harness.box.adopts == [row.id]
+    assert (lease.guard_missing, label_of(harness, row.id).miss) == ([], [])
+
+
 def test_reserve_lease_with_missing_layers_skips_adoption_retries(harness: Harness) -> None:
     add_key(harness)
     row = add_lease(harness)

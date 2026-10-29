@@ -134,7 +134,8 @@ def merge_warnings(*groups: list[WarningItem]) -> list[WarningItem]:
 def merge_swept(*groups: list[SweptEntry]) -> list[SweptEntry]:
     """Concatenate `swept` lists, keeping the first entry for each lease, `ok` and `error`.
 
-    A failed retry's `expired_at` moves with each refresh, so the key leaves it out.
+    A failed retry for a released lease with time left moves `expired_at`
+    with each refresh, so the key leaves it out.
     """
     seen: set[tuple[str, bool, str | None]] = set()
     out: list[SweptEntry] = []
