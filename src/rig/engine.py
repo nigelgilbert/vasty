@@ -47,7 +47,7 @@ it adopts an orphan. A lease whose label `miss` lists `watchdog` or
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -249,8 +249,16 @@ def _copy_row(lease: CachedLease, inst: Instance, label: Label) -> None:
 
 
 def _new_lease(inst: Instance, label: Label) -> CachedLease:
+    """Return a `pending` lease for a row this machine has not cached.
+
+    No probe has answered on this machine, so every guard layer starts
+    missing. A label `miss=` holds what another machine's probe observed and
+    replaces that default. The probe sets the observed layers once it answers.
+    """
     lease = CachedLease(lease=label.lease, instance_id=inst.id, label=label, state="pending")
     _copy_row(lease, inst, label)
+    observed = [layer for layer in GUARD_LAYERS if layer in label.miss]
+    lease.guard_missing = observed if label.miss else list(GUARD_LAYERS)
     return lease
 
 
@@ -658,27 +666,43 @@ def spend(ctx: Context, snap: Snapshot) -> tuple[Decimal | None, str | None]:
     return spend_from(snap.charges, snap)
 
 
+def locked_active(ctx: Context, snap: Snapshot) -> list[CachedLease]:
+    """Return the active leases from `leases.json` merged with the snapshot's, sorted by id.
+
+    Call it under the `leases.json` lock so a reserve, release or extend by
+    another local process since `refresh` counts. The cache copy replaces the
+    snapshot copy of the same lease. A snapshot lease the cache lacks, for
+    example after a corrupt file, stays in.
+    """
+    with ctx.cache.lock():
+        cached = ctx.cache.load().leases
+    merged = {lease.lease: lease for lease in snap.active()}
+    merged.update(cached)
+    return sorted(
+        (lease for lease in merged.values() if lease.state not in HISTORY_STATES),
+        key=lambda lease: lease.lease,
+    )
+
+
 def projection_for(
     ctx: Context,
     snap: Snapshot,
     extra: Decimal = ZERO,
     replace: Mapping[str, int] | None = None,
+    leases: Iterable[CachedLease] | None = None,
 ) -> tuple[Decimal, Decimal]:
     """Return `(projected, without_action)` for the account (spec §5.2).
 
     `without_action` is spend plus every active lease's commitment to its
     effective expiry. `projected` swaps in the expiry from `replace` (lease id
-    to new expiry) for those leases and adds `extra`. Raise
+    to new expiry) for those leases and adds `extra`. `leases` is the active
+    pool, `snap.active()` when None; spend reads `snap.instances`. Raise
     `spend_unavailable` when spend is unknown.
     """
     spent = budget.require_spent(spend(ctx, snap)[0])
-    active = snap.active()
-    swap = replace or {}
-    base = budget.lease_commitments(active)
-    changed = [
-        (lease.price_per_hr, swap.get(lease.lease, effective_expiry(lease.label)))
-        for lease in active
-    ]
+    pool = snap.active() if leases is None else list(leases)
+    base = budget.lease_commitments(pool)
+    changed = budget.lease_commitments(pool, replace)
     without = budget.projection(spent, base, snap.now, ZERO)
     projected = budget.projection(spent, changed, snap.now, extra)
     return projected, without
@@ -690,13 +714,15 @@ def budget_check(
     extra: Decimal = ZERO,
     hint: str = BUDGET_HINT,
     replace: Mapping[str, int] | None = None,
+    leases: Iterable[CachedLease] | None = None,
 ) -> tuple[Decimal, Decimal]:
     """Refuse an action whose projection passes `daily_budget`.
 
+    Spending commands pass `leases` from `locked_active` under the lock.
     Return `(projected, daily_budget)` so callers can add `budget_low` with
     `budget.budget_low_warning`. Raise `spend_unavailable` or `budget_exceeded`.
     """
-    projected, without = projection_for(ctx, snap, extra, replace)
+    projected, without = projection_for(ctx, snap, extra, replace, leases)
     daily = ctx.settings.daily_budget
     budget.check(projected, without, daily, hint)
     return projected, daily

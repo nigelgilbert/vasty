@@ -304,6 +304,23 @@ def test_no_wait_returns_pending_with_nulls(h: Harness) -> None:
     assert label_of(h, iid).expires is None
 
 
+def test_no_wait_lease_is_partial_with_every_layer_and_no_warning(h: Harness) -> None:
+    _, data = run_json(h, "reserve", "--no-wait")
+    assert (data["guard"], data["guard_missing"]) == (
+        "partial", ["watchdog", "destroy_key", "clock_file"])
+    assert "guard_partial" not in [w["code"] for w in data["warnings"]]
+    cached = h.context().cache.load().leases[data["lease"]]
+    assert cached.guard_missing == ["watchdog", "destroy_key", "clock_file"]
+
+
+def test_no_wait_lease_turns_full_once_the_probe_answers(h: Harness) -> None:
+    _, data = run_json(h, "reserve", "--no-wait")
+    _, status = run_json(h, "status", data["lease"])
+    (entry,) = status["leases"]
+    assert (entry["guard"], entry["guard_missing"]) == ("full", [])
+    assert status["warnings"] == []
+
+
 def test_wait_timeout_destroys_box(h: Harness) -> None:
     h.provider.on_create = None
     code, data = run_json(h, "reserve", "--ttl", "5m")
@@ -506,6 +523,29 @@ def test_budget_low_warning_near_cap(h: Harness) -> None:
     h.env["RIG_DAILY_BUDGET"] = "0.40"
     _, data = run_json(h, "reserve", "--ttl", "1h")
     assert [w["code"] for w in data["warnings"]] == ["budget_low"]
+
+
+def test_budget_counts_local_reserve_between_refresh_and_lock(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rig import engine
+
+    h.env["RIG_DAILY_BUDGET"] = "0.60"
+    real = engine.refresh
+
+    def refresh_then_reserve(ctx: Any, probe: bool = True) -> engine.Snapshot:
+        snap = real(ctx, probe)
+        monkeypatch.setattr(engine, "refresh", real)
+        h.hex_values = ["0000b001"]
+        assert h.run("reserve", "--ttl", "1h", "--no-wait")[0] == 0
+        return snap
+
+    monkeypatch.setattr(engine, "refresh", refresh_then_reserve)
+    code, data = run_json(h, "reserve", "--ttl", "1h", "--no-wait")
+    assert code == 3
+    assert data["error"] == "budget_exceeded"
+    assert data["details"] == {"projected": 0.76, "remaining": 0.22, "daily_budget": 0.6}
+    assert len(calls(h, "create")) == 1
 
 
 def test_spend_unavailable_refuses(h: Harness) -> None:

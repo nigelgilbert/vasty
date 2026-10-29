@@ -166,13 +166,44 @@ def test_unreachable_lease_gets_no_expiring_soon() -> None:
 
 
 def test_guard_partial() -> None:
-    [w] = lease_warnings(lease(guard_missing=["watchdog"]), NOW, WARN)
+    [w] = lease_warnings(lease(guard_missing=["watchdog"], reachable_at=NOW), NOW, WARN)
     assert (w.code, w.message, w.fix) == ("guard_partial", "watchdog not running", "rig release l-8b12")
 
 
 def test_guard_partial_names_every_layer() -> None:
-    [w] = lease_warnings(lease(guard_missing=["clock_file", "destroy_key"]), NOW, WARN)
+    [w] = lease_warnings(lease(guard_missing=["clock_file", "destroy_key"], reachable_at=NOW), NOW, WARN)
     assert w.message == "destroy key missing, clock file out of sync"
+
+
+ALL_LAYERS = ["watchdog", "destroy_key", "clock_file"]
+
+
+def test_unprobed_pending_lease_is_partial_without_warning() -> None:
+    item = lease("pending", guard_missing=list(ALL_LAYERS))
+    assert guard(item) == ("partial", ALL_LAYERS)
+    assert lease_warnings(item, NOW, WARN) == []
+
+
+def test_probed_pending_lease_with_missing_layers_warns() -> None:
+    item = lease("pending", guard_missing=["destroy_key"], reachable_at=NOW - 30)
+    assert codes(lease_warnings(item, NOW, WARN)) == ["guard_partial"]
+
+
+def test_label_miss_from_another_machine_counts_as_observed() -> None:
+    item = lease("pending", label=label(miss=["watchdog"]), guard_missing=["watchdog"])
+    [w] = lease_warnings(item, NOW, WARN)
+    assert (w.code, w.message) == ("guard_partial", "watchdog not running")
+
+
+def test_adopted_lease_without_answer_warns() -> None:
+    item = lease("pending", guard_missing=list(ALL_LAYERS), adopted=True)
+    assert codes(lease_warnings(item, NOW, WARN)) == ["guard_partial"]
+
+
+def test_probed_lease_with_no_missing_layers_is_full() -> None:
+    item = lease("running", guard_missing=[], reachable_at=NOW)
+    assert guard(item) == ("full", [])
+    assert lease_warnings(item, NOW, WARN) == []
 
 
 def test_startup_failed_on_non_zero_exit() -> None:
@@ -212,7 +243,8 @@ def test_history_leases_carry_only_expired_with_running_jobs(state: LeaseState) 
 
 
 def test_warnings_combine_in_order() -> None:
-    item = lease(label=label(expires=NOW + 60), guard_missing=["destroy_key"], startup_exit=1)
+    item = lease(label=label(expires=NOW + 60), guard_missing=["destroy_key"], startup_exit=1,
+                 reachable_at=NOW)
     assert codes(lease_warnings(item, NOW, WARN)) == ["expiring_soon", "guard_partial", "startup_failed"]
 
 

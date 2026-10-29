@@ -249,7 +249,8 @@ def _single(
         raise invalid("The new expiry is at or before now.", _release_hint(None, lease.lease))
     with ctx.cache.lock():
         projected, daily = engine.budget_check(
-            ctx, snap, hint=EXTEND_BUDGET_HINT, replace={lease.lease: expires}
+            ctx, snap, hint=EXTEND_BUDGET_HINT, replace={lease.lease: expires},
+            leases=engine.locked_active(ctx, snap),
         )
         apply(ctx, lease, expires)
     warnings = views.warnings_for([lease], now, ctx.settings.warn_before_expiry)
@@ -295,7 +296,8 @@ def _bulk(
     with ctx.cache.lock():
         if targets:
             projected, daily = engine.budget_check(
-                ctx, snap, hint=EXTEND_BUDGET_HINT, replace=targets
+                ctx, snap, hint=EXTEND_BUDGET_HINT, replace=targets,
+                leases=engine.locked_active(ctx, snap),
             )
             low = budget.budget_low_warning(projected, daily)
             if low is not None:

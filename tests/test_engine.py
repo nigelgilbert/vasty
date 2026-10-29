@@ -687,6 +687,67 @@ def test_budget_check_replace_expiry(harness: Harness) -> None:
     assert shorter < Decimal("2.00")
 
 
+def test_locked_active_takes_cache_state_and_keeps_snapshot_only_leases(harness: Harness) -> None:
+    add_lease(harness, "l-0000a001", dph_total=Decimal("1.00"))
+    add_lease(harness, "l-0000a002", dph_total=Decimal("1.00"))
+    ctx = harness.context()
+    snap = engine.refresh(ctx)
+    data = ctx.cache.load()
+    data.leases["l-0000a001"].state = "released"
+    del data.leases["l-0000a002"]
+    data.leases["l-0000a003"] = engine.lease_from_row(
+        harness.provider.add_instance(label=lease_label("l-0000a003")),
+        Label(lease="l-0000a003", owner="claude", created=NOW, ttl=3600),
+    )
+    ctx.cache.save(data)
+    assert [lease.lease for lease in engine.locked_active(ctx, snap)] == ["l-0000a002", "l-0000a003"]
+
+
+def test_budget_check_counts_cache_lease_added_after_refresh(harness: Harness) -> None:
+    harness.provider.covered_through = NOW
+    ctx = harness.context()
+    snap = engine.refresh(ctx)
+    row = harness.provider.add_instance(label=lease_label("l-0000a001"), dph_total=Decimal("2.00"))
+    engine.store_lease(ctx, engine.lease_from_row(
+        row, Label(lease="l-0000a001", owner="claude", created=NOW, ttl=3600, expires=NOW + 3600),
+    ))
+    assert engine.budget_check(ctx, snap)[0] == Decimal("0")
+    with ctx.cache.lock():
+        projected, _ = engine.budget_check(ctx, snap, leases=engine.locked_active(ctx, snap))
+    assert projected == Decimal("2.00")
+
+
+# Guard of a lease no probe on this machine has answered.
+
+
+def test_rebuilt_loading_lease_starts_with_every_layer_missing(harness: Harness) -> None:
+    add_lease(harness, actual_status="loading")
+    snap = refresh(harness)
+    assert snap.leases["l-0000a001"].guard_missing == ["watchdog", "destroy_key", "clock_file"]
+
+
+def test_rebuilt_lease_takes_layers_from_label_miss(harness: Harness) -> None:
+    add_lease(harness, actual_status="loading", label={"miss": ["destroy_key"]})
+    snap = refresh(harness)
+    assert snap.leases["l-0000a001"].guard_missing == ["destroy_key"]
+
+
+def test_rebuilt_lease_turns_full_once_the_probe_answers(harness: Harness) -> None:
+    add_lease(harness)
+    snap = refresh(harness)
+    lease = snap.leases["l-0000a001"]
+    assert lease.reachable_at == NOW
+    assert lease.guard_missing == []
+
+
+def test_rebuilt_lease_keeps_every_layer_missing_when_the_probe_fails(harness: Harness) -> None:
+    add_lease(harness, reachable=False)
+    snap = refresh(harness)
+    lease = snap.leases["l-0000a001"]
+    assert lease.reachable_at is None
+    assert lease.guard_missing == ["watchdog", "destroy_key", "clock_file"]
+
+
 def test_write_label_checks_expires(harness: Harness) -> None:
     row = add_lease(harness, label={"expires": NOW + 60})
     ctx = harness.context()

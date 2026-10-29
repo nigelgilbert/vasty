@@ -141,7 +141,10 @@ def lease_warnings(lease: CachedLease, now: int, warn_before_expiry: int) -> lis
 
     Codes: `expiring_soon` or `expiring_with_running_job`, `box_unreachable`,
     `guard_partial`, `startup_failed` on active leases, and
-    `expired_with_running_jobs` on an `expired` lease.
+    `expired_with_running_jobs` on an `expired` lease. `guard_partial` needs
+    observed layers: a probe answered (`reachable_at`), another machine's
+    probe wrote `miss=` to the label, or `tag` adopted the box without a
+    guard.
     """
     target = lease.lease
     jobs = live_jobs(lease)
@@ -167,7 +170,8 @@ def lease_warnings(lease: CachedLease, now: int, warn_before_expiry: int) -> lis
             message = f"no answer for {span(now - lease.reachable_at)}"
         out.append(make_warning("box_unreachable", target, message))
     level, missing = guard(lease)
-    if level == "partial":
+    observed = lease.reachable_at is not None or bool(lease.label.miss) or lease.adopted
+    if level == "partial" and observed:
         message = ", ".join(_LAYER_MESSAGES[layer] for layer in missing)
         out.append(make_warning("guard_partial", target, message))
     if startup_failed(lease):

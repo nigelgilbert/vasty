@@ -319,6 +319,36 @@ def test_shortening_passes_over_budget(h: Harness) -> None:
     assert label_of(h, row.id).expires == NOW + 3600
 
 
+def reserve_after_refresh(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run a second local `reserve --no-wait` right after the next refresh returns."""
+    from fakes import make_offer
+    from rig import engine
+
+    h.provider.offers = [make_offer(1)]
+    real = engine.refresh
+
+    def refresh_then_reserve(ctx: Any, probe: bool = True) -> engine.Snapshot:
+        snap = real(ctx, probe)
+        monkeypatch.setattr(engine, "refresh", real)
+        h.hex_values = ["0000b001"]
+        assert h.run("reserve", "--ttl", "1h", "--no-wait")[0] == 0
+        return snap
+
+    monkeypatch.setattr(engine, "refresh", refresh_then_reserve)
+
+
+def test_budget_counts_local_reserve_between_refresh_and_lock(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h.env["RIG_DAILY_BUDGET"] = "1.00"
+    row = add_lease(h, label={"expires": NOW + 3600}, dph_total=Decimal("0.50"))
+    reserve_after_refresh(h, monkeypatch)
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert code == 3
+    assert data["details"] == {"projected": 1.13, "remaining": 0.12, "daily_budget": 1.0}
+    assert label_of(h, row.id).expires == NOW + 3600
+
+
 # Bulk.
 
 
@@ -342,6 +372,19 @@ def test_bulk_to_aligns_expiries_with_one_now(h: Harness) -> None:
     add_lease(h, "l-0000a002", label={"group": "exp", "expires": NOW + 5000})
     _, data = run_json(h, "extend", "--group", "exp", "--to", "1h")
     assert {r["expires_at"] for r in data["results"]} == {"2026-10-29T02:00:00Z"}
+
+
+def test_bulk_budget_counts_local_reserve_between_refresh_and_lock(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h.env["RIG_DAILY_BUDGET"] = "1.00"
+    add_lease(h, "l-0000a001", label={"group": "exp", "expires": NOW + 1800},
+              dph_total=Decimal("0.50"))
+    reserve_after_refresh(h, monkeypatch)
+    code, data = run_json(h, "extend", "--group", "exp", "--by", "1h")
+    assert code == 3
+    assert data["error"] == "budget_exceeded"
+    assert data["details"] == {"projected": 1.13, "remaining": 0.37, "daily_budget": 1.0}
 
 
 def test_bulk_budget_is_atomic(h: Harness) -> None:

@@ -6,7 +6,7 @@ seconds. Output rounds to 2 places through `rig.output.money`.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from decimal import ROUND_HALF_UP, Decimal
 
 from rig.errors import RigError
@@ -57,10 +57,16 @@ def require_spent(spent: Decimal | None) -> Decimal:
     return spent
 
 
-def lease_commitments(leases: Iterable[CachedLease]) -> list[tuple[Decimal, int]]:
-    """Return `(price_per_hr, effective_expiry)` for each managed lease outside history."""
+def lease_commitments(
+    leases: Iterable[CachedLease], replace: Mapping[str, int] | None = None
+) -> list[tuple[Decimal, int]]:
+    """Return `(price_per_hr, expiry)` for each managed lease outside history.
+
+    `expiry` is the effective expiry, or the value `replace` maps the lease id to.
+    """
+    swap = replace or {}
     return [
-        (lease.price_per_hr, effective_expiry(lease.label))
+        (lease.price_per_hr, swap.get(lease.lease, effective_expiry(lease.label)))
         for lease in leases
         if lease.state not in HISTORY_STATES and lease.state != "orphan"
     ]

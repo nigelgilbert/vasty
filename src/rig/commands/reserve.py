@@ -38,7 +38,7 @@ from rig.models import (
     SweptEntry,
     WarningItem,
 )
-from rig.state import effective_expiry, guard, lease_warnings, make_warning
+from rig.state import GUARD_LAYERS, effective_expiry, guard, lease_warnings, make_warning
 from rig.timeutil import format_duration, iso
 
 if TYPE_CHECKING:
@@ -102,7 +102,8 @@ def reserve_lease(
             )
             offer = choose_offer(ctx, query)
             projected, daily = engine.budget_check(
-                ctx, snap, budget.cost(offer.dph_total, ttl), RESERVE_BUDGET_HINT
+                ctx, snap, budget.cost(offer.dph_total, ttl), RESERVE_BUDGET_HINT,
+                leases=engine.locked_active(ctx, snap),
             )
             low = budget.budget_low_warning(projected, daily)
             if low is not None:
@@ -366,6 +367,7 @@ def _new_cached(
         lease = CachedLease(lease=label.lease, instance_id=row, label=label, state="pending")
     lease.label = label
     lease.state = "pending"
+    lease.guard_missing = list(GUARD_LAYERS)
     if lease.gpu is None:
         lease.gpu = offer.gpu_name
         lease.gpus = offer.num_gpus
