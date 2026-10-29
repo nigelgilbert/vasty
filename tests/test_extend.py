@@ -425,6 +425,10 @@ UNWRITABLE_UNDER_LOCK = [
     pytest.param({"state": "unreachable"}, 2, "box_unreachable", id="unreachable"),
     pytest.param({"state": "stopped"}, 2, "box_unreachable", id="stopped"),
     pytest.param({"state": "pending", "reachable_at": None}, 1, "lease_pending", id="pending"),
+    pytest.param({"state": "unreachable", "destroy_pending": True}, 1, "lease_expired",
+                 id="unreachable-destroy-pending"),
+    pytest.param({"state": "pending", "reachable_at": None, "destroy_pending": True}, 1,
+                 "lease_expired", id="pending-destroy-pending"),
 ]
 
 
