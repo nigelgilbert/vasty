@@ -18,13 +18,13 @@ Scope. The filter applies when the resolved image declares a floor. `reserve` wi
 
 Until it lands. Phase 5 of the plan reserves with `--gpu 5060ti --max-price 0.21`, whose pool ran CUDA 13 throughout the rerun.
 
-## 2. `uptime_s` and the spend estimate start at the first `running` sample
+## 2. `uptime_s` starts at the first `running` sample
 
-`uptime_s` in `views.py` and the live estimate in `budget.py` count from the moment vasty first saw the instance `running`. The lease cache records that time. Rows without it fall back to Vast's `start_date`. Filed as `issues/uptime-counts-the-image-pull.md`.
+`uptime_s` in `views.py` counts from the moment `engine.refresh` first saw the provider report the instance `running`. The lease cache records that time. Leases without it fall back to the label's `created`. Filed as `issues/uptime-counts-the-image-pull.md`.
 
 Why. Vast bills no GPU time while an instance is `loading`. Vast's `start_date` equals the create time: instance 58355222 reported `start_date` 1793338271.86 against label `created=1793338271`. So the PR #1 clamp at `start_date` still counts the pull. The first rerun box pulled for 20 minutes and `release` reported `cost: 0.04` against a $0.007 balance drop. With the 5060 Ti live, `spent_today` read 0.13 against 0.10.
 
-Scope. Storage and bandwidth bill during the pull and stay outside the estimate. The error is bounded by the pull time at the box's hourly rate. With a cached image it is a few cents. Decision 2 in `docs/budget-decisions.md` removes the spend estimate. The `uptime_s` and per-lease `cost` fix still applies.
+Scope. Decisions 2 and 3 in `docs/budget-decisions.md` replace the spend estimate and per-lease `cost` with Vast's billed figures, so this decision covers `uptime_s` alone.
 
 ## 3. The builtin model entry is `Qwen/Qwen3-32B-AWQ`
 

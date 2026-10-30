@@ -1,4 +1,4 @@
-# `uptime_s` and `cost` count the unbilled image pull
+# `uptime_s` counts the unbilled image pull
 
 Live run 2026-10-30, lease `l-b5c8ea2b`, RTX 3060 at $0.08/hr. Decided in `docs/serve-decisions.md`, decision 2.
 
@@ -22,12 +22,10 @@ The balance dropped $0.007 over the box's life. The image pull took 20m35s of th
 
 ## Fix
 
-1. The lease cache records `running_at`, the time vasty first saw the instance `running`. `reserve` sets it when the readiness wait ends; the sweep and `status` set it on the first `running` sample for a box they adopt. `reachable_at` stays as it is: `_apply_probe` in `src/vasty/engine.py` rewrites it on every answered probe, so it holds the last probe time.
-2. `uptime_s` and `lease_cost` count from `running_at`, falling back to `created`.
-3. `spent_today` clamps at `running_at` when the cache holds it, else `start_date`. Drop this item if `issues/replace-daily-budget-with-vast-pass-through.md` lands first.
+1. The lease cache records `running_at`, the time vasty first saw the instance `running`. `engine.refresh` sets it on the first sample where the provider reports `running`, which lands before the ssh readiness wait ends. `reachable_at` stays as it is: `_apply_probe` in `src/vasty/engine.py` rewrites it on every answered probe, so it holds the last probe time.
+2. `uptime_s` counts from `running_at`, falling back to `created`. `cost` and `spent_today` are covered by `issues/replace-daily-budget-with-vast-pass-through.md`, which reports Vast's billed figures and drops the estimate.
 
 ## Tests
 
 - A lease with `running_at` 20 minutes after `created` reports `uptime_s` from `running_at`.
 - A lease without `running_at` keeps the current numbers.
-- `spent_today` with a cached `running_at` later than `start_date` estimates from `running_at`.

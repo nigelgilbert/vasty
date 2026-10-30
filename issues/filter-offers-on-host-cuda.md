@@ -41,6 +41,7 @@ The same commands on an RTX 5060 Ti box with driver 580.173.02 served the model 
 2. Add `ModelEntry.cuda: float | None`. The builtin entry sets `13.0`. `serve` passes the entry's value into the query on the auto-reserve path.
 3. Add `Offer.cuda_max_good`, read from the `/bundles/` row, so `reserve --verbose` and the `no_offers` hint can show it.
 4. The `no_offers` hint lists `cuda` beside `max_price` and `region`.
+5. Add `CachedLease.cuda: float | None`, set from the offer at create. It stays None for leases cached before this change, tagged boxes and cache rebuilds, since the instance row carries `cuda_max_good` and `_apply_probe` can fill it on the next refresh. The box reuse hardware comparison treats None as a mismatch when the settings carry a `cuda` floor and as a match otherwise.
 
 ## Tests
 

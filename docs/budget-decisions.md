@@ -25,3 +25,9 @@ Guards that stay. `max_price` caps dollars per hour per box at `reserve`. An opt
 What goes. `budget_exceeded` on projected spend, `budget_low`, `spend_source`, the `covered_through` arithmetic and most of `src/vasty/budget.py`. The README section on `daily_budget` is rewritten around `min_credit`.
 
 Known limit. On an account with auto top-up, credit never runs out, so `min_credit` never triggers and `max_price` is the only guard.
+
+## 3. Per-lease `cost` is Vast's billed amount or null
+
+`lease_cost` in `src/vasty/views.py` returns the sum of Vast's charge rows for the instance, or null when none exist. `cost_source` goes with `spend_source`. The charges query starts at the earlier of today and the oldest active lease's `created`, so a lease that crossed midnight UTC reports its lifetime billing. `release` reports the same figure.
+
+Why. The estimate blended billed rows with price times the gap since the last post, and the gap counted the unbilled image pull. Vast posts a row within minutes of a box running, so null covers the first minutes only. Decided 2026-10-30.

@@ -36,7 +36,7 @@ Each phase lists its commands, the pass check, the spend cap, and the cleanup. T
 - vasty creates `ssh_proxy` on an offer without direct ports and then requires no port mapping, so a proxy box has no 8000 or 8080 mapping. Search does not filter on `direct_port_count`.
 - `vasty status` runs the sweep. `vasty status --cached` reads `leases.json` and shows a local countdown only. Watching a box leave means `vastai show instances --raw`.
 - Bulk selectors never include orphans, `--everyone --yes` included. An orphan is released by its `i-` id or by `vastai destroy instance`.
-- vLLM ships in `vllm/vllm-openai:v0.32.0`. The 3060 (compute capability 8.6) qualifies for `serve`.
+- vLLM ships in `vllm/vllm-openai:v0.32.0`, built on CUDA 13.0. A GeForce host needs driver 580 or later. On 2026-10-30 most reliable RTX 3060 offers ran CUDA 12.x drivers and every RTX 5060 Ti offer ran 13.0 or later, so phase 5 reserves a 5060 Ti.
 - Minimum deposit is $5. With no card on file, Vast stops instances at $0 and destroys them after a grace period. A card-free account has no autobilling. The account-level stop is the prepaid balance with no card saved. Fund the account with the ceiling and nothing more.
 
 ## 3. Setup
@@ -238,10 +238,10 @@ Pass: `status --group` lists both; bulk `extend` returns `results` with two entr
 
 ### Phase 5: serve. Cap $2.00. Needs a go from Nigel before it starts.
 
-A 3060 has 12 GB VRAM, enough for a 0.5B model. The model is ungated, 988 MB. `serve` allows 30m for readiness after setup, so the lease runs 45m.
+A 5060 Ti has 16 GB VRAM, enough for a 0.5B model. The model is ungated, 988 MB. `serve` allows 30m for readiness after setup, so the lease runs 45m. The GPU and price override `defaults` because the vLLM image needs a CUDA 13 host (section 2).
 
 ```
-vasty reserve --name sv --vram 12 --ttl 45m --disk 40 --image vllm/vllm-openai:v0.32.0
+vasty reserve --name sv --gpu 5060ti --max-price 0.21 --ttl 45m --disk 40 --image vllm/vllm-openai:v0.32.0
 # box ready check
 vasty ssh sv -- df -h /workspace
 vasty serve --on sv --model Qwen/Qwen2.5-0.5B-Instruct
