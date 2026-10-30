@@ -284,7 +284,7 @@ A `[models]` entry sets `vram`, `gpu` and `image` for `serve --model NAME` ahead
 Done:
 
 - Every verb above, in `src/vasty/`.
-- 1141 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
+- 1143 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
 - One funded live run on Vast, 2026-10-29. Every phase passed except `serve`. See [docs/live-test-report.md](docs/live-test-report.md).
 
 Not done:
