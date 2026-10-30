@@ -157,7 +157,7 @@ Instance 58328062, lease `l-c38505e0`, $0.08/hr, Korean host. `reserve --name sv
 AssertionError
 ```
 
-Installed versions: vllm 0.6.3, torch 2.4.0, transformers 5.22.0, tokenizers 0.23.3. `pip install vllm==0.6.3` pulls an unpinned transformers, and transformers 5.x refuses torch 2.4 and rewrites Qwen2.5's `rope_scaling` into a form without `factor`. The retry (`j-2`) failed the same way in 8 s. The model itself never downloaded. Filed as `issues/serve-vllm-063-transformers-pin.md`.
+Installed versions: vllm 0.6.3, torch 2.4.0, transformers 5.22.0, tokenizers 0.23.3. `pip install vllm==0.6.3` pulls an unpinned transformers, and transformers 5.x refuses torch 2.4 and rewrites Qwen2.5's `rope_scaling` into a form without `factor`. The retry (`j-2`) failed the same way in 8 s. The model itself never downloaded. Filed as `issues/serve-runs-the-image-vllm.md`.
 
 The curl checks were not reachable. `release sv`: `uptime_s: 313`, `cost: 0.02`, two jobs each `exit: 1`.
 

@@ -286,7 +286,7 @@ Done:
 
 Not done:
 
-- `serve` fails on the vLLM 0.6.3 install. See [issues/serve-vllm-063-transformers-pin.md](issues/serve-vllm-063-transformers-pin.md).
+- `serve` fails on the vLLM 0.6.3 install. See [issues/serve-runs-the-image-vllm.md](issues/serve-runs-the-image-vllm.md).
 - The default image `vasty/base:cuda12.4` is unpublished. See the quick start for the workaround.
 - Not on PyPI. Install from the repo.
 
