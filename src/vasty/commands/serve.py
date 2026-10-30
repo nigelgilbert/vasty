@@ -33,7 +33,7 @@ from vasty.commands._common import (
     require_tools,
     save_lease,
 )
-from vasty.config import ModelEntry, resolve
+from vasty.config import VLLM_IMAGE, ModelEntry, resolve
 from vasty.context import Context
 from vasty.errors import VastyError
 from vasty.models import SERVE_PORT, CachedLease, Job, ServeResult, WarningItem
@@ -46,7 +46,6 @@ POLL_INTERVAL_S = 5.0
 HTTP_TIMEOUT_S = 5.0
 PREFLIGHT_TIMEOUT_S = 30.0
 PREFLIGHT_COMMAND = "command -v vllm"
-VLLM_IMAGE = "vllm/vllm-openai:v0.32.0"
 
 
 def model_entry(ctx: Context, model: str) -> ModelEntry | None:

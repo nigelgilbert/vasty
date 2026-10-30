@@ -201,7 +201,7 @@ Selected fields:
 }
 ```
 
-The box's image supplies vLLM. `serve` launches `vllm` from PATH and returns `vllm_missing` when the image has none. The builtin `Qwen/Qwen3-72B-Instruct` entry uses `vllm/vllm-openai:v0.32.0`. On a plain image, install vLLM in a `startup` hook first.
+The box's image supplies vLLM, and `serve` launches `vllm` from PATH. The builtin `Qwen/Qwen3-72B-Instruct` entry uses `vllm/vllm-openai:v0.32.0`. On a plain image, install vLLM in a `startup` hook first.
 
 Point an OpenAI-compatible client at `url` with `api_key`. The endpoint is public on a random port, protected by a fresh key per job. The key prints once. `--bind-local` keeps vLLM on `127.0.0.1` for use through `vasty ssh -L`. The endpoint dies with the lease.
 

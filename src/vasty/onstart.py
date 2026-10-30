@@ -107,26 +107,18 @@ def _installer(apt: str, essentials: tuple[tuple[str, str], ...]) -> str:
     """Install missing essentials with apt-get and record what the image lacks.
 
     `p` lists the packages for missing essentials. A missing essential on an
-    image without apt-get adds `apt-get` to `unsupported`. When `python3` is
-    an essential and cannot import `ensurepip` and `venv`, `v` holds
-    `python3-venv`, which `serve` needs for `python3 -m venv`. It joins the
-    apt-get call when apt-get exists. Without apt-get the installer skips it
-    and `serve` reports `serve_failed` when `python3 -m venv` fails.
+    image without apt-get adds `apt-get` to `unsupported`.
     """
     pairs = " ".join(f"{cmd}:{pkg}" for cmd, pkg in essentials)
     a = shlex.quote(apt)
-    venv = ""
-    if any(cmd == "python3" for cmd, _ in essentials):
-        venv = "python3 -c 'import ensurepip,venv'>/dev/null 2>&1||v=python3-venv\n"
     return (
-        f"u=;p=;v=;for e in {pairs};do c=${{e%%:*}};"
+        f"u=;p=;for e in {pairs};do c=${{e%%:*}};"
         'command -v $c>/dev/null||[ -x /usr/sbin/$c ]||p="$p ${e#*:}";done\n'
-        + venv
-        + '[ "$(id -u)" = 0 ]||u="$u root"\n'
-        f'if command -v {a}>/dev/null;then if [ -n "$p$v" ];then '
+        '[ "$(id -u)" = 0 ]||u="$u root"\n'
+        f'if command -v {a}>/dev/null;then if [ -n "$p" ];then '
         f"export DEBIAN_FRONTEND=noninteractive;{a} update -qq>>\"$R/install.log\" 2>&1;"
-        f"{a} install -y -qq --no-install-recommends $p $v>>\"$R/install.log\" 2>&1||"
-        'echo "install failed:$p $v">>"$R/install.log";fi\n'
+        f"{a} install -y -qq --no-install-recommends $p>>\"$R/install.log\" 2>&1||"
+        'echo "install failed:$p">>"$R/install.log";fi\n'
         'elif [ -n "$p" ];then u="$u apt-get";fi\n'
         'if [ -n "$u" ];then printf \'%s\\n\' $u>"$R/unsupported";else rm -f "$R/unsupported";fi\n'
     )

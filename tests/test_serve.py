@@ -9,7 +9,7 @@ from fakes import NOW, FakeReserve, Harness, add_lease
 from vasty.commands import serve
 from vasty.errors import VastyError
 from vasty.models import Job
-from vasty.remote import ExecResult, SshTarget
+from vasty.remote import BoxUnreachableError, ExecResult, SshTarget
 
 QWEN = "Qwen/Qwen3-72B-Instruct"
 KEY = "vasty-" + "ab" * 32
@@ -164,6 +164,19 @@ def test_serve_quant_flag_overrides_entry(
     assert started[0][1].endswith("--quantization fp8")
 
 
+def test_serve_reads_user_model_entry(
+    harness: Harness, box: int, started: list[tuple[Job, str]]
+) -> None:
+    path = harness.home / ".config" / "vasty" / "config.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '[models."org/small"]\nvram = 24\nquant = "fp8"\nimage = "vllm/vllm-openai:v0.32.0"\n'
+    )
+    code, _, _ = run_serve(harness, "--on", "ft", "--model", "org/small")
+    assert code == 0
+    assert started[0][1].endswith("--quantization fp8")
+
+
 def test_serve_bind_local(harness: Harness, box: int, started: list[tuple[Job, str]]) -> None:
     state = harness.box.state(box)
     state.exec_results["curl"] = ExecResult(0, "200", "")
@@ -257,6 +270,25 @@ def test_serve_os_error_releases_reserved_box(harness: Harness, reserve: FakeRes
     with pytest.raises(OSError):
         run_serve(harness, "--model", QWEN)
     assert harness.provider.destroyed == [1001]
+
+
+@pytest.mark.parametrize("on", [True, False])
+def test_serve_preflight_box_unreachable(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, started: list[tuple[Job, str]], on: bool
+) -> None:
+    if on:
+        box_id = add_lease(harness, label={"name": "ft"}).id
+        argv: tuple[str, ...] = ("--on", "ft")
+    else:
+        FakeReserve(harness).install(monkeypatch)
+        box_id = 1001
+        argv = ()
+    unreachable = BoxUnreachableError("The box did not answer within 30s.")
+    harness.box.state(box_id).exec_errors["command -v vllm"] = unreachable
+    code, data, _ = run_serve(harness, *argv, "--model", QWEN)
+    assert code == 2 and data["error"] == "box_unreachable"
+    assert started == []
+    assert harness.provider.destroyed == ([] if on else [1001])
 
 
 def test_serve_failure_keeps_reused_box(harness: Harness, reserve: FakeReserve, box: int) -> None:
