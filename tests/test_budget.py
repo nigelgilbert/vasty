@@ -96,6 +96,11 @@ def test_spent_today_start_in_future_costs_nothing() -> None:
     assert spent_today(charges, [inst(1, "1.00", start_date=NOW + 600)], NOW, MIDNIGHT) == D("0")
 
 
+def test_spent_today_start_before_day_runs_from_day_start() -> None:
+    charges = Charges(per_instance={}, covered_through=MIDNIGHT)
+    assert spent_today(charges, [inst(1, "1.00", start_date=MIDNIGHT - 7200)], NOW, MIDNIGHT) == D("1.00")
+
+
 def test_spent_today_falls_back_to_label_created() -> None:
     charges = Charges(per_instance={}, covered_through=MIDNIGHT)
     label = "vasty:v1;lease=l-0000a001;owner=o;created=" + str(NOW - 1800) + ";ttl=3600"
