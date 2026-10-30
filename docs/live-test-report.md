@@ -163,6 +163,51 @@ The curl checks were not reachable. `release sv`: `uptime_s: 313`, `cost: 0.02`,
 
 Redaction: the vLLM arg dump in the job log carried the serve `api_key`. It was redacted by value in three saved files. `grep -rE "vasty-[0-9a-f]{64}" out/` returns nothing.
 
+## Phase 5 rerun, 2026-10-30. PASS on a CUDA 13 host.
+
+Run against PR #1 at `9a813dd`, same account and config. Raw output in `docs/live/p5r/`.
+
+### The plan's command picks hosts that cannot run the image
+
+`vllm/vllm-openai:v0.32.0` is built on CUDA 13.0 (`NVIDIA_REQUIRE_CUDA=cuda>=13.0`). A GeForce card needs driver 580 or later for it, since CUDA forward compatibility covers datacenter GPUs only. vasty's offer search ignores `cuda_max_good`. At 05:30Z, 4 of the top 5 verified RTX 3060 offers by reliability ran CUDA 12.2 to 12.8.
+
+| Try | Flags beyond the plan | Host | CUDA | Outcome |
+|---|---|---|---|---|
+| 1 | none | KR, 3060, $0.084/hr | 12.8 | `running` after 20m35s (9.2 GB pull), `serve_failed` in 54 s |
+| 2 | `--region KR` | same machine, 43213 | 12.8 | released while `loading` |
+| 3 | `--region CA` | Quebec, 3060 | 12.4 | released while `loading` |
+| 4 | `--gpu 5060ti --max-price 0.21` | AU, 5060 Ti 16 GB, $0.184/hr | 13.0 | pass |
+
+Try 1: `torch.cuda.is_available()` is `False` in the container. The job log ends in `RuntimeError: ... Error 804: forward compatibility was attempted on non supported HW` from `init_device`. `serve` returned `serve_failed` with `details: {"exit": 1}`. The retry was skipped because the host is the cause. Tries 2 and 3 show `--region` racing the pool: the 12.8 offer returned as soon as try 1 released it. All 30 RTX 5060 Ti offers ran CUDA 13.0 or later.
+
+### Try 4
+
+`reserve` 05:56:12Z to 06:01:36Z: `running`, `guard: full`, port 8000 mapped to 11116. The ready check passed at once and `torch.cuda.is_available()` was `True`.
+
+`vasty serve --on sv --model Qwen/Qwen2.5-0.5B-Instruct` ran 06:02:06Z to 06:07:28Z, exit 0, and returned `url` and `api_key`. Job log: weights downloaded in 18 s, two CUDA graph captures of 103 s and 107 s, engine init 237 s.
+
+| Check | Result |
+|---|---|
+| `curl -H "Authorization: Bearer $KEY" URL/models` | 200, lists `Qwen/Qwen2.5-0.5B-Instruct` |
+| `curl URL/models` | 401 |
+| chat completion, added | 200, `PONG!` |
+
+`release sv`: `uptime_s: 719`, `cost: 0.06`, job `j-1` served 357 s.
+
+### Negative check. PASS.
+
+`reserve --name pl --ttl 10m` on the default image: 3060, $0.06/hr, `running` in 46 s. `serve --on pl` returned `vllm_missing`, exit 1, with a hint naming `vllm/vllm-openai:v0.32.0`. `status pl` reported `running`.
+
+### Other readings
+
+- `spent_today` read 0.13 against 0.10 real at 06:07Z with the 5060 Ti live. The pre-fix estimate would have billed that box from midnight, about $1.10.
+- `release` and `status` count `uptime_s` from create, so `cost` includes unbilled pull time. Try 1 reported `cost: 0.04` against a $0.007 balance drop.
+- Releasing a `loading` box costs nothing (`uptime_s: 30`, `cost: 0.0`). A blocking `reserve` on that box exits 2 with `box_unreachable`.
+- The agent's permission classifier blocked `release --all --everyone --yes`. Every box was released by name and `vastai show instances --raw` returned `[]`.
+- The serve key, the Vast key and `CONTAINER_API_KEY` grep clean in `docs/live/p5r/`. The instance dump's `jupyter_token` was redacted.
+
+Five boxes, balance drop $0.046. Final credit 19.8603, read 120 s after the last box left, while Vast was still posting charges.
+
 ## Phase 6: teardown. PASS.
 
 `vasty release --all --everyone --yes` returned `results: []` (sv was already released). `vasty status`: `leases: []`, `spent_today: 0.07`, `spend_source: billing`. `vastai show instances --raw`: `[]`. Final credit 19.90616859492, balance 0.
@@ -179,6 +224,7 @@ Redaction: the vLLM arg dump in the job log carried the serve `api_key`. It was 
 | 5 serve | fail, dependency pin | $0.014 |
 | 6 teardown | pass | 0 |
 | Total | | $0.094 of the $5.50 ceiling |
+| 5 rerun, 2026-10-30 | pass on a CUDA 13 host | $0.046 |
 
 Twelve instances created, all gone. Nine hosts' bandwidth rates ranged $0.0026 to $0.0088 per GB. The open-question answers:
 
