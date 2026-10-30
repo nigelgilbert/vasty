@@ -29,10 +29,10 @@ MIDNIGHT = 1_793_232_000  # 2026-10-29T00:00:00Z
 NOW = MIDNIGHT + 3600
 
 
-def inst(instance_id: int, dph: str) -> Instance:
+def inst(instance_id: int, dph: str, label: str | None = None, **kw: Any) -> Instance:
     return Instance(
-        id=instance_id, label=None, actual_status="running", gpu_name="RTX 4090", num_gpus=1,
-        gpu_ram_gb=24.0, dph_total=D(dph), public_ipaddr=None, ssh_host=None, ssh_port=None,
+        id=instance_id, label=label, actual_status="running", gpu_name="RTX 4090", num_gpus=1,
+        gpu_ram_gb=24.0, dph_total=D(dph), public_ipaddr=None, ssh_host=None, ssh_port=None, **kw,
     )
 
 
@@ -70,6 +70,49 @@ def test_spent_today_coverage_after_now() -> None:
 
 def test_spent_today_none_without_coverage() -> None:
     assert spent_today(Charges(per_instance={1: D("1")}, covered_through=None), [], NOW, MIDNIGHT) is None
+
+
+def test_spent_today_fresh_day_runs_from_start_date() -> None:
+    now = MIDNIGHT + 84_600
+    charges = Charges(per_instance={}, covered_through=MIDNIGHT)
+    spent = spent_today(charges, [inst(1, "0.06", start_date=now - 600)], now, MIDNIGHT)
+    assert spent == D("0.01")
+
+
+def test_spent_today_start_before_coverage_runs_from_coverage() -> None:
+    charges = Charges(per_instance={1: D("0.50")}, covered_through=NOW - 1800)
+    spent = spent_today(charges, [inst(1, "1.00", start_date=NOW - 3000)], NOW, MIDNIGHT)
+    assert spent == D("0.50") + D("0.50")
+
+
+def test_spent_today_start_after_coverage_runs_from_start() -> None:
+    charges = Charges(per_instance={}, covered_through=NOW - 1800)
+    spent = spent_today(charges, [inst(1, "1.00", start_date=NOW - 900)], NOW, MIDNIGHT)
+    assert spent == D("0.25")
+
+
+def test_spent_today_start_in_future_costs_nothing() -> None:
+    charges = Charges(per_instance={}, covered_through=NOW - 1800)
+    assert spent_today(charges, [inst(1, "1.00", start_date=NOW + 600)], NOW, MIDNIGHT) == D("0")
+
+
+def test_spent_today_falls_back_to_label_created() -> None:
+    charges = Charges(per_instance={}, covered_through=MIDNIGHT)
+    label = "vasty:v1;lease=l-0000a001;owner=o;created=" + str(NOW - 1800) + ";ttl=3600"
+    assert spent_today(charges, [inst(1, "1.00", label=label)], NOW, MIDNIGHT) == D("0.50")
+
+
+def test_spent_today_start_date_wins_over_label() -> None:
+    charges = Charges(per_instance={}, covered_through=MIDNIGHT)
+    label = "vasty:v1;lease=l-0000a001;owner=o;created=" + str(NOW - 1800) + ";ttl=3600"
+    live = [inst(1, "1.00", label=label, start_date=NOW - 900)]
+    assert spent_today(charges, live, NOW, MIDNIGHT) == D("0.25")
+
+
+@pytest.mark.parametrize("label", [None, "my-box", "vasty:v1;lease=bad", "vasty:v9;lease=l-0000a001"])
+def test_spent_today_without_start_runs_from_coverage(label: str | None) -> None:
+    charges = Charges(per_instance={}, covered_through=NOW - 1800)
+    assert spent_today(charges, [inst(1, "1.00", label=label)], NOW, MIDNIGHT) == D("0.50")
 
 
 def test_require_spent() -> None:

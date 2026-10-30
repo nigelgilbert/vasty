@@ -19,6 +19,7 @@ from vasty.provider import (
     VastProvider,
     build_offer_query,
     gpu_name_filter,
+    normalize_instance,
     normalize_ports,
     parse_charges,
 )
@@ -216,6 +217,15 @@ def instance_row(iid: int, **kw: Any) -> dict[str, Any]:
     }
     row.update(kw)
     return row
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [(1_793_316_000.5, 1_793_316_000), ("1793316000", 1_793_316_000), (None, None)]
+)
+def test_normalize_instance_reads_start_date(value: object, expected: int | None) -> None:
+    inst = normalize_instance(instance_row(1, start_date=value))
+    assert inst is not None
+    assert inst.start_date == expected
 
 
 def test_list_instances_follows_next_token() -> None:

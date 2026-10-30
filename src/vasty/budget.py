@@ -9,8 +9,9 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from decimal import ROUND_HALF_UP, Decimal
 
+from vasty import labels
 from vasty.errors import VastyError
-from vasty.models import HISTORY_STATES, CachedLease, Charges, Instance, WarningItem
+from vasty.models import HISTORY_STATES, CachedLease, Charges, Instance, Label, WarningItem
 from vasty.output import money
 from vasty.state import effective_expiry, make_warning
 
@@ -37,17 +38,32 @@ def billing_fresh(fetched_at: int | None, now: int) -> bool:
     return fetched_at is not None and 0 <= now - fetched_at < BILLING_FRESH_S
 
 
+def instance_start(inst: Instance) -> int | None:
+    """Return when `inst` started billing, or None when unknown.
+
+    Use Vast's `start_date`, then the `created` field of a readable vasty label.
+    """
+    if inst.start_date is not None:
+        return inst.start_date
+    label = labels.parse(inst.label)
+    return label.created if isinstance(label, Label) else None
+
+
 def spent_today(charges: Charges, live: list[Instance], now: int, day_start: int) -> Decimal | None:
     """Return billed charges plus `dph_total` since coverage for live instances, or None when coverage is unknown.
 
     `charges` holds today's billed amounts for every instance, deleted ones
-    included. The estimate for each live instance runs from `covered_through`,
-    clipped to `[day_start, now]`, to `now`.
+    included. The estimate for each live instance runs to `now` from the latest
+    of `covered_through`, `day_start` and the instance's start, clipped at `now`.
     """
     if charges.covered_through is None:
         return None
-    since = min(max(charges.covered_through, day_start), now)
-    estimate = sum((cost(inst.dph_total, now - since) for inst in live), ZERO)
+    floor = max(charges.covered_through, day_start)
+    estimate = ZERO
+    for inst in live:
+        start = instance_start(inst)
+        since = min(floor if start is None else max(floor, start), now)
+        estimate += cost(inst.dph_total, now - since)
     return charges.total + estimate
 
 

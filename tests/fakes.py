@@ -134,6 +134,7 @@ class FakeProvider:
             dph_total=offer.dph_total if offer else Decimal("0.38"),
             public_ipaddr="198.51.100.7", image=request.image, runtype=request.runtype,
             ports={p: 41000 + p % 1000 for p in request.ports},
+            start_date=int(self.time.wall_now),
         )
         if self.on_create is not None:
             self.on_create(inst, request)
