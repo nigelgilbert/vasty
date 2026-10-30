@@ -1,4 +1,4 @@
-"""Lease ids, orphan ids, job numbers and name validation (spec §4.0)."""
+"""Lease ids, orphan ids, job numbers and name validation."""
 
 from __future__ import annotations
 

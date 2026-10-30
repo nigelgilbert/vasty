@@ -1,4 +1,4 @@
-"""`vasty sync` (spec §4.8).
+"""`vasty sync`.
 
 `push SRC DEST` and `pull SRC DEST` run rsync over the lease's SSH options
 with the default excludes. `--delete` on push mirrors the local tree and

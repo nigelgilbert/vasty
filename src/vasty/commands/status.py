@@ -1,4 +1,4 @@
-"""`vasty status` (spec §4.4).
+"""`vasty status`.
 
 With no target, `status` lists every active lease, then orphans and
 unreadable rows. `--verbose` also lists history leases; a named lease in
@@ -9,7 +9,7 @@ the refresh, `orphan` per shown orphan, `spend_unavailable` and `budget_low`.
 
 `--cached` reads `leases.json` only. It uses the local clock, returns
 `swept: []`, sets `cached_at` and skips the log tail. That path imports only
-the standard library (spec §10.3).
+the standard library.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""The `onstart` script, startup wrapper and on-box watchdog (spec §5.1, §6).
+"""The `onstart` script, startup wrapper and on-box watchdog.
 
 `build_onstart` returns the shell command Vast runs when the container starts.
 It decodes a gzip and base64 payload and pipes it to bash. The payload writes

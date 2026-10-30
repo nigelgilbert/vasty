@@ -1,4 +1,4 @@
-"""Argument parsing, flag-combination checks and dispatch (spec §4, §7).
+"""Argument parsing, flag-combination checks and dispatch.
 
 This module imports only the standard library and `vasty.errors` at load time.
 Each verb lives in `vasty.commands.<verb>` and loads on dispatch. A command
@@ -196,7 +196,7 @@ def parse(argv: Sequence[str]) -> argparse.Namespace:
 
 
 def check_combinations(ns: argparse.Namespace) -> None:
-    """Apply the flag-combination rules from spec §4 and §4.0."""
+    """Apply the flag-combination rules."""
     if ns.json and ns.plain:
         raise invalid("--json and --plain conflict.", "Pass one of --json or --plain.")
     verb = ns.verb

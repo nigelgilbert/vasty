@@ -1,4 +1,4 @@
-"""The adapter boundary between vasty and Vast.ai (spec §10.2).
+"""The adapter boundary between vasty and Vast.ai.
 
 Every `vastai` import and call lives in this file. Code above it uses the
 `Provider` protocol and the normalized rows in `vasty.models`. `VastProvider`

@@ -1,4 +1,4 @@
-"""`vasty ssh` (spec §4.9, §7).
+"""`vasty ssh`.
 
 `vasty ssh LEASE` opens a shell on the terminal. `vasty ssh LEASE -- COMMAND`
 runs one command and passes its stdout, stderr and exit code through. Each

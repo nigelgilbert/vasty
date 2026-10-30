@@ -1,4 +1,4 @@
-"""JSON and human rendering (spec §7)."""
+"""JSON and human rendering."""
 
 from __future__ import annotations
 

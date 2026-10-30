@@ -1,4 +1,4 @@
-"""The `vasty:v1` instance label (spec §8.0).
+"""The `vasty:v1` instance label.
 
 A label is `vasty:v1` followed by `;`-separated `key=value` fields with unique
 keys. `format_label` writes known fields in the order `lease`, `name`, `owner`,

@@ -1,6 +1,6 @@
 # `serve` fails: vllm 0.6.3 installs with transformers 5.x
 
-Spec §4.7. Live run 2026-10-30, lease `l-c38505e0`, RTX 3060, `vastai/base-image:cuda-12.6.3-auto`.
+Live run 2026-10-30, lease `l-c38505e0`, RTX 3060, `vastai/base-image:cuda-12.6.3-auto`.
 
 ## Command
 
@@ -34,7 +34,7 @@ Installed in `/workspace/.vasty/venv`: vllm 0.6.3, torch 2.4.0, transformers 5.2
 ## Fix options
 
 - Add `transformers<4.50` to the install spec for the 0.6.3 pin (4.46 is the version vLLM 0.6.3 shipped against).
-- Or raise `DEFAULT_VLLM` to a release whose dependency set includes a transformers upper bound, and update the §5 Qwen entry's image tag to match.
+- Or raise `DEFAULT_VLLM` to a release whose dependency set includes a transformers upper bound, and update the `[models]` Qwen entry's image tag to match.
 
 Either way, record the full resolved set so the venv marker `.vasty-vllm` changes when the spec changes.
 

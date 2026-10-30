@@ -1,5 +1,5 @@
 #!/bin/bash
-# vasty watchdog (spec §6): destroy this box when /workspace/.vasty/clock runs out.
+# vasty watchdog: destroy this box when /workspace/.vasty/clock runs out.
 # cron starts a copy every minute; the lock directory keeps one running.
 # VASTY_ROOT, VASTY_API, VASTY_POLL, VASTY_REDESTROY and VASTY_MAX_LOOPS override the defaults for tests.
 R=${VASTY_ROOT:-/workspace/.vasty}

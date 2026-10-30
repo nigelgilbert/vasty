@@ -1,4 +1,4 @@
-"""`vasty reserve` (spec §4.1, §5.1, §5.2, §5.3).
+"""`vasty reserve`.
 
 `reserve_lease` does the work for `reserve` and for auto-reserved `run` and
 `serve`. Under the `leases.json` lock it checks the name, searches offers,
@@ -275,7 +275,7 @@ def _key_body(text: str) -> str:
 
 
 def register_key(ctx: Context) -> None:
-    """Register the public key on the account when no matching key exists (spec §5.3)."""
+    """Register the public key on the account when no matching key exists."""
     key = public_key(ctx)
     if key is None:
         ctx.warn("vasty: no SSH public key found next to ssh_key; skipping key registration")
@@ -460,7 +460,7 @@ def reserve_result(
     warnings: list[WarningItem],
     swept: list[SweptEntry],
 ) -> ReserveResult:
-    """Build the §4.1 output. A `pending` lease has null clock and endpoint fields."""
+    """Build the `reserve` output. A `pending` lease has null clock and endpoint fields."""
     level, missing = guard(lease)
     pending = lease.state == "pending"
     expiry = effective_expiry(lease.label)

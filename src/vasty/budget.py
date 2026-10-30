@@ -1,4 +1,4 @@
-"""Daily budget projection (spec §5.2).
+"""Daily budget projection.
 
 All money is `Decimal`. Prices are dollars per hour and times are UTC epoch
 seconds. Output rounds to 2 places through `vasty.output.money`.

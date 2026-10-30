@@ -1,7 +1,7 @@
 """Helpers shared by `release`, `reserve`, `run`, `serve`, `sync`, `ssh` and `tag`.
 
 `pick_lease` resolves the single LEASE that `run --on`, `serve --on`, `sync`
-and `ssh` act on and raises the §7 code for a lease they cannot use.
+and `ssh` act on and raises the error code for a lease they cannot use.
 `save_lease` applies one change to a lease in the snapshot and in
 `leases.json`. Job ids count up from the highest `j-N` the lease has seen.
 `taken_ids` lists the lease ids a new lease id avoids.

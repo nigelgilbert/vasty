@@ -42,7 +42,7 @@ def codes(data: dict[str, Any]) -> list[tuple[str, str | None]]:
 
 @pytest.fixture
 def account(harness: Harness) -> Harness:
-    """The §4.4 example in miniature: a group, a dead host, an orphan and another owner's box."""
+    """A full status page in miniature: a group, a dead host, an orphan and another owner's box."""
     p = harness.provider
     trainer = add_lease(harness, "l-7f3a", label={"name": "trainer", "group": "exp42",
                                                   "created": NOW - 7260, "ttl": 4 * 3600,

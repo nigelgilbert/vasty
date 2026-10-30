@@ -1,6 +1,6 @@
 """Stable error codes and the error object every command returns on failure.
 
-Each code maps to one exit status from spec §7. Raise `VastyError` anywhere below
+Each code maps to one exit status. Raise `VastyError` anywhere below
 the CLI; the CLI renders it and exits with its status.
 """
 

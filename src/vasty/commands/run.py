@@ -1,4 +1,4 @@
-"""`vasty run` (spec §4.6).
+"""`vasty run`.
 
 Without `--on`, `run` reserves a box with `run_ttl` (or `--ttl`), runs the
 command and releases the box when the command exits. `--detach` and `--name`

@@ -1,8 +1,8 @@
-"""`vasty extend` (spec §4.2, §4.0, §6).
+"""`vasty extend`.
 
 `extend` takes one `now` for every target and checks the budget once for the
 whole target, replacing each lease's commitment with its new expiry. Each
-lease then gets two writes in the order §6 sets: clock file then label when
+lease then gets two writes, ordered so the earlier-firing enforcer stays behind the reported value: clock file then label when
 lengthening, label then clock file when shortening. A failed second write
 restores the first and returns `provider_error`; the lease shows
 `guard: partial` with `clock_file` missing until the next probe.
@@ -172,7 +172,7 @@ def _write_label(ctx: Context, lease: CachedLease, read_expires: int | None, lab
 
 
 def apply(ctx: Context, lease: CachedLease, expires: int) -> None:
-    """Write `expires` to the clock file and the label in the §6 order and update the cache.
+    """Write `expires` to the clock file and the label in enforcer order and update the cache.
 
     Raise `invalid_arguments` before any write when the new label is too long,
     `box_unreachable` when the first write is a failed clock write, and

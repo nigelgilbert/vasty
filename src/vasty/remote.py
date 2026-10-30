@@ -1,4 +1,4 @@
-"""Box access over SSH and rsync (spec §3.2, §4.6, §4.8, §5.3).
+"""Box access over SSH and rsync.
 
 `BoxAccess` is the semantic interface commands use to reach a box. `SshBox`
 implements it with local `ssh`, `rsync` and `tmux` on the box. Tests use the
@@ -235,7 +235,7 @@ def _job_lines(root: str, pattern: str) -> str:
 
 
 def probe_script(label_expires: int | None, root: str) -> str:
-    """Return the POSIX shell the probe runs on the box (spec §3.2).
+    """Return the POSIX shell the probe runs on the box.
 
     It rewrites the clock file when `label_expires` is set and differs, then
     prints `key=value` lines between `vasty_probe=1` and `vasty_probe=end`.
@@ -410,7 +410,7 @@ class SshBox:
     def ssh_options(
         self, target: SshTarget, batch: bool = True, connect_timeout: int = 10
     ) -> list[str]:
-        """Return the ssh options from spec §5.3, without the destination."""
+        """Return the ssh options, without the destination."""
         opts: list[str] = []
         if self.ssh_key:
             opts += ["-i", os.path.expanduser(self.ssh_key), "-o", "IdentitiesOnly=yes"]

@@ -8,7 +8,7 @@ vasty reserve --gpu 4090 --ttl 30m
 
 That rents a GPU box with a 30-minute clock. When the clock runs out, a watchdog on the box is meant to destroy it, and a sweep on the next `vasty` command catches anything the watchdog missed. `extend` keeps a box. `run`, `serve`, `sync`, `ssh`, `tag`, `status` and `release` do the rest.
 
-**Status: work in progress.** Every verb is implemented and unit-tested against fakes. Nothing has run against a live Vast account yet, so unattended expiry is unverified, and the default image is unpublished. See [Status](#status) before spending money.
+**Status: work in progress.** Every verb is implemented and unit-tested against fakes, and one funded live run has confirmed unattended expiry. `serve` is broken and the default image is unpublished. See [Status](#status) before spending money.
 
 ## What it is
 
@@ -119,6 +119,56 @@ Exit codes: 0 success, 1 bad input or lookup, 2 provider or box failure, 3 budge
 
 `status` returns a `warnings` array. Each entry has a code, the lease, a message and `fix`, one runnable `vasty` command. An agent can loop over the warnings and run the fixes. `guard` on each lease is `full` or `partial`, with the missing layer named, so an agent knows how much to trust that box's clock.
 
+Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `expired_with_running_jobs`, `budget_low`, `startup_failed`, `flag_mismatch`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
+
+### Result shapes
+
+Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry sweep destroyed during the command, each entry `{lease, name, expired_at, ok, error}`.
+
+| Command | Returns |
+|---|---|
+| `reserve`, `tag` on one lease | the lease: `lease`, `name`, `owner`, `group`, `state`, `guard`, `guard_missing`, `reused`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `expires_at`, `ttl_remaining_s`, `ssh`, `rsync_target`, `ssh_port`, `ports` |
+| `extend` on one lease | `lease`, `expires_at`, `ttl_remaining_s` |
+| `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending` |
+| bulk `extend`, `release`, `tag` | `results`, each with `lease`, `ok` and a nullable `error` |
+| `status` | `leases`, `totals`, `cached_at`; a single-lease target adds `log_tail` |
+| attached `run` | `lease`, `job`, `exit`, `duration_s`, `released` |
+| `run --detach` | `lease`, `job`, `log_path`, `expires_at` |
+| `serve` | `lease`, `job`, `url`, `api_key`, `expires_at` |
+| `sync` | `lease`, `direction`, `src`, `dest` |
+| `config` | `values`, `{key, value}` or `profiles` |
+
+A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fields null. `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at`, `ttl_remaining_s` and `guard`. `cost_source` and `spend_source` are `billing`, `estimated` or `mixed`.
+
+### Error codes
+
+| Code | Exit | Raised when |
+|---|---|---|
+| `invalid_arguments` | 1 | a flag combination, name, duration, TIME or port list is invalid |
+| `invalid_config` | 1 | a config key or value is invalid |
+| `auth_missing` | 1 | no API key |
+| `dependency_missing` | 1 | `ssh` or `rsync` is not on PATH |
+| `no_offers` | 1 | no offer matches |
+| `lease_not_found` | 1 | unknown id or name |
+| `ambiguous_target` | 1 | a name or id matches more than one active lease |
+| `orphan_unmanaged` | 1 | an orphan id is passed to `extend`, `run`, `serve`, `sync` or `ssh` |
+| `lease_expired` | 1 | the lease is in history |
+| `lease_pending` | 1 | `extend`, `run --on`, `serve --on`, `sync` or `ssh` on a lease SSH cannot reach yet |
+| `name_conflict` | 1 | a new name matches another active lease of the same owner |
+| `confirmation_required` | 1 | orphan `release` without `--yes` in non-TTY mode |
+| `model_unknown` | 1 | `serve` model has no table entry and no `--vram` and `--image` |
+| `image_unsupported` | 1 | a custom image lacks bash, root or apt-get |
+| `startup_too_large` | 1 | the encoded `onstart` exceeds 4048 characters |
+| `provider_error` | 2 | a provider call fails |
+| `box_unreachable` | 2 | the box does not answer SSH |
+| `spend_unavailable` | 2 | billing coverage for today cannot be read |
+| `sync_failed` | 2 | rsync fails |
+| `serve_failed` | 2 | the inference server fails to install or exits before `/v1/models` answers |
+| `port_mapping_missing` | 2 | a required port has no external mapping at the readiness deadline |
+| `budget_exceeded` | 3 | the projection passes `daily_budget` |
+
+A bulk command exits with the highest exit code among its failed entries. Parser errors use the same error object.
+
 ### Post-training from a coding agent
 
 ```sh
@@ -156,7 +206,7 @@ Several boxes that belong together share a `--group`. `status --group exp42` sho
 
 ## How the clock holds
 
-Vast has no expiry field on an instance, so Vasty enforces the clock itself with two layers. Spec §6 has the detail.
+Vast has no expiry field on an instance, so Vasty enforces the clock itself with two layers.
 
 1. **On the box.** `reserve` injects a watchdog through Vast's `onstart` hook. It reads the expiry from `/workspace/.vasty/clock`, sleeps until then, re-reads the file so a late `extend` is honored, and destroys the instance with the per-instance key Vast injects into the container. Cron restarts it if it dies. When the key is absent, the lease reports `guard: partial` and the sweep is the enforcer.
 2. **Local sweep.** Every networked `vasty` command lists the account's instances, reads each lease label, and destroys anything past its clock. Whatever it destroys shows up in `swept`.
@@ -178,6 +228,21 @@ vasty:v1;lease=l-7f3a2b1c;name=ft;owner=claude-code;created=1793235840;ttl=10800
 ```
 
 Any machine with the API key sees the same leases, owners and groups. An instance without a `vasty:` label is an **orphan**: shown in `status`, left alone until `tag ID --ttl 30m` adopts it or `release ID` destroys it. One local file, `~/.local/state/vasty/leases.json`, caches label data plus job records. Losing it loses job history for destroyed boxes and nothing else.
+
+### Lease states
+
+| State | Meaning |
+|---|---|
+| `pending` | Reserved and not ready: booting, SSH not answering, or the startup script still running. |
+| `running` | Healthy and reachable. |
+| `unreachable` | The provider lists it, but the box stopped responding. The clock keeps running. |
+| `stopped` | The provider stopped the instance, for example at $0 balance. The sweep still destroys it past its clock. |
+| `expired` | The clock ran out. Destroyed or being destroyed. Kept in history for 24h. |
+| `released` | Destroyed by `release`. Kept in history for 24h. |
+| `gone` | Vanished with time left on its clock. Kept in history for 24h. |
+| `orphan` | An instance vasty did not create. No clock until `tag` gives it one. |
+
+`status` with no target lists active leases and orphans. History states show when named directly. `guard` is `full` when the watchdog is running, its destroy key is present and the clock file matches the label. Otherwise it is `partial` and `guard_missing` names `watchdog`, `destroy_key` or `clock_file`.
 
 ## Configuration
 
@@ -224,8 +289,6 @@ Not done:
 - `serve` fails on the vLLM 0.6.3 install. See [issues/serve-vllm-063-transformers-pin.md](issues/serve-vllm-063-transformers-pin.md).
 - The default image `vasty/base:cuda12.4` is unpublished. See the quick start for the workaround.
 - Not on PyPI. Install from the repo.
-
-[spec.md](spec.md) holds the full design: every error code, JSON shape, state and the reasoning behind each decision.
 
 ## Development
 

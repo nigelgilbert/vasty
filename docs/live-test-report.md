@@ -14,10 +14,10 @@ Account 836500, burner. Starting credit $20.00, balance $0. Run from `/private/t
 | 5 offer pool | 32 verified RTX 3060 offers, dph 0.052 to 0.207. Top 5 by reliability all 0.999, max dph 0.084. `max_price` set to 0.09. No host under `direct_port_count` 3. Bandwidth outliers: Vietnam hosts at $0.04/GB, Texas at $0.039/GB, Poland at $0.0088/GB. Full table in `docs/live/setup-5-offers.json`. |
 | 6 config | `vasty.toml` written |
 | 7 `vasty config show` | owner, ttl, run_ttl, gpu, max_price, daily_budget, warn_before_expiry, disk, image all `source: project`. Pass. |
-| 8 `import vastai` | 244,611 us cumulative (244 ms), spec §10.3 |
+| 8 `import vastai` | 244,611 us cumulative (244 ms) |
 | 9 `vasty status` empty | `leases: []`, `spent_today: 0.0`, `spend_source: billing`, no warnings. Pass. |
 
-Nigel confirmed a card is saved on the account. The $5.50 cumulative balance drop in §6 is the only ceiling.
+Nigel confirmed a card is saved on the account. The $5.50 cumulative balance drop in plan section 6 is the only ceiling.
 
 ## Phase 1: one box, full lifecycle. Cap $0.50. PASS with notes.
 
@@ -40,22 +40,22 @@ Instance 58321352, lease `l-ce63a58a`, offer 45600114 (Poland, 0.999 reliability
 
 Observations:
 
-- `spent_today` 1.5 against a real balance drop of $0.013. Charge rows lag, so the estimator counts the live box from 00:00 UTC (23.5 h × 0.06 = 1.41) and `spend_source` flips to `mixed`. This is the §2 caveat in action. `remaining_budget` dropped to 4.5 on a run that had cost one cent.
+- `spent_today` 1.5 against a real balance drop of $0.013. Charge rows lag, so the estimator counts the live box from 00:00 UTC (23.5 h × 0.06 = 1.41) and `spend_source` flips to `mixed`. This is the plan's section 2 caveat in action. `remaining_budget` dropped to 4.5 on a run that had cost one cent.
 - `cost` rounds to cents, so the $0.02 tolerance is loose at this rate.
 - `status p1` (one lease) includes `log_tail`; `status` (list) omits it.
 - `cat /workspace/.vasty/guard` printed an empty line. The guard file exists but holds no content.
 - The ssh target in `reserve` is `root@91.150.160.38:15124` (direct), while the Vast row's `ssh_host` is `ssh5.vast.ai:17744` (proxy). vasty prefers the direct mapping.
-- The §4 box ready check was run 10 minutes after boot because of a bug in my poll script, so the earliest point at which `startup.exit` appears is not measured here. `vasty status p1` at 23:28:17 (8 s after `running`) returned `guard: full`, so the watchdog landed within those 8 s or the probe reported full early. Phase 2 checks this sooner.
+- The plan's section 4 box ready check was run 10 minutes after boot because of a bug in my poll script, so the earliest point at which `startup.exit` appears is not measured here. `vasty status p1` at 23:28:17 (8 s after `running`) returned `guard: full`, so the watchdog landed within those 8 s or the probe reported full early. Phase 2 checks this sooner.
 
 ## Phase 2: the clock. Cap $1.00.
 
 ### 2a watchdog alone. PASS.
 
-Instance 58322443, lease `l-15c77c42`, Korean host at $0.08/hr. `reserve --ttl 8m` blocked from 23:43:10Z to 23:47:23Z (4m13s, image pulled). Returned `running`, `guard: full`, `expires_at: 23:55:12Z`, `ttl_remaining_s: 469`. The box ready check passed on the first try right after `reserve` returned: `startup.exit` 0, `alive` and `guard` present, tmux installed. So the blocking `reserve` returned after the watchdog was installed. No bug against spec §3.1.
+Instance 58322443, lease `l-15c77c42`, Korean host at $0.08/hr. `reserve --ttl 8m` blocked from 23:43:10Z to 23:47:23Z (4m13s, image pulled). Returned `running`, `guard: full`, `expires_at: 23:55:12Z`, `ttl_remaining_s: 469`. The box ready check passed on the first try right after `reserve` returned: `startup.exit` 0, `alive` and `guard` present, tmux installed. So the blocking `reserve` returned after the watchdog was installed. No bug against the `pending` state rule.
 
 Watched with `vastai show instances --raw` every 30 s from 23:47:47Z. Listed as `running` at expires -15 s (23:54:57Z). Gone at 23:55:27Z, 16 s after `expires_at`. No vasty process ran on the laptop between `expires_at` and the disappearance. `docs/live/p2a-03-watch.txt`.
 
-Answers §12: the container key `DELETE` destroys a running box. Confirmed by disappearance.
+Answers the open question: the container key `DELETE` destroys a running box. Confirmed by disappearance.
 
 The 6 m rerun is skipped: boot took over 3 minutes.
 
@@ -180,7 +180,7 @@ Redaction: the vLLM arg dump in the job log carried the serve `api_key`. It was 
 | 6 teardown | pass | 0 |
 | Total | | $0.094 of the $5.50 ceiling |
 
-Twelve instances created, all gone. Nine hosts' bandwidth rates ranged $0.0026 to $0.0088 per GB. The §12 answers:
+Twelve instances created, all gone. Nine hosts' bandwidth rates ranged $0.0026 to $0.0088 per GB. The open-question answers:
 
 | Question | Answer |
 |---|---|

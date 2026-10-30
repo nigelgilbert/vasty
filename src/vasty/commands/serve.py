@@ -1,4 +1,4 @@
-"""`vasty serve` (spec §4.7, §5.1).
+"""`vasty serve`.
 
 `serve` maps `--model` to hardware through the `[models."NAME"]` tables.
 Without `--on` it resolves settings with the entry's `vram`, `gpu` and

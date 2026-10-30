@@ -1,4 +1,4 @@
-"""Output builders shared by the commands (spec §4.1, §4.4, §4.5).
+"""Output builders shared by the commands.
 
 Lease cost uses billing when today's charges hold the instance and the lease
 started today, since charges cover the UTC day only. Billed amounts run to

@@ -1,7 +1,7 @@
 """Shared dataclasses for provider rows, lease records and command output.
 
 Provider rows are normalized by `provider.py`. Lease records live in labels and
-in the local cache. Output dataclasses are the JSON shapes from spec §4 and §7;
+in the local cache. Output dataclasses are the JSON shapes the commands print;
 `output.to_jsonable` turns them into plain JSON.
 """
 
@@ -133,7 +133,7 @@ class Job:
 
 @dataclass
 class ProbeResult:
-    """What one probe SSH command read from the box (spec §3.2)."""
+    """What one probe SSH command read from the box."""
 
     clock_expires: int | None
     clock_readable: bool

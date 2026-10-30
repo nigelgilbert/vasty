@@ -1,4 +1,4 @@
-"""`vasty tag` (spec §4.5, §8.0, §5.2).
+"""`vasty tag`.
 
 On a lease, `tag` rewrites `name`, `group` and `owner` in the label and keeps
 unknown fields and the clock. Before the first write, `tag` checks every

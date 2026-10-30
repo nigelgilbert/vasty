@@ -1,8 +1,8 @@
-"""The networked-command prelude: list, sweep, reconcile and probe (spec §6, §8.1).
+"""The networked-command prelude: list, sweep, reconcile and probe.
 
 Every networked command calls `refresh` before it resolves its target. The
 spend helpers back `status` totals and the budget check in the spending
-commands (spec §5.2). `cached_snapshot` answers `status --cached` from the
+commands. `cached_snapshot` answers `status --cached` from the
 local file and imports only the standard library.
 
 Reconciliation keeps history leases in `Snapshot.leases` for 24h from the
@@ -25,7 +25,7 @@ label has none.
   accepts the call or fails it.
 - `refresh` resends the destroy while the row stays listed, and sets
   `destroy_pending` again on a listed `released` lease. The wait between calls
-  starts at 5s and doubles per call up to 60s (spec §6). A failed call sets
+  starts at 5s and doubles per call up to 60s. A failed call sets
   `last_provider_error` and adds an `ok: false` entry to `swept`; an accepted
   one clears it. The entry's `expired_at` is the earlier of now and the
   label's effective expiry. A retry whose re-read finds the row gone or
@@ -52,7 +52,7 @@ label has none.
   returns `box_unreachable`, and a `pending` lease with no SSH answer returns
   `lease_pending`. None of them get a label or clock write.
 
-Adoption retries (spec §4.5). `tag` writes `miss` with every guard layer when
+Adoption retries. `tag` writes `miss` with every guard layer when
 it adopts an orphan. A lease whose label `miss` lists `watchdog` or
 `destroy_key` gets the missing adoption steps again.
 
@@ -200,7 +200,7 @@ def unreadable_warning(inst: Instance, reason: str) -> WarningItem:
 
 
 def endpoint(inst: Instance) -> tuple[str, int] | None:
-    """Return the SSH host and port for a row (spec §5.3), or None before it has one.
+    """Return the SSH host and port for a row, or None before it has one.
 
     Direct rows use `public_ipaddr` and the port mapped to 22. Proxy rows use
     `ssh_host` and `ssh_port`. A row without a runtype tries direct first.
@@ -228,7 +228,7 @@ def ssh_target(lease: CachedLease) -> SshTarget:
 
 
 def past_clock(label: Label, now: int) -> bool:
-    """Return True when the sweep destroys this label (spec §6 item 2)."""
+    """Return True when the sweep destroys this label."""
     if label.expires is not None:
         return now > label.expires
     return now > label.created + label.ttl
@@ -253,8 +253,8 @@ def _reread_matches(ctx: Context, instance_id: int, read_expires: int | None) ->
 def write_label(ctx: Context, instance_id: int, read_expires: int | None, label: Label) -> bool:
     """Re-read the row and write `label` when its `expires` still equals `read_expires`.
 
-    Return False and write nothing when the row is gone or `expires` moved
-    (spec §6 Robustness). Provider failures raise.
+    Return False and write nothing when the row is gone or `expires` moved.
+    Provider failures raise.
     """
     text = labels.format_label(label)
     if not _reread_matches(ctx, instance_id, read_expires):
@@ -772,7 +772,7 @@ def projection_for(
     replace: Mapping[str, int] | None = None,
     leases: Iterable[CachedLease] | None = None,
 ) -> tuple[Decimal, Decimal]:
-    """Return `(projected, without_action)` for the account (spec §5.2).
+    """Return `(projected, without_action)` for the account.
 
     `without_action` is spend plus every active lease's commitment to its
     effective expiry. `projected` swaps in the expiry from `replace` (lease id

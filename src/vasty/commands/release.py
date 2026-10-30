@@ -1,4 +1,4 @@
-"""`vasty release` (spec §4.3).
+"""`vasty release`.
 
 `release` destroys the box and returns once the provider accepts the destroy
 call. The lease is then `released` with `destroy_pending` until a list call
@@ -12,7 +12,7 @@ no longer lists its row. While the row is listed, `release` sends the destroy
 again and keeps the history state. An orphan or unreadable row released by
 instance id needs `--yes` or a TTY confirmation. Before destroying, `release`
 re-reads the row and aborts with `provider_error` when its `expires` moved
-(spec §6) or its label became unreadable.
+or its label became unreadable.
 """
 
 from __future__ import annotations

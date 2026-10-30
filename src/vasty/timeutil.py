@@ -1,4 +1,4 @@
-"""Durations, RFC 3339 times and vasty's notion of `now` (spec §3, §4.2).
+"""Durations, RFC 3339 times and vasty's notion of `now`.
 
 A duration is one or more `<positive integer><unit>` parts with units `d`,
 `h`, `m`, `s`. Each unit appears at most once and in that order, so `1h30m`

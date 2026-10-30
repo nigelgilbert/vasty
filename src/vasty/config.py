@@ -1,4 +1,4 @@
-"""Configuration resolution (spec §5).
+"""Configuration resolution.
 
 Layers, highest first: flags, `--config -` JSON, `--profile`, environment,
 project file, user file, built-in defaults. `resolve` returns the effective

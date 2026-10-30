@@ -1,4 +1,4 @@
-"""TARGET resolution for `extend`, `release`, `status` and `tag` (spec §4.0).
+"""TARGET resolution for `extend`, `release`, `status` and `tag`.
 
 A LEASE resolves as a lease id first, then as a name under the current
 owner. `i-<id>` names an orphan or an unreadable row; it also resolves a

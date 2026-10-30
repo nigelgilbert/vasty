@@ -1,4 +1,4 @@
-"""Lease state, guard and per-lease warnings (spec §3, §3.1, §4.4).
+"""Lease state, guard and per-lease warnings.
 
 The fix table lives here so every module builds warnings the same way. Fixes
 name a lease by its id, which resolves for every owner.
@@ -55,7 +55,7 @@ def ttl_remaining(label: Label, now: int) -> int:
 
 
 def derive_state(actual_status: str | None, probe: ProbeResult | None, reachable_before: bool) -> LeaseState:
-    """Map the provider status and the probe to a vasty state (spec §3.1 table).
+    """Map the provider status and the probe to a vasty state.
 
     `probe` is None when the probe failed or did not run. `reachable_before`
     is True when the probe answered on an earlier command. An `actual_status`
@@ -80,7 +80,7 @@ def startup_unfinished(probe: ProbeResult) -> bool:
 
 
 def resolve_state(previous: LeaseState, derived: LeaseState) -> LeaseState:
-    """Keep a history state over a derived `pending` or `unreachable` (spec §3.1)."""
+    """Keep a history state over a derived `pending` or `unreachable`."""
     if previous in HISTORY_STATES and derived in ("pending", "unreachable"):
         return previous
     return derived

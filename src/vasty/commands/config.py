@@ -1,4 +1,4 @@
-"""`vasty config` (spec §4.10).
+"""`vasty config`.
 
 `show` returns `{values}`, each key mapped to `{value, source}`. `set` returns
 `{key, value}` and writes the user config file. `profiles` returns

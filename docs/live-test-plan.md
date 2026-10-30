@@ -7,11 +7,11 @@ Run by a Claude Code agent with Nigel supervising. Spend ceiling: $20 on the acc
 The unit suite runs against fakes. Nothing in the repo has touched Vast. This run checks, in order of value:
 
 1. The clock holds. A box destroys itself when its clock runs out, with no vasty process on the laptop. The sweep destroys a box whose watchdog is dead.
-2. `reserve`, `status`, `extend`, `release`, `run`, `sync`, `ssh`, `tag` work end to end on a real box, with the JSON shapes in spec §4.
-3. The spec §12 open questions below.
+2. `reserve`, `status`, `extend`, `release`, `run`, `sync`, `ssh`, `tag` work end to end on a real box, with the JSON shapes the README documents.
+3. The open questions below.
 4. `serve` brings up a small model behind the endpoint.
 
-Spec §12 questions and where each is answered:
+Open questions and where each is answered:
 
 | Question | Phase | Command | Record |
 |---|---|---|---|
@@ -23,22 +23,22 @@ Spec §12 questions and where each is answered:
 | Container key `DELETE` while `loading` | deferred | | |
 | Label length at create, 404 as unauthorized, `on-demand` spelling, `schedule_job` | deferred | | |
 
-Each phase lists its commands, the pass check, the spend cap, and the cleanup. The agent records every command and its output under `/private/tmp/vasty-live/out/`, appends each phase's results to the report as the phase ends, and copies reviewed files into the repo at the end (§7).
+Each phase lists its commands, the pass check, the spend cap, and the cleanup. The agent records every command and its output under `/private/tmp/vasty-live/out/`, appends each phase's results to the report as the phase ends, and copies reviewed files into the repo at the end (section 7).
 
 ## 2. Facts that shape the run
 
 - The default image `vasty/base:cuda12.4` is not published. Docker Hub has no `vasty` namespace. Every live box uses `vastai/base-image:cuda-12.6.3-auto` through `defaults.image` in the test config. This exercises the custom-image path in `onstart.py`: the essentials installer and the watchdog carried in `onstart`. The published-image path stays untested until the image exists.
-- vasty takes the most reliable offer under `max_price` (spec §4.1 sort: reliability, bandwidth, price). The test config pins `gpu = "3060"` and a `max_price` read from the live pool, so the rate is known before the first create. A snapshot of verified on-demand offers on 2026-10-29 (unauthenticated `POST /bundles/`, cheapest `dph_total`): RTX 3060 $0.056 with 27 offers, RTX A2000 $0.052, GTX 1080 Ti $0.062, RTX 2080 Ti $0.084, RTX 3070 $0.082, RTX 3090 $0.156, RTX 4090 $0.342. `dph_total` carries the disk charge at a median $0.20/GB/month, so 16 GB adds about $0.005/hr.
+- vasty takes the most reliable offer under `max_price` (the offer sort: reliability, bandwidth, price). The test config pins `gpu = "3060"` and a `max_price` read from the live pool, so the rate is known before the first create. A snapshot of verified on-demand offers on 2026-10-29 (unauthenticated `POST /bundles/`, cheapest `dph_total`): RTX 3060 $0.056 with 27 offers, RTX A2000 $0.052, GTX 1080 Ti $0.062, RTX 2080 Ti $0.084, RTX 3070 $0.082, RTX 3090 $0.156, RTX 4090 $0.342. `dph_total` carries the disk charge at a median $0.20/GB/month, so 16 GB adds about $0.005/hr.
 - Vast bills no GPU time while an instance is `loading`. Storage and bandwidth bill in every state. The `cuda-12.6.3-auto` tag is 6 GB compressed and is often cached on hosts; `vastai/base-image:cuda-12.9-mini-py312` is 2.5 GB when a pull is slow.
 - `vastai/base-image` ships cron, rsync, curl and python 3.12. Vast's runtime injects sshd in SSH launch mode. tmux is absent, so the essentials installer in `onstart` puts it there on every box. Boot is 1 to 5 minutes plus the pull.
-- `onstart` writes `startup.started` last, after the installer, the watchdog and `/etc/cron.d/vasty`. A probe that lands earlier can report `running` with `guard: full` before the watchdog exists. Every phase that depends on the guard or on tmux checks the box first (§4, "box ready check").
+- `onstart` writes `startup.started` last, after the installer, the watchdog and `/etc/cron.d/vasty`. A probe that lands earlier can report `running` with `guard: full` before the watchdog exists. Every phase that depends on the guard or on tmux checks the box first (section 4, "box ready check").
 - Vast injects `CONTAINER_ID` and `CONTAINER_API_KEY` into every instance. The create response names the key as restricted to start, stop and destroy of that instance. The raw `DELETE` the watchdog sends is untested until phase 2a.
 - vasty creates `ssh_proxy` on an offer without direct ports and then requires no port mapping, so a proxy box has no 8000 or 8080 mapping. Search does not filter on `direct_port_count`.
 - `spent_today` on an account with no charge rows estimates every live box as running since 00:00 UTC. The budget check can refuse a valid reserve late in the UTC day. 00:00 UTC is 19:00 Central. The ledger in this plan uses the account balance, which has no day boundary.
 - `vasty status` runs the sweep. `vasty status --cached` reads `leases.json` and shows a local countdown only. Watching a box leave means `vastai show instances --raw`.
 - Bulk selectors never include orphans, `--everyone --yes` included. An orphan is released by its `i-` id or by `vastai destroy instance`.
 - vLLM 0.6.3 needs compute capability 7.0 and CUDA 12.1 wheels, about 3 GB of downloads. The 1080 Ti is out for `serve`; the 3060 qualifies.
-- Minimum deposit is $5. With no card on file, Vast stops instances at $0 and destroys them after a grace period. A card-free account has no autobilling. The account-level stop is the prepaid balance with no card saved (spec §2.1). Fund the account with the ceiling and nothing more.
+- Minimum deposit is $5. With no card on file, Vast stops instances at $0 and destroys them after a grace period. A card-free account has no autobilling. The account-level stop is the prepaid balance with no card saved. Fund the account with the ceiling and nothing more.
 
 ## 3. Setup
 
@@ -81,7 +81,7 @@ image = "vastai/base-image:cuda-12.6.3-auto"
 ```
 
 7. `vasty config show` reports `project` for owner, ttl, run_ttl, gpu, max_price, daily_budget, warn_before_expiry, disk and image.
-8. `/Users/nigel.gilbert/Desktop/bench/vasty/.venv/bin/python -X importtime -c 'import vastai' 2>&1 | tail -1`, for spec §10.3. Record the number.
+8. `/Users/nigel.gilbert/Desktop/bench/vasty/.venv/bin/python -X importtime -c 'import vastai' 2>&1 | tail -1`, for the import-time budget. Record the number.
 9. `vasty status` on the empty account. Pass: `leases: []`, `totals.spent_today` is a number, `spend_source` is `billing`, no `spend_unavailable` warning.
 
 Stop here if step 9 fails. The charges endpoint is the base for every budget check.
@@ -98,7 +98,7 @@ Box ready check, run after every `reserve` that precedes a guard check, phase 2b
 vasty ssh L -- 'cat /workspace/.vasty/startup.exit; ls /workspace/.vasty/alive /workspace/.vasty/guard; command -v tmux'
 ```
 
-Continue when `startup.exit` holds `0`, both files exist and tmux resolves. If `reserve` returned `running` before that, file a bug against spec §3.1 and keep going.
+Continue when `startup.exit` holds `0`, both files exist and tmux resolves. If `reserve` returned `running` before that, file a bug against the `pending` state rule and keep going.
 
 ### Phase 1: one box, full lifecycle. Cap $0.50.
 
@@ -297,4 +297,4 @@ Bandwidth is host-priced at $3 to $14 per TB, with outliers to $27. 13 boxes pul
 
 ## 7. Report
 
-Append each phase's results to `/private/tmp/vasty-live/out/report.md` as the phase ends: pass or fail per check, the JSON that proves it, boot times, the balance delta, and the answers to the §12 questions touched. After the run, review the files for keys and copy them to `/Users/nigel.gilbert/Desktop/bench/vasty/docs/live/` (gitignored) with the report at `/Users/nigel.gilbert/Desktop/bench/vasty/docs/live-test-report.md`. Bugs found go to `/Users/nigel.gilbert/Desktop/bench/vasty/issues/` as one file each, with the command, the output and the spec section it breaks.
+Append each phase's results to `/private/tmp/vasty-live/out/report.md` as the phase ends: pass or fail per check, the JSON that proves it, boot times, the balance delta, and the answers to the open questions touched. After the run, review the files for keys and copy them to `/Users/nigel.gilbert/Desktop/bench/vasty/docs/live/` (gitignored) with the report at `/Users/nigel.gilbert/Desktop/bench/vasty/docs/live-test-report.md`. Bugs found go to `/Users/nigel.gilbert/Desktop/bench/vasty/issues/` as one file each, with the command, the output and the rule it breaks.

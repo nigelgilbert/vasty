@@ -92,7 +92,7 @@ def test_auto_reserve_runs_budget_check_with_run_ttl(h: Harness) -> None:
 
 
 def test_post_training_workflow(h: Harness, tmp_path: Any) -> None:
-    """Spec §9.1 with a named box."""
+    """The post-training workflow with a named box."""
     code, res = run_json(h, "reserve", "--name", "ft", "--ttl", "3h")
     assert code == 0, res
     src = tmp_path / "project" / "code"
@@ -111,7 +111,7 @@ def test_post_training_workflow(h: Harness, tmp_path: Any) -> None:
 
 
 def test_group_workflow(h: Harness) -> None:
-    """Spec §9.4: reserve a group, align clocks, release together."""
+    """A multi-box experiment: reserve a group, align clocks, release together."""
     for i in range(3):
         code, res = run_json(h, "reserve", "--name", f"eval-{i}", "--group", "exp42", "--ttl", "1h")
         assert code == 0, res

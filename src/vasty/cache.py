@@ -1,4 +1,4 @@
-"""The local cache `~/.local/state/vasty/leases.json` (spec §8.1).
+"""The local cache `~/.local/state/vasty/leases.json`.
 
 The file holds `{"version": 1, "cached_at": EPOCH, "leases": {ID: LEASE}}` plus
 the last instance listing and today's billed charges, which `status --cached`

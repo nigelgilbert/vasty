@@ -1,4 +1,4 @@
-"""`vasty completion` (spec §10.4).
+"""`vasty completion`.
 
 `vasty completion bash|zsh|fish` prints a completion script built from the
 argument parser. The scripts call the hidden `vasty completion --list KIND` to
