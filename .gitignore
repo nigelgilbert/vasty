@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 dist/
 .claude/worktrees/
+
+# Raw live-run output.
+docs/live/

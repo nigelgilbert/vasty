@@ -217,10 +217,11 @@ Done:
 
 - Every verb above, in `src/vasty/`.
 - 1131 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
+- One funded live run on Vast, 2026-10-29. Every phase passed except `serve`. See [docs/live-test-report.md](docs/live-test-report.md).
 
 Not done:
 
-- No live run. The watchdog, the sweep, `serve` and every JSON shape above are tested against fakes only. [docs/live-test-plan.md](docs/live-test-plan.md) is the plan for the first funded run.
+- `serve` fails on the vLLM 0.6.3 install. See [issues/serve-vllm-063-transformers-pin.md](issues/serve-vllm-063-transformers-pin.md).
 - The default image `vasty/base:cuda12.4` is unpublished. See the quick start for the workaround.
 - Not on PyPI. Install from the repo.
 

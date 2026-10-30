@@ -2,8 +2,6 @@
 
 Run by a Claude Code agent with Nigel supervising. Spend ceiling: $20 on the account. Stop the run at a cumulative balance drop of $5.50.
 
-Reviewed in `docs/validation-0.md` (Opus swarm plus Astra, 28 findings, all folded in here).
-
 ## 1. What this run settles
 
 The unit suite runs against fakes. Nothing in the repo has touched Vast. This run checks, in order of value:
@@ -299,4 +297,4 @@ Bandwidth is host-priced at $3 to $14 per TB, with outliers to $27. 13 boxes pul
 
 ## 7. Report
 
-Append each phase's results to `/private/tmp/vasty-live/out/report.md` as the phase ends: pass or fail per check, the JSON that proves it, boot times, the balance delta, and the answers to the §12 questions touched. After the run, review the files for keys and copy them to `/Users/nigel.gilbert/Desktop/bench/vasty/docs/live/` with the report at `/Users/nigel.gilbert/Desktop/bench/vasty/docs/live-test-report.md`. Bugs found go to `/Users/nigel.gilbert/Desktop/bench/vasty/issues/` as one file each, with the command, the output and the spec section it breaks.
+Append each phase's results to `/private/tmp/vasty-live/out/report.md` as the phase ends: pass or fail per check, the JSON that proves it, boot times, the balance delta, and the answers to the §12 questions touched. After the run, review the files for keys and copy them to `/Users/nigel.gilbert/Desktop/bench/vasty/docs/live/` (gitignored) with the report at `/Users/nigel.gilbert/Desktop/bench/vasty/docs/live-test-report.md`. Bugs found go to `/Users/nigel.gilbert/Desktop/bench/vasty/issues/` as one file each, with the command, the output and the spec section it breaks.
