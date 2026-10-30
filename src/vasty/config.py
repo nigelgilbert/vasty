@@ -73,9 +73,10 @@ BUILTIN: dict[str, Any] = {
     "gpus": 1,
     "image": "vasty/base:cuda12.4",
 }
+VLLM_IMAGE = "vllm/vllm-openai:v0.32.0"
 BUILTIN_MODELS: dict[str, dict[str, Any]] = {
     "Qwen/Qwen3-72B-Instruct": {
-        "vram": 80.0, "quant": "awq", "image": "vllm/vllm-openai:v0.6.3",
+        "vram": 80.0, "quant": "awq", "image": VLLM_IMAGE,
     },
 }
 

@@ -803,6 +803,7 @@ def test_spend_sources_and_charges_cache(harness: Harness) -> None:
     ctx = harness.context()
     snap = engine.refresh(ctx)
     spent, source = engine.spend(ctx, snap)
+    # With no start_date the estimate runs from covered_through, NOW - 1800, past the label's created.
     assert spent == Decimal("1.30")
     assert source == "mixed"
     charge_calls = lambda: [c for c in harness.provider.calls if c[0] == "charges"]  # noqa: E731
@@ -813,6 +814,17 @@ def test_spend_sources_and_charges_cache(harness: Harness) -> None:
     harness.time.advance(31)
     engine.spend(ctx, engine.refresh(ctx))
     assert len(charge_calls()) == 2
+
+
+def test_spend_runs_from_start_date_over_label(harness: Harness) -> None:
+    add_lease(harness, dph_total=Decimal("0.60"), start_date=NOW - 300)
+    harness.provider.billed = {999: Decimal("1.00")}
+    harness.provider.covered_through = NOW - 1800
+    ctx = harness.context()
+    spent, source = engine.spend(ctx, engine.refresh(ctx))
+    # Start the estimate at start_date, NOW - 300, while the label's created stays at NOW - 600.
+    assert spent == Decimal("1.05")
+    assert source == "mixed"
 
 
 def test_spend_billing_and_estimated(harness: Harness) -> None:

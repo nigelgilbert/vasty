@@ -71,7 +71,7 @@ def test_auto_reserved_serve_returns_endpoint(h: Harness) -> None:
     assert data["url"].startswith("http://198.51.100.7:")
     assert data["url"].endswith("/v1")
     assert data["api_key"].startswith("vasty-")
-    assert h.provider.created[0].image == "vllm/vllm-openai:v0.6.3"
+    assert h.provider.created[0].image == "vllm/vllm-openai:v0.32.0"
     assert len(h.provider.instances) == 1
 
 

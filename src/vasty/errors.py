@@ -25,6 +25,7 @@ EXIT_CODES: dict[str, int] = {
     "model_unknown": 1,
     "image_unsupported": 1,
     "startup_too_large": 1,
+    "vllm_missing": 1,
     "provider_error": 2,
     "box_unreachable": 2,
     "spend_unavailable": 2,

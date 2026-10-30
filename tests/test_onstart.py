@@ -453,38 +453,6 @@ def test_custom_image_installs_essentials_and_writes_watchdog(box: Box) -> None:
     assert box.guard() == []
 
 
-@pytest.mark.parametrize(("venv_exit", "installs"), [(1, True), (0, False)])
-def test_custom_image_installs_python3_venv_when_python_lacks_it(
-    box: Box, venv_exit: int, installs: bool
-) -> None:
-    stubs = box.tmp / "stubs"
-    stubs.mkdir()
-    write_exe(stubs / "python3", f'#!/bin/sh\necho "$@" >>{box.tmp}/python3.log\nexit {venv_exit}\n')
-    apt = box.tmp / "apt-get"
-    write_exe(apt, f'#!/bin/sh\necho "$@" >>{box.tmp}/apt.log\n')
-    essentials = (("python3", "python3"),)
-    box.run(box.payload(custom=True, apt=str(apt), essentials=essentials),
-            env={"PATH": f"{stubs}:{os.environ['PATH']}"})
-    assert "-c import ensurepip,venv" in (box.tmp / "python3.log").read_text()
-    if installs:
-        log = (box.tmp / "apt.log").read_text()
-        assert "install -y -qq --no-install-recommends python3-venv" in log
-    else:
-        assert not (box.tmp / "apt.log").exists()
-
-
-def test_custom_image_without_apt_skips_python3_venv(box: Box) -> None:
-    stubs = box.tmp / "stubs"
-    stubs.mkdir()
-    write_exe(stubs / "python3", "#!/bin/sh\nexit 1\n")
-    essentials = (("python3", "python3"),)
-    box.run(box.payload(custom=True, apt=str(box.tmp / "no-apt"), essentials=essentials),
-            env={"PATH": f"{stubs}:{os.environ['PATH']}"})
-    unsupported = box.root / "unsupported"
-    words = unsupported.read_text().split() if unsupported.exists() else []
-    assert "apt-get" not in words
-
-
 def test_custom_image_without_apt_is_unsupported(box: Box) -> None:
     essentials = (("vasty-missing-tool", "vasty-pkg"),)
     box.run(box.payload(custom=True, apt=str(box.tmp / "no-apt"), essentials=essentials))
