@@ -27,17 +27,16 @@ Each phase lists its commands, the pass check, the spend cap, and the cleanup. T
 
 ## 2. Facts that shape the run
 
-- The default image `vasty/base:cuda12.4` is not published. Docker Hub has no `vasty` namespace. Every live box uses `vastai/base-image:cuda-12.6.3-auto` through `defaults.image` in the test config. This exercises the custom-image path in `onstart.py`: the essentials installer and the watchdog carried in `onstart`. The published-image path stays untested until the image exists.
+- The default image `vasty/base:cuda12.4` is not published. Docker Hub has no `vasty` namespace. Every live box except `sv` in phase 5 uses `vastai/base-image:cuda-12.6.3-auto` through `defaults.image` in the test config. This exercises the custom-image path in `onstart.py`: the essentials installer and the watchdog carried in `onstart`. The published-image path stays untested until the image exists.
 - vasty takes the most reliable offer under `max_price` (the offer sort: reliability, bandwidth, price). The test config pins `gpu = "3060"` and a `max_price` read from the live pool, so the rate is known before the first create. A snapshot of verified on-demand offers on 2026-10-29 (unauthenticated `POST /bundles/`, cheapest `dph_total`): RTX 3060 $0.056 with 27 offers, RTX A2000 $0.052, GTX 1080 Ti $0.062, RTX 2080 Ti $0.084, RTX 3070 $0.082, RTX 3090 $0.156, RTX 4090 $0.342. `dph_total` carries the disk charge at a median $0.20/GB/month, so 16 GB adds about $0.005/hr.
-- Vast bills no GPU time while an instance is `loading`. Storage and bandwidth bill in every state. The `cuda-12.6.3-auto` tag is 6 GB compressed and is often cached on hosts; `vastai/base-image:cuda-12.9-mini-py312` is 2.5 GB when a pull is slow.
+- Vast bills no GPU time while an instance is `loading`. Storage and bandwidth bill in every state. The `cuda-12.6.3-auto` tag is 6 GB compressed and is often cached on hosts; `vastai/base-image:cuda-12.9-mini-py312` is 2.5 GB when a pull is slow. `vllm/vllm-openai:v0.32.0` is 9.2 GB compressed.
 - `vastai/base-image` ships cron, rsync, curl and python 3.12. Vast's runtime injects sshd in SSH launch mode. tmux is absent, so the essentials installer in `onstart` puts it there on every box. Boot is 1 to 5 minutes plus the pull.
 - `onstart` writes `startup.started` last, after the installer, the watchdog and `/etc/cron.d/vasty`. A probe that lands earlier can report `running` with `guard: full` before the watchdog exists. Every phase that depends on the guard or on tmux checks the box first (section 4, "box ready check").
 - Vast injects `CONTAINER_ID` and `CONTAINER_API_KEY` into every instance. The create response names the key as restricted to start, stop and destroy of that instance. The raw `DELETE` the watchdog sends is untested until phase 2a.
 - vasty creates `ssh_proxy` on an offer without direct ports and then requires no port mapping, so a proxy box has no 8000 or 8080 mapping. Search does not filter on `direct_port_count`.
-- `spent_today` on an account with no charge rows estimates every live box as running since 00:00 UTC. The budget check can refuse a valid reserve late in the UTC day. 00:00 UTC is 19:00 Central. The ledger in this plan uses the account balance, which has no day boundary.
 - `vasty status` runs the sweep. `vasty status --cached` reads `leases.json` and shows a local countdown only. Watching a box leave means `vastai show instances --raw`.
 - Bulk selectors never include orphans, `--everyone --yes` included. An orphan is released by its `i-` id or by `vastai destroy instance`.
-- vLLM 0.6.3 needs compute capability 7.0 and CUDA 12.1 wheels, about 3 GB of downloads. The 1080 Ti is out for `serve`; the 3060 qualifies.
+- vLLM ships in `vllm/vllm-openai:v0.32.0`. The 3060 (compute capability 8.6) qualifies for `serve`.
 - Minimum deposit is $5. With no card on file, Vast stops instances at $0 and destroys them after a grace period. A card-free account has no autobilling. The account-level stop is the prepaid balance with no card saved. Fund the account with the ceiling and nothing more.
 
 ## 3. Setup
@@ -239,10 +238,10 @@ Pass: `status --group` lists both; bulk `extend` returns `results` with two entr
 
 ### Phase 5: serve. Cap $2.00. Needs a go from Nigel before it starts.
 
-A 3060 has 12 GB VRAM and compute capability 8.6, enough for a 0.5B model under vLLM 0.6.3. The install downloads about 3 GB of wheels into `/workspace/.vasty/venv`. The model is ungated, 988 MB. The box clock starts at onstart and covers the essentials install, and `serve` allows 30m for the vLLM install plus 30m for readiness, so the lease runs 45m and the install has a 20m stop.
+A 3060 has 12 GB VRAM, enough for a 0.5B model. The model is ungated, 988 MB. `serve` allows 30m for readiness, so the lease runs 30m.
 
 ```
-vasty reserve --name sv --vram 12 --ttl 45m --disk 40
+vasty reserve --name sv --vram 12 --ttl 30m --disk 40 --image vllm/vllm-openai:v0.32.0
 # box ready check
 vasty ssh sv -- df -h /workspace
 vasty serve --on sv --model Qwen/Qwen2.5-0.5B-Instruct
@@ -251,9 +250,23 @@ curl URL/models                        # expect 401
 vasty release sv
 ```
 
-Before `serve`, check that `sv` returned `ports` with `8000`. If it is missing, release `sv` and reserve again. Stop the phase if the install runs past 20 minutes.
+Before `serve`, check that `sv` returned `ports` with `8000`. If it is missing, release `sv` and reserve again.
 
-Pass: `serve` returns `url` and `api_key`, the authorized call lists the model, the unauthorized call gets 401. On `serve_failed`, save the error's `details.output` and run `vasty ssh sv -- 'tail -n 100 /workspace/.vasty/jobs/*/log'`. Check the remaining lease time, then rerun `vasty serve --on sv` once; the retry reuses the installed venv. Stop after the retry. After the phase, run `grep -r "$KEY" /private/tmp/vasty-live/out` and expect no match.
+Pass: `serve` returns `url` and `api_key`, the authorized call lists the model, the unauthorized call gets 401. On `serve_failed`, save the error's `details` and run `vasty ssh sv -- 'tail -n 100 /workspace/.vasty/jobs/*/log'`. Check the remaining lease time, then rerun `vasty serve --on sv` once; the retry reuses the running box. Stop after the retry.
+
+Negative check on a plain image. `pl` takes `vastai/base-image:cuda-12.6.3-auto` from `defaults.image`.
+
+```
+vasty reserve --name pl --ttl 10m
+# box ready check
+vasty serve --on pl --model Qwen/Qwen2.5-0.5B-Instruct    # expect vllm_missing, exit 1
+vasty status pl
+vasty release pl
+```
+
+Pass: `serve` returns `vllm_missing`, exit 1, and `status pl` reports `running`.
+
+After the phase, run `grep -r "$KEY" /private/tmp/vasty-live/out` and expect no match.
 
 ### Phase 6: teardown. No spend.
 
@@ -278,12 +291,12 @@ vasty takes the most reliable offer under `max_price`. The estimate uses `max_pr
 | 2 Clock | 3 to 4 | 45m | $0.10 | $1.00 |
 | 3 Run and sync | 4 | 60m | $0.15 | $1.00 |
 | 4 Owners, groups, orphans | 3 | 40m | $0.10 | $1.00 |
-| 5 Serve, 40 GB disk | 1 | 45m | $0.10 | $2.00 |
-| Bandwidth: image pulls, wheels, model | | | $0.25 to $1.15 | |
+| 5 Serve, 40 GB disk | 2 | 40m | $0.10 | $2.00 |
+| Bandwidth: image pulls, model | | | $0.26 to $1.23 | |
 | Retries and mistakes | | | $1.00 | |
-| Total | | ~3.5h | $1.75 to $2.60 | $5.50 |
+| Total | | ~3.5h | $1.76 to $2.73 | $5.50 |
 
-Bandwidth is host-priced at $3 to $14 per TB, with outliers to $27. 13 boxes pull about 82 GB: $0.25 at $3/TB, $1.15 at $14/TB, $2.21 at $27/TB. Layers cached on the host cost nothing. Each host's bandwidth rate goes in the ledger. Fund $20 as the account stop. The per-phase caps act as alarms; the run stops at a cumulative balance drop of $5.50.
+Bandwidth is host-priced at $3 to $14 per TB, with outliers to $27. 14 boxes pull about 88 GB: $0.26 at $3/TB, $1.23 at $14/TB, $2.38 at $27/TB. Layers cached on the host cost nothing. Each host's bandwidth rate goes in the ledger. Fund $20 as the account stop. The per-phase caps act as alarms; the run stops at a cumulative balance drop of $5.50.
 
 ## 6. Guardrails for the agent
 
