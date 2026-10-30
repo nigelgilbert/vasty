@@ -238,10 +238,10 @@ Pass: `status --group` lists both; bulk `extend` returns `results` with two entr
 
 ### Phase 5: serve. Cap $2.00. Needs a go from Nigel before it starts.
 
-A 3060 has 12 GB VRAM, enough for a 0.5B model. The model is ungated, 988 MB. `serve` allows 30m for readiness, so the lease runs 30m.
+A 3060 has 12 GB VRAM, enough for a 0.5B model. The model is ungated, 988 MB. `serve` allows 30m for readiness after setup, so the lease runs 45m.
 
 ```
-vasty reserve --name sv --vram 12 --ttl 30m --disk 40 --image vllm/vllm-openai:v0.32.0
+vasty reserve --name sv --vram 12 --ttl 45m --disk 40 --image vllm/vllm-openai:v0.32.0
 # box ready check
 vasty ssh sv -- df -h /workspace
 vasty serve --on sv --model Qwen/Qwen2.5-0.5B-Instruct
@@ -291,10 +291,10 @@ vasty takes the most reliable offer under `max_price`. The estimate uses `max_pr
 | 2 Clock | 3 to 4 | 45m | $0.10 | $1.00 |
 | 3 Run and sync | 4 | 60m | $0.15 | $1.00 |
 | 4 Owners, groups, orphans | 3 | 40m | $0.10 | $1.00 |
-| 5 Serve, 40 GB disk | 2 | 40m | $0.10 | $2.00 |
+| 5 Serve, 40 GB disk | 2 | 55m | $0.12 | $2.00 |
 | Bandwidth: image pulls, model | | | $0.26 to $1.23 | |
 | Retries and mistakes | | | $1.00 | |
-| Total | | ~3.5h | $1.76 to $2.73 | $5.50 |
+| Total | | ~3.75h | $1.78 to $2.75 | $5.50 |
 
 Bandwidth is host-priced at $3 to $14 per TB, with outliers to $27. 14 boxes pull about 88 GB: $0.26 at $3/TB, $1.23 at $14/TB, $2.38 at $27/TB. Layers cached on the host cost nothing. Each host's bandwidth rate goes in the ledger. Fund $20 as the account stop. The per-phase caps act as alarms; the run stops at a cumulative balance drop of $5.50.
 

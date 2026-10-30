@@ -26,7 +26,7 @@ Fixed in PR #1. Phase 1 reported `spent_today` 1.5 and `remaining_budget` 4.5 af
 
 `spent_today` in `src/vasty/budget.py` estimates each live instance from `covered_through`. With no charge rows yet, `parse_charges` sets `covered_through` to the day start, so a box created minutes ago is billed for the whole day so far. `lease_cost` in `src/vasty/views.py` clamps the same gap at the lease's `created` time. The account total skips that clamp.
 
-Consequence: under the default $5 daily budget, the first box of the day on a $0.25/hr GPU projects over budget late in the UTC day and `reserve` refuses. Fix: clamp each instance's estimate at its start time. Use the label's `created` for vasty leases and Vast's `start_date` for orphans.
+Consequence: under the default $5 daily budget, the first box of the day on a $0.25/hr GPU projects over budget late in the UTC day and `reserve` refuses. Fix: clamp each instance's estimate at Vast's `start_date`.
 
 ## Design questions
 

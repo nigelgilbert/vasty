@@ -9,9 +9,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from decimal import ROUND_HALF_UP, Decimal
 
-from vasty import labels
 from vasty.errors import VastyError
-from vasty.models import HISTORY_STATES, CachedLease, Charges, Instance, Label, WarningItem
+from vasty.models import HISTORY_STATES, CachedLease, Charges, Instance, WarningItem
 from vasty.output import money
 from vasty.state import effective_expiry, make_warning
 
@@ -39,14 +38,12 @@ def billing_fresh(fetched_at: int | None, now: int) -> bool:
 
 
 def instance_start(inst: Instance) -> int | None:
-    """Return when `inst` started billing, or None when unknown.
+    """Return Vast's `start_date` for `inst`, or None when the row omits it.
 
-    Use Vast's `start_date`, then the `created` field of a readable vasty label.
+    A label's `created` is the adoption time for a tagged box, so it is no
+    substitute. With no start the caller counts from the last billing post.
     """
-    if inst.start_date is not None:
-        return inst.start_date
-    label = labels.parse(inst.label)
-    return label.created if isinstance(label, Label) else None
+    return inst.start_date
 
 
 def spent_today(charges: Charges, live: list[Instance], now: int, day_start: int) -> Decimal | None:

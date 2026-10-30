@@ -803,8 +803,8 @@ def test_spend_sources_and_charges_cache(harness: Harness) -> None:
     ctx = harness.context()
     snap = engine.refresh(ctx)
     spent, source = engine.spend(ctx, snap)
-    # Start the estimate at the label's created time, NOW - 600, after covered_through.
-    assert spent == Decimal("1.10")
+    # With no start_date the estimate runs from covered_through, NOW - 1800, past the label's created.
+    assert spent == Decimal("1.30")
     assert source == "mixed"
     charge_calls = lambda: [c for c in harness.provider.calls if c[0] == "charges"]  # noqa: E731
     assert len(charge_calls()) == 1
