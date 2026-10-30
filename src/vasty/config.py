@@ -75,7 +75,7 @@ BUILTIN: dict[str, Any] = {
 }
 BUILTIN_MODELS: dict[str, dict[str, Any]] = {
     "Qwen/Qwen3-72B-Instruct": {
-        "vram": 80.0, "quant": "awq", "image": "vllm/vllm-openai:v0.6.3",
+        "vram": 80.0, "quant": "awq", "image": "vllm/vllm-openai:v0.32.0",
     },
 }
 
