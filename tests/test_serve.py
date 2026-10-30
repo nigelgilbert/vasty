@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from typing import Any
 
 import pytest
@@ -14,6 +13,7 @@ from vasty.remote import BoxUnreachableError, ExecResult, SshTarget
 
 QWEN = "Qwen/Qwen3-72B-Instruct"
 KEY = "vasty-" + "ab" * 32
+NO_VLLM = ExecResult(1, "", "")
 
 
 def run_serve(harness: Harness, *argv: str) -> tuple[int, dict[str, Any], str]:
@@ -52,19 +52,15 @@ def test_serve_on_box(harness: Harness, box: int, started: list[tuple[Job, str]]
         "url": "http://198.51.100.9:40080/v1", "api_key": KEY,
         "expires_at": "2026-10-29T01:50:00Z", "warnings": [], "swept": [],
     }
-    execs = harness.box.state(box).execs
-    assert execs == [serve.install_command("0.6.3")]
-    assert "vllm==0.6.3" in execs[0] and "/workspace/.vasty/venv" in execs[0]
+    assert harness.box.state(box).execs == ["command -v vllm"]
     job, command = started[0]
     assert (job.kind, job.port, job.state) == ("serve", 8000, "serving")
     assert command == (
-        f"/workspace/.vasty/venv/bin/vllm serve {QWEN} --api-key {KEY} "
+        f"vllm serve {QWEN} --api-key {KEY} "
         "--host 0.0.0.0 --port 8000 --quantization awq"
     )
     assert KEY not in job.cmd
-    assert job.cmd == (
-        f"/workspace/.vasty/venv/bin/vllm serve {QWEN} --host 0.0.0.0 --port 8000 --quantization awq"
-    )
+    assert job.cmd == f"vllm serve {QWEN} --host 0.0.0.0 --port 8000 --quantization awq"
     assert harness.http_calls == ["http://198.51.100.9:40080/v1/models"]
     assert harness.http_headers == [{"Authorization": f"Bearer {KEY}"}]
     lease = harness.context().cache.load().leases["l-0000a001"]
@@ -111,35 +107,31 @@ def test_serve_deadline_is_serve_failed(harness: Harness, box: int) -> None:
     assert harness.box.state(box).signals == [("j-1", "TERM")]
 
 
-def test_serve_install_failure(harness: Harness, box: int, started: list[tuple[Job, str]]) -> None:
-    harness.box.state(box).exec_results["V=/workspace/.vasty/venv"] = ExecResult(1, "", "no pip")
-    code, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
-    assert code == 2 and data["error"] == "serve_failed"
-    assert data["details"]["output"] == ["no pip"]
-    assert started == []
-
-
-def _timed_out() -> BoxUnreachableError:
-    err = BoxUnreachableError("The box did not answer within 1800s.")
-    err.__cause__ = subprocess.TimeoutExpired("ssh", serve.INSTALL_TIMEOUT_S)
-    return err
-
-
-def test_serve_install_timeout_is_serve_failed(
+def test_serve_vllm_missing_on_box(
     harness: Harness, box: int, started: list[tuple[Job, str]]
 ) -> None:
-    harness.box.state(box).exec_errors["V="] = _timed_out()
+    harness.box.state(box).exec_results["command -v vllm"] = NO_VLLM
     code, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
-    assert code == 2 and data["error"] == "serve_failed"
-    assert "did not finish within 1800s" in data["message"]
-    assert data["hint"] == serve.INSTALL_HINT
+    assert code == 1
+    assert data == {
+        "error": "vllm_missing",
+        "message": "Lease l-0000a001 has no vllm on PATH.",
+        "hint": f"Reserve with a vLLM image: vasty serve --model {QWEN} "
+                f'--image vllm/vllm-openai:v0.32.0, or add image to the [models."{QWEN}"] entry.',
+    }
     assert started == []
+    assert box in harness.provider.instances
+    assert harness.provider.destroyed == []
 
 
-def test_serve_install_lost_connection_stays_box_unreachable(harness: Harness, box: int) -> None:
-    harness.box.state(box).exec_errors["V="] = BoxUnreachableError()
-    code, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
-    assert code == 2 and data["error"] == "box_unreachable"
+def test_serve_vllm_present_starts_job(
+    harness: Harness, box: int, started: list[tuple[Job, str]]
+) -> None:
+    harness.box.state(box).exec_results["command -v vllm"] = ExecResult(0, "/usr/bin/vllm\n", "")
+    code, _, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
+    assert code == 0
+    assert harness.box.state(box).execs[0] == "command -v vllm"
+    assert len(started) == 1
 
 
 def test_serve_warnings_use_the_clock_after_bring_up(harness: Harness, box: int) -> None:
@@ -161,7 +153,7 @@ def test_serve_on_unknown_model_serves_path(
     code, data, _ = run_serve(harness, "--on", "ft", "--model", "./out/checkpoint")
     assert code == 0
     assert data["model"] == "./out/checkpoint"
-    assert "vllm==0.6.3" in harness.box.state(box).execs[0]
+    assert started[0][1].startswith("vllm serve ./out/checkpoint ")
     assert "--quantization" not in started[0][1]
 
 
@@ -172,15 +164,17 @@ def test_serve_quant_flag_overrides_entry(
     assert started[0][1].endswith("--quantization fp8")
 
 
-def test_serve_pin_from_config_entry(harness: Harness, box: int) -> None:
-    cfg = harness.home / ".config" / "vasty"
-    cfg.mkdir(parents=True)
-    (cfg / "config.toml").write_text(
-        '[models."org/small"]\nvram = 24\nimage = "vllm/vllm-openai:v0.7.2"\n'
+def test_serve_reads_user_model_entry(
+    harness: Harness, box: int, started: list[tuple[Job, str]]
+) -> None:
+    path = harness.home / ".config" / "vasty" / "config.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '[models."org/small"]\nvram = 24\nquant = "fp8"\nimage = "vllm/vllm-openai:v0.32.0"\n'
     )
     code, _, _ = run_serve(harness, "--on", "ft", "--model", "org/small")
     assert code == 0
-    assert "vllm==0.7.2" in harness.box.state(box).execs[0]
+    assert started[0][1].endswith("--quantization fp8")
 
 
 def test_serve_bind_local(harness: Harness, box: int, started: list[tuple[Job, str]]) -> None:
@@ -223,7 +217,7 @@ def test_serve_auto_reserves_with_entry_hardware(
     code, data, _ = run_serve(harness, "--model", QWEN)
     assert code == 0
     call = reserve.calls[0]
-    assert (call["ttl"], call["vram"], call["image"]) == (7200, 80.0, "vllm/vllm-openai:v0.6.3")
+    assert (call["ttl"], call["vram"], call["image"]) == (7200, 80.0, "vllm/vllm-openai:v0.32.0")
     assert data["lease"] == "l-0000b001"
     assert data["url"] == "http://198.51.100.7:41080/v1"
     assert harness.provider.destroyed == []
@@ -233,7 +227,7 @@ def test_serve_user_flags_beat_entry(harness: Harness, reserve: FakeReserve) -> 
     run_serve(harness, "--model", QWEN, "--vram", "48", "--gpu", "L40S", "--ttl", "1h")
     call = reserve.calls[0]
     assert (call["vram"], call["gpu"], call["image"], call["ttl"]) == (
-        48.0, "L40S", "vllm/vllm-openai:v0.6.3", 3600
+        48.0, "L40S", "vllm/vllm-openai:v0.32.0", 3600
     )
 
 
@@ -256,29 +250,51 @@ def test_serve_unknown_model_needs_vram_and_image(
     assert code == 1 and data["error"] == "model_unknown"
     assert reserve.calls == []
     code, data, _ = run_serve(harness, "--model", "org/mystery", "--vram", "24",
-                              "--image", "vllm/vllm-openai:v0.6.3")
+                              "--image", "vllm/vllm-openai:v0.32.0")
     assert code == 0
     assert reserve.calls[0]["vram"] == 24.0
 
 
-def test_serve_failure_releases_reserved_box(harness: Harness, reserve: FakeReserve) -> None:
-    harness.box.state(1001).exec_results["V="] = ExecResult(1, "", "pip exploded")
+def test_serve_vllm_missing_releases_reserved_box(
+    harness: Harness, reserve: FakeReserve, started: list[tuple[Job, str]]
+) -> None:
+    harness.box.state(1001).exec_results["command -v vllm"] = NO_VLLM
     code, data, _ = run_serve(harness, "--model", QWEN)
-    assert code == 2 and data["error"] == "serve_failed"
+    assert code == 1 and data["error"] == "vllm_missing"
+    assert started == []
     assert harness.provider.destroyed == [1001]
 
 
 def test_serve_os_error_releases_reserved_box(harness: Harness, reserve: FakeReserve) -> None:
-    harness.box.state(1001).exec_errors["V="] = OSError("ssh: fork failed")
+    harness.box.state(1001).exec_errors["command -v vllm"] = OSError("ssh: fork failed")
     with pytest.raises(OSError):
         run_serve(harness, "--model", QWEN)
     assert harness.provider.destroyed == [1001]
 
 
+@pytest.mark.parametrize("on", [True, False])
+def test_serve_preflight_box_unreachable(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, started: list[tuple[Job, str]], on: bool
+) -> None:
+    if on:
+        box_id = add_lease(harness, label={"name": "ft"}).id
+        argv: tuple[str, ...] = ("--on", "ft")
+    else:
+        FakeReserve(harness).install(monkeypatch)
+        box_id = 1001
+        argv = ()
+    unreachable = BoxUnreachableError("The box did not answer within 30s.")
+    harness.box.state(box_id).exec_errors["command -v vllm"] = unreachable
+    code, data, _ = run_serve(harness, *argv, "--model", QWEN)
+    assert code == 2 and data["error"] == "box_unreachable"
+    assert started == []
+    assert harness.provider.destroyed == ([] if on else [1001])
+
+
 def test_serve_failure_keeps_reused_box(harness: Harness, reserve: FakeReserve, box: int) -> None:
-    harness.box.state(box).exec_results["V="] = ExecResult(1, "", "pip exploded")
+    harness.box.state(box).exec_results["command -v vllm"] = NO_VLLM
     code, data, _ = run_serve(harness, "--model", QWEN, "--name", "ft")
-    assert code == 2 and data["error"] == "serve_failed"
+    assert code == 1 and data["error"] == "vllm_missing"
     assert harness.provider.destroyed == []
 
 
@@ -305,19 +321,11 @@ def test_serve_reports_reserve_wait_sweep(
 def test_serve_failure_reports_failed_sweep_on_stderr(harness: Harness, box: int) -> None:
     add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
     harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
-    harness.box.state(box).exec_results["V="] = ExecResult(1, "", "pip exploded")
+    harness.box.state(box).exec_results["command -v vllm"] = NO_VLLM
     code, data, err = run_serve(harness, "--on", "ft", "--model", QWEN)
-    assert code == 2 and data["error"] == "serve_failed"
+    assert code == 1 and data["error"] == "vllm_missing"
     assert "swept" not in data
     assert err.splitlines() == [
         "vasty: SWEPT  l-0000a009 old  expired 2026-10-29T00:59:50Z  destroy failed (provider_error)"
     ]
 
-
-def test_serve_vllm_pin_parsing() -> None:
-    from vasty.config import ModelEntry
-
-    assert serve.vllm_pin(None) == serve.DEFAULT_VLLM
-    assert serve.vllm_pin(ModelEntry(image="vllm/vllm-openai:v0.8.1")) == "0.8.1"
-    assert serve.vllm_pin(ModelEntry(image="vllm/vllm-openai:latest")) == serve.DEFAULT_VLLM
-    assert serve.vllm_pin(ModelEntry(image="registry:5000/vllm")) == serve.DEFAULT_VLLM

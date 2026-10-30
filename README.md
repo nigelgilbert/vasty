@@ -8,7 +8,7 @@ vasty reserve --gpu 4090 --ttl 30m
 
 That rents a GPU box with a 30-minute clock. When the clock runs out, a watchdog on the box is meant to destroy it, and a sweep on the next `vasty` command catches anything the watchdog missed. `extend` keeps a box. `run`, `serve`, `sync`, `ssh`, `tag`, `status` and `release` do the rest.
 
-**Status: work in progress.** Every verb is implemented and unit-tested against fakes, and one funded live run has confirmed unattended expiry. `serve` is broken and the default image is unpublished. See [Status](#status) before spending money.
+**Status: work in progress.** Every verb is implemented and unit-tested against fakes, and one funded live run has confirmed unattended expiry. The default image is unpublished. See [Status](#status) before spending money.
 
 ## What it is
 
@@ -159,11 +159,12 @@ A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fie
 | `model_unknown` | 1 | `serve` model has no table entry and no `--vram` and `--image` |
 | `image_unsupported` | 1 | a custom image lacks bash, root or apt-get |
 | `startup_too_large` | 1 | the encoded `onstart` exceeds 4048 characters |
+| `vllm_missing` | 1 | `serve` finds no `vllm` on the box's PATH |
 | `provider_error` | 2 | a provider call fails |
 | `box_unreachable` | 2 | the box does not answer SSH |
 | `spend_unavailable` | 2 | billing coverage for today cannot be read |
 | `sync_failed` | 2 | rsync fails |
-| `serve_failed` | 2 | the inference server fails to install or exits before `/v1/models` answers |
+| `serve_failed` | 2 | the inference server exits before `/v1/models` answers |
 | `port_mapping_missing` | 2 | a required port has no external mapping at the readiness deadline |
 | `budget_exceeded` | 3 | the projection passes `daily_budget` |
 
@@ -199,6 +200,8 @@ Selected fields:
   "expires_at": "2026-10-29T18:04:00Z"
 }
 ```
+
+The box's image supplies vLLM, and `serve` launches `vllm` from PATH. The builtin `Qwen/Qwen3-72B-Instruct` entry uses `vllm/vllm-openai:v0.32.0`. On a plain image, install vLLM in a `startup` hook first.
 
 Point an OpenAI-compatible client at `url` with `api_key`. The endpoint is public on a random port, protected by a fresh key per job. The key prints once. `--bind-local` keeps vLLM on `127.0.0.1` for use through `vasty ssh -L`. The endpoint dies with the lease.
 
@@ -269,7 +272,7 @@ pip install -U transformers peft
 [models."Qwen/Qwen3-72B-Instruct"]
 vram = 80
 quant = "awq"
-image = "vllm/vllm-openai:v0.6.3"
+image = "vllm/vllm-openai:v0.32.0"
 ```
 
 A `[models]` entry sets `vram`, `gpu` and `image` for `serve --model NAME` ahead of every layer below flags, so `serve` ignores `defaults.image` unless `--image` is passed.
@@ -281,12 +284,11 @@ A `[models]` entry sets `vram`, `gpu` and `image` for `serve --model NAME` ahead
 Done:
 
 - Every verb above, in `src/vasty/`.
-- 1131 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
+- 1143 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
 - One funded live run on Vast, 2026-10-29. Every phase passed except `serve`. See [docs/live-test-report.md](docs/live-test-report.md).
 
 Not done:
 
-- `serve` fails on the vLLM 0.6.3 install. See [issues/serve-vllm-063-transformers-pin.md](issues/serve-vllm-063-transformers-pin.md).
 - The default image `vasty/base:cuda12.4` is unpublished. See the quick start for the workaround.
 - Not on PyPI. Install from the repo.
 

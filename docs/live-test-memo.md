@@ -18,19 +18,21 @@ The core product works on real hardware. Lifecycle, clock, run, sync, owner and 
 
 ### 1. `serve` fails on every model with `rope_scaling`
 
-Filed as [serve-vllm-063-transformers-pin.md](../issues/serve-vllm-063-transformers-pin.md). The vllm 0.6.3 pin leaves transformers open, pip resolves transformers 5.22, and vLLM asserts before the model downloads. This blocks the sub-agent endpoint use case. Fix first.
+Fixed in PR #1. The vllm 0.6.3 pin leaves transformers open, pip resolves transformers 5.22, and vLLM asserts before the model downloads. This blocks the sub-agent endpoint use case. Fix first.
 
 ### 2. `spent_today` bills every live box from midnight on a fresh day
 
-Unfiled. Phase 1 reported `spent_today` 1.5 and `remaining_budget` 4.5 after one cent of real spend. The report calls this the plan's section 2 caveat. It is a code defect.
+Fixed in PR #1. Phase 1 reported `spent_today` 1.5 and `remaining_budget` 4.5 after one cent of real spend. The report calls this the plan's section 2 caveat. It is a code defect.
 
 `spent_today` in `src/vasty/budget.py` estimates each live instance from `covered_through`. With no charge rows yet, `parse_charges` sets `covered_through` to the day start, so a box created minutes ago is billed for the whole day so far. `lease_cost` in `src/vasty/views.py` clamps the same gap at the lease's `created` time. The account total skips that clamp.
 
-Consequence: under the default $5 daily budget, the first box of the day on a $0.25/hr GPU projects over budget late in the UTC day and `reserve` refuses. Fix: clamp each instance's estimate at its start time. Use the label's `created` for vasty leases and Vast's `start_date` for orphans.
+Consequence: under the default $5 daily budget, the first box of the day on a $0.25/hr GPU projects over budget late in the UTC day and `reserve` refuses. Fix: clamp each instance's estimate at Vast's `start_date`.
 
 ## Design questions
 
 - `status` with no selector hides expired leases. The design lists active leases by default and keeps expired leases in history for 24 hours, so this is as designed. Decide whether agents should see what just expired in the default list.
+- The builtin model entry names `Qwen/Qwen3-72B-Instruct`, which does not exist on Hugging Face. Qwen3 dense sizes stop at 32B. The README's sub-agent example uses this name. Candidate replacement: `Qwen/Qwen3-32B-AWQ`, vram 24, which fits a 24 GB card.
+- Decided 2026-10-29: `serve` runs the vLLM the image ships and the venv install is deleted. Two Fable judges and GPT-6 Astra each read the README independently and picked this over honoring a preinstalled vLLM beside the venv, on Light, Bounded spend and Agent-first I/O. Train-then-serve is two boxes.
 - `serve_failed` returns `details.exit` only. The plan expected the log tail in `details.output`. The design promised neither. Adding the tail saves an ssh round trip at the moment an agent is stuck. Recommend adding it.
 
 ## Cosmetic

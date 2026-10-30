@@ -37,17 +37,30 @@ def billing_fresh(fetched_at: int | None, now: int) -> bool:
     return fetched_at is not None and 0 <= now - fetched_at < BILLING_FRESH_S
 
 
+def instance_start(inst: Instance) -> int | None:
+    """Return Vast's `start_date` for `inst`, or None when the row omits it.
+
+    A label's `created` is the adoption time for a tagged box, so it is no
+    substitute. With no start the caller counts from the last billing post.
+    """
+    return inst.start_date
+
+
 def spent_today(charges: Charges, live: list[Instance], now: int, day_start: int) -> Decimal | None:
     """Return billed charges plus `dph_total` since coverage for live instances, or None when coverage is unknown.
 
     `charges` holds today's billed amounts for every instance, deleted ones
-    included. The estimate for each live instance runs from `covered_through`,
-    clipped to `[day_start, now]`, to `now`.
+    included. The estimate for each live instance runs to `now` from the latest
+    of `covered_through`, `day_start` and the instance's start, clipped at `now`.
     """
     if charges.covered_through is None:
         return None
-    since = min(max(charges.covered_through, day_start), now)
-    estimate = sum((cost(inst.dph_total, now - since) for inst in live), ZERO)
+    floor = max(charges.covered_through, day_start)
+    estimate = ZERO
+    for inst in live:
+        start = instance_start(inst)
+        since = min(floor if start is None else max(floor, start), now)
+        estimate += cost(inst.dph_total, now - since)
     return charges.total + estimate
 
 

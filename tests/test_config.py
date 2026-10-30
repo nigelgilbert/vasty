@@ -262,7 +262,7 @@ def test_example_config_from_spec(cfg: Env) -> None:
         '[profiles.small]\ngpu = "4090"\nvram = 24\n\n'
         '[profiles.big]\ngpu = "A100"\nvram = 80\nmax_price = 2.50\n\n'
         '[models."Qwen/Qwen3-72B-Instruct"]\nvram = 80\nquant = "awq"\n'
-        'image = "vllm/vllm-openai:v0.6.3"\n'
+        'image = "vllm/vllm-openai:v0.32.0"\n'
     )
     s = cfg.resolve(profile="small")
     assert s.gpu == "4090" and s.vram == 24.0
@@ -450,24 +450,24 @@ def test_daily_budget_has_no_flag(cfg: Env) -> None:
 
 def test_builtin_model_entry(cfg: Env) -> None:
     entry = cfg.resolve().models["Qwen/Qwen3-72B-Instruct"]
-    assert entry == ModelEntry(vram=80.0, quant="awq", image="vllm/vllm-openai:v0.6.3")
+    assert entry == ModelEntry(vram=80.0, quant="awq", image="vllm/vllm-openai:v0.32.0")
 
 
 def test_config_models_add_and_override(cfg: Env) -> None:
     cfg.user('[models."Qwen/Qwen3-72B-Instruct"]\nimage = "vllm/vllm-openai:v0.7.0"\n'
-             '[models."org/small"]\nvram = 24\nimage = "vllm/vllm-openai:v0.6.3"\n')
+             '[models."org/small"]\nvram = 24\nimage = "vllm/vllm-openai:v0.32.0"\n')
     cfg.project('[models."org/small"]\ngpu = "4090"\n')
     models = cfg.resolve().models
     assert models["Qwen/Qwen3-72B-Instruct"] == ModelEntry(
         vram=80.0, quant="awq", image="vllm/vllm-openai:v0.7.0")
-    assert models["org/small"] == ModelEntry(vram=24.0, image="vllm/vllm-openai:v0.6.3",
+    assert models["org/small"] == ModelEntry(vram=24.0, image="vllm/vllm-openai:v0.32.0",
                                              gpu="4090")
 
 
 def test_model_layer_sources(cfg: Env) -> None:
     cfg.env["VASTY_VRAM"] = "24"
     s = cfg.resolve(model="Qwen/Qwen3-72B-Instruct")
-    assert (s.vram, s.image) == (80.0, "vllm/vllm-openai:v0.6.3")
+    assert (s.vram, s.image) == (80.0, "vllm/vllm-openai:v0.32.0")
     assert (s.sources["vram"], s.sources["image"]) == ("model", "model")
     assert s.sources["gpu"] == "default"
 

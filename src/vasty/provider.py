@@ -255,6 +255,7 @@ def normalize_instance(row: dict[str, Any]) -> Instance | None:
         ports=normalize_ports(row.get("ports")),
         image=_to_str(row.get("image_uuid")),
         runtype=_to_str(row.get("image_runtype")),
+        start_date=_to_int(row.get("start_date")),
     )
 
 

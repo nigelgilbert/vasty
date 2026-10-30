@@ -6,20 +6,18 @@ Without `--on` it resolves settings with the entry's `vram`, `gpu` and
 with `run_ttl` (or `--ttl`). A model with no entry needs `--vram` and
 `--image` to auto-reserve. With `--on` any model name or box path serves.
 
-On the box, `serve` installs the pinned vLLM into `/workspace/.vasty/venv` when
-absent, starts `vllm serve` as a `serve` job on port 8000 with a fresh
-`vasty-` key, and polls `/v1/models` with that key until it answers 200. The
-pin is the version in the model entry's image tag, else `DEFAULT_VLLM`. With
-`--bind-local` vLLM listens on 127.0.0.1 and the poll runs on the box with
-curl. Any failure after the reserve releases a box this call created.
+The box's image supplies vLLM. On the box, `serve` checks for `vllm` on PATH
+and raises `vllm_missing` when it is absent. It then starts `vllm serve` as a
+`serve` job on port 8000 with a fresh `vasty-` key, and polls `/v1/models`
+with that key until it answers 200. With `--bind-local` vLLM listens on
+127.0.0.1 and the poll runs on the box with curl. Any failure after the
+reserve releases a box this call created.
 """
 
 from __future__ import annotations
 
 import argparse
-import re
 import shlex
-import subprocess
 from dataclasses import dataclass
 
 from vasty import engine
@@ -35,22 +33,19 @@ from vasty.commands._common import (
     require_tools,
     save_lease,
 )
-from vasty.config import ModelEntry, resolve
+from vasty.config import VLLM_IMAGE, ModelEntry, resolve
 from vasty.context import Context
 from vasty.errors import VastyError
 from vasty.models import SERVE_PORT, CachedLease, Job, ServeResult, WarningItem
-from vasty.remote import BoxUnreachableError, SshTarget
+from vasty.remote import SshTarget
 from vasty.state import effective_expiry
 from vasty.timeutil import iso
 
-VENV = "/workspace/.vasty/venv"
-DEFAULT_VLLM = "0.6.3"
-INSTALL_TIMEOUT_S = 1800.0
 READY_DEADLINE_S = 1800.0
 POLL_INTERVAL_S = 5.0
 HTTP_TIMEOUT_S = 5.0
-INSTALL_HINT = "Check the box with vasty ssh LEASE, or pass --image with vLLM preinstalled."
-_TAG_VERSION = re.compile(r"v?([0-9]+(?:\.[0-9]+)*(?:\.post[0-9]+)?)")
+PREFLIGHT_TIMEOUT_S = 30.0
+PREFLIGHT_COMMAND = "command -v vllm"
 
 
 def model_entry(ctx: Context, model: str) -> ModelEntry | None:
@@ -64,31 +59,9 @@ def model_entry(ctx: Context, model: str) -> ModelEntry | None:
     return settings.models.get(model)
 
 
-def vllm_pin(entry: ModelEntry | None) -> str:
-    """Return the vLLM version from the entry's image tag, else `DEFAULT_VLLM`."""
-    if entry is None or entry.image is None or ":" not in entry.image:
-        return DEFAULT_VLLM
-    match = _TAG_VERSION.fullmatch(entry.image.rsplit(":", 1)[1])
-    return match.group(1) if match else DEFAULT_VLLM
-
-
-def install_command(pin: str) -> str:
-    """Return the shell that installs `vllm==PIN` into the venv unless that version is present."""
-    v = shlex.quote(VENV)
-    spec = shlex.quote(f"vllm=={pin}")
-    marker = shlex.quote(pin)
-    return (
-        f"V={v}; "
-        f'if [ -x "$V/bin/vllm" ] && [ "$(cat "$V/.vasty-vllm" 2>/dev/null)" = {marker} ]; '
-        "then echo vasty_venv=present; "
-        f'else python3 -m venv "$V" && "$V/bin/pip" install -q {spec} '
-        f'&& echo {marker} >"$V/.vasty-vllm" && echo vasty_venv=installed; fi'
-    )
-
-
 def server_argv(model: str, quant: str | None, host: str, key: str | None) -> list[str]:
     """Return the `vllm serve` argv; pass `key` None for the displayed form."""
-    argv = [f"{VENV}/bin/vllm", "serve", model]
+    argv = ["vllm", "serve", model]
     if key is not None:
         argv += ["--api-key", key]
     argv += ["--host", host, "--port", str(SERVE_PORT)]
@@ -110,7 +83,6 @@ def probe_command(key: str) -> str:
 class _Plan:
     model: str
     quant: str | None
-    entry: ModelEntry | None
     bind_local: bool
 
 
@@ -126,7 +98,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
             )
         ctx.model = args.model
     quant = args.quant if args.quant is not None else (entry.quant if entry else None)
-    plan = _Plan(args.model, quant, entry, bool(args.bind_local))
+    plan = _Plan(args.model, quant, bool(args.bind_local))
     require_tools(ctx, "ssh")
 
     snap = engine.refresh(ctx)
@@ -175,7 +147,7 @@ def _public_url(ctx: Context, snap: engine.Snapshot, lease: CachedLease) -> str:
 def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Plan) -> ServeResult:
     target = engine.ssh_target(lease)
     url = f"http://127.0.0.1:{SERVE_PORT}/v1" if plan.bind_local else _public_url(ctx, snap, lease)
-    _install(ctx, target, vllm_pin(plan.entry))
+    _preflight(ctx, target, lease, plan.model)
 
     key = "vasty-" + ctx.random_hex(32)
     host = "127.0.0.1" if plan.bind_local else "0.0.0.0"
@@ -200,31 +172,15 @@ def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Pl
     )
 
 
-def _install(ctx: Context, target: SshTarget, pin: str) -> None:
-    """Install the pinned vLLM. Raise `serve_failed` on a non-zero exit or a timeout.
-
-    `SshBox` reports a timeout as `BoxUnreachableError` caused by
-    `subprocess.TimeoutExpired`. A lost connection carries no such cause and
-    stays `box_unreachable`.
-    """
-    try:
-        done = ctx.box.exec(target, install_command(pin), timeout=INSTALL_TIMEOUT_S)
-    except BoxUnreachableError as err:
-        if not isinstance(err.__cause__, subprocess.TimeoutExpired):
-            raise
-        raise VastyError(
-            "serve_failed",
-            f"Installing vllm=={pin} into {VENV} did not finish within {int(INSTALL_TIMEOUT_S)}s.",
-            INSTALL_HINT,
-            details={"timeout_s": int(INSTALL_TIMEOUT_S)},
-        ) from err
+def _preflight(ctx: Context, target: SshTarget, lease: CachedLease, model: str) -> None:
+    """Raise `vllm_missing` when the box has no `vllm` on PATH."""
+    done = ctx.box.exec(target, PREFLIGHT_COMMAND, timeout=PREFLIGHT_TIMEOUT_S)
     if done.exit != 0:
-        detail = (done.stderr.strip() or done.stdout.strip()).splitlines()[-5:]
         raise VastyError(
-            "serve_failed",
-            f"Installing vllm=={pin} into {VENV} exited {done.exit}.",
-            INSTALL_HINT,
-            details={"exit": done.exit, "output": detail},
+            "vllm_missing",
+            f"Lease {lease.lease} has no vllm on PATH.",
+            f"Reserve with a vLLM image: vasty serve --model {model} --image {VLLM_IMAGE}, "
+            f'or add image to the [models."{model}"] entry.',
         )
 
 
