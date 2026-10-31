@@ -253,11 +253,14 @@ class LeaseView:
     guard: str | None
     guard_missing: list[str] | None
     gpu: str | None
+    gpus: int
+    vram_gb: float | None
     price_per_hr: Decimal
     cost: Decimal | None
     uptime_s: int | None
     expires_at: str | None
     ttl_remaining_s: int | None
+    busy: bool | None
     jobs: list[JobView]
     log_tail: list[str] | None = field(default=None, metadata=OMIT_NONE)
     destroy_pending: bool | None = field(default=None, metadata=OMIT_NONE)

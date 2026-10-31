@@ -147,14 +147,18 @@ def short_cmd(cmd: str, kind: str) -> str:
     return cmd
 
 
-def gpu_text(gpu: str | None, gpus: int) -> str:
+def gpu_text(gpu: str | None, gpus: int, vram_gb: float | None) -> str:
+    """Return the GPU name, prefixed with count and per-GPU GB as `2x12` when `gpus` is above one."""
     if gpu is None:
         return "?"
     name = gpu
     for prefix in ("RTX ", "GTX "):
         if name.startswith(prefix):
             name = name[len(prefix):]
-    return f"{gpus}× {name}" if gpus > 1 else name
+    if gpus <= 1:
+        return name
+    vram = "?" if vram_gb is None else str(int(vram_gb))
+    return f"{gpus}x{vram} {name}"
 
 
 def _job_parts(view: JobView, lease: CachedLease | None) -> tuple[str, str]:
@@ -180,7 +184,9 @@ def jobs_cell(view: LeaseView, lease: CachedLease | None) -> str:
             parts.append(f"{job.id} {name} (serving :{port})")
         else:
             parts.append(f"{job.id} {name} (unknown)")
-    return ", ".join(parts) if parts else DASH
+    if parts:
+        return ", ".join(parts)
+    return "idle" if view.busy is False else DASH
 
 
 def group_jobs_cell(view: LeaseView, lease: CachedLease | None) -> str:
@@ -219,10 +225,6 @@ def table(rows: list[list[str]], indent: str = "", gap: str = "  ") -> list[str]
     return out
 
 
-def _lease_gpu(view: LeaseView, lease: CachedLease | None) -> str:
-    return gpu_text(view.gpu, lease.gpus if lease is not None else 1)
-
-
 def lease_table(result: StatusResult, by_id: dict[str, CachedLease], expiring: set[str]) -> list[str]:
     header = ["LEASE", "NAME", "GROUP", "OWNER", "GPU", "STATE", "EXPIRES", "UPTIME", "$/HR",
               "COST", "JOBS"]
@@ -234,7 +236,7 @@ def lease_table(result: StatusResult, by_id: dict[str, CachedLease], expiring: s
             view.name or DASH,
             view.group or DASH,
             view.owner or "?",
-            _lease_gpu(view, lease),
+            gpu_text(view.gpu, view.gpus, view.vram_gb),
             view.state,
             expires_cell(view, expiring),
             DASH if view.uptime_s is None else format_duration(view.uptime_s),

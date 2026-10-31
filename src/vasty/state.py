@@ -116,6 +116,17 @@ def live_jobs(lease: CachedLease) -> list[str]:
     return [job.id for job in lease.jobs if job.state in LIVE_JOB_STATES]
 
 
+def busy(lease: CachedLease) -> bool | None:
+    """Return whether a tracked job is live on a running box, else None.
+
+    A job in `running`, `serving` or `unknown` state counts as live. The
+    answer covers jobs vasty started.
+    """
+    if lease.state != "running":
+        return None
+    return any(job.state in LIVE_JOB_STATES or job.state == "unknown" for job in lease.jobs)
+
+
 def startup_failed(lease: CachedLease) -> bool:
     """Return True when the hook exited non-zero or a restart cut it off."""
     if lease.startup_exit is not None and lease.startup_exit != 0:

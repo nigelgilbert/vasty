@@ -6,6 +6,7 @@ import pytest
 
 from vasty.models import CachedLease, Job, Label, LeaseState, ProbeResult
 from vasty.state import (
+    busy,
     derive_state,
     effective_expiry,
     fix_for,
@@ -292,3 +293,23 @@ def test_fix_errors() -> None:
         fix_for("nope", None)
     with pytest.raises(ValueError):
         fix_for("orphan", None)
+
+
+@pytest.mark.parametrize(
+    ("state", "jobs", "expected"),
+    [
+        ("running", ["running"], True),
+        ("running", ["serving"], True),
+        ("running", ["unknown"], True),
+        ("running", [], False),
+        ("running", ["exited"], False),
+        ("pending", [], None),
+        ("unreachable", ["running"], None),
+        ("stopped", [], None),
+        ("expired", ["running"], None),
+        ("released", [], None),
+        ("gone", [], None),
+    ],
+)
+def test_busy(state: LeaseState, jobs: list[str], expected: bool | None) -> None:
+    assert busy(lease(state, jobs=[job("j-1", s) for s in jobs])) is expected
