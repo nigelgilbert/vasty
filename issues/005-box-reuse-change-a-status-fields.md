@@ -14,7 +14,7 @@ Add `busy`, `gpus` and `vram_gb` to `LeaseView`, in JSON and the table, outside 
 
 `busy` is true when a tracked job is live, false when the box is `running` with no tracked live job, and null when the box is `pending`, `unreachable`, in a history state or an orphan. The field describes jobs vasty started. Add one helper in `state.py`, `busy(lease) -> bool | None`, that counts a job in `running`, `serving` or `unknown` state as busy; change B reuses it.
 
-`gpus` and `vram_gb` come from the cached lease for managed rows and from `num_gpus` and `gpu_ram_gb` for orphans. The table's jobs cell shows `idle` for a running box with no tracked live job. Pending and unreachable boxes keep their current cell. The hardware column shows `2x12` style when `gpus` is above one.
+`gpus` and `vram_gb` come from the cached lease for managed rows and from `num_gpus` and `gpu_ram_gb` for orphans. The table's jobs cell shows `idle` for a running box with no tracked live job. Pending and unreachable boxes keep their current cell. The hardware column shows count, per-GPU GB and name on every row, as `1x12 3060`.
 
 ## Acceptance criteria
 

@@ -16,7 +16,7 @@
 
 `state.py` also gains `reuse_candidates(snap, settings, ttl, now, ports) -> list[tuple[CachedLease, int]]`. A candidate is a lease in the snapshot whose `label.owner` equals `settings.owner`, state `running`, `reachable_at` set, `destroy_pending` false, `guard` full or partial with `startup_exit` 0, `busy` false by the change A helper, `hardware_mismatch` empty and `ttl_remaining` above zero. Each entry carries its shortfall against the requested `ttl`, zero when the lease outlasts it. Tier one is zero shortfall, tier two is positive. Sort tier one first, most time left first, and cap at three.
 
-`reserve_lease` computes candidates from the refreshed snapshot before `choose_offer` on every actual creation, including a `--name` miss, and appends one `idle_box_available` warning per candidate to the result. A name hit emits none. Auto-reserve `run` and `serve` pass the warnings through. Message: `lease l-x (name) is idle: RTX 3060, 1x12 GB, 22m left`; a tier two message adds the shortfall and `extend --to`. Fix: `vasty status l-x`, added to the static fix table. `serve` passes its ports so the candidate has port 8000 mapped.
+`reserve_lease` computes candidates from the refreshed snapshot before `choose_offer` on every actual creation, including a `--name` miss, and appends one `idle_box_available` warning per candidate to the result. A name hit emits none. Auto-reserve `run` and `serve` pass the warnings through. Message: `lease l-x (name) is idle: RTX 3060, 1x12 GB, 22m left`; a tier two message adds the shortfall and `extend --to`. Fix: `vasty status l-x`, added to the static fix table. Every caller passes the full requested port list, so a candidate has each one mapped.
 
 ## Acceptance criteria
 

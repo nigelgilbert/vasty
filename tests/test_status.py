@@ -265,7 +265,8 @@ def test_uptime_null_before_running(harness: Harness) -> None:
     add_lease(harness, label={"name": "ft", "created": NOW - 1200}, actual_status="loading")
     assert by_lease(status(harness))["l-0000a001"]["uptime_s"] is None
     _, out, _ = harness.run("status", "--plain")
-    assert out.splitlines()[1].split()[8] == "—"
+    header, line = out.splitlines()[:2]
+    assert line[header.index("UPTIME"):].split()[0] == "—"
 
 
 def test_history_only_when_named_or_verbose(harness: Harness) -> None:

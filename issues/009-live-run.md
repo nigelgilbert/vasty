@@ -17,7 +17,7 @@ Run the serve path and the new fields against Vast, with the cap Nigel sets. Cov
 - `uptime_s` against the balance ledger, comparing the first `running` sample with the GPU hours Vast bills;
 - per-lease `cost` going from null to billed within the first minutes;
 - `idle_box_available` on a second `reserve` while the first box sits idle;
-- `idle_box_available` on a second `reserve` while an `ssh_proxy` box sits idle, to see whether Vast fills the port mapping on proxy boxes; an empty mapping fails the ports check and keeps the box out of the candidates;
+- `idle_box_available` on a second `reserve` while a box created with `runtype=ssh_proxy`, from an offer with `direct_port_count` 0, sits idle. The captures in `docs/live/` show full mappings on proxy-host rows that also had direct ports; this covers the proxy-only case. An empty mapping fails the ports check and keeps the box out of the candidates;
 - two failure paths, driven by an agent reading only the error objects: `serve --on` a box reserved with the vLLM image and no `cuda` floor that landed on a 12.x host, and a bare `serve --model X` with no profile. Record whether the agent recovers from `serve_failed` with its log tail and from `vllm_missing` with its hint. A miss on either is the evidence for `cuda_too_low` or a builtin `vllm` profile, both deferred.
 
 Record the run in `docs/live-test-report.md` with the commands, the JSON returned and the ledger lines, in the style of the earlier phases. Fill in the README context number from the result.
