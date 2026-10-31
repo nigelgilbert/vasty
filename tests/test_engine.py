@@ -830,9 +830,13 @@ def test_charges_start_reaches_back_to_the_oldest_lease(harness: Harness) -> Non
 
 
 def test_read_charges_failure_sets_none(harness: Harness) -> None:
-    harness.provider.fail["charges"] = VastyError("provider_error", "down", "retry")
+    harness.provider.billed = {999: Decimal("1.00")}
     ctx = harness.context()
+    engine.read_charges(ctx, engine.refresh(ctx))
+    harness.time.advance(61)
+    harness.provider.fail["charges"] = VastyError("provider_error", "down", "retry")
     snap = engine.refresh(ctx)
+    assert snap.charges is not None
     engine.read_charges(ctx, snap)
     assert snap.charges is None
 
@@ -851,9 +855,9 @@ def test_read_balance_caches_balance_and_credit(harness: Harness) -> None:
     assert len(calls(harness, "balance")) == 1
     harness.time.advance(1)
     harness.provider.fail["balance"] = VastyError("provider_error", "down", "retry")
-    snap = engine.refresh(ctx)
-    engine.read_balance(ctx, snap)
-    assert snap.balance is None
+    engine.read_balance(ctx, engine.refresh(ctx))
+    data = ctx.cache.load()
+    assert (data.balance, data.credit, data.balance_at) == (Decimal("0"), Decimal("19.90"), NOW)
 
 
 def test_cached_snapshot_keeps_billing_read_today_only(harness: Harness) -> None:
