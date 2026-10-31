@@ -2,7 +2,7 @@
 
 **Type**: AFK
 
-**Status:** 🔲 Not started
+**Status:** ✅ Done in 85a209d
 
 ## Parent
 
@@ -18,12 +18,12 @@ Add `busy`, `gpus` and `vram_gb` to `LeaseView`, in JSON and the table, outside 
 
 ## Acceptance criteria
 
-- [ ] `status` JSON on a running lease with a `running` job reports `busy: true`; with no jobs `busy: false`; with one `unknown` job `busy: true`; on a `pending` lease and on an orphan `busy: null`.
-- [ ] Every `LeaseView` carries `gpus` and `vram_gb`, and an orphan row reports them from the instance row.
-- [ ] The table jobs cell reads `idle` for a running lease with no live job, and keeps its current text for `pending` and `unreachable`.
-- [ ] `state.busy` has a unit test per state above.
-- [ ] Group rendering and a history lease named directly show the three fields.
-- [ ] `uv run pytest` and `uv run mypy` pass.
+- [x] `status` JSON on a running lease with a `running` job reports `busy: true`; with no jobs `busy: false`; with one `unknown` job `busy: true`; on a `pending` lease and on an orphan `busy: null`.
+- [x] Every `LeaseView` carries `gpus` and `vram_gb`, and an orphan row reports them from the instance row.
+- [x] The table jobs cell reads `idle` for a running lease with no live job, and keeps its current text for `pending` and `unreachable`.
+- [x] `state.busy` has a unit test per state above.
+- [x] Group rendering and a history lease named directly show the three fields.
+- [x] `uv run pytest` and `uv run mypy` pass.
 
 ## Blocked by
 
