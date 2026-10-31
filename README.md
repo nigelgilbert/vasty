@@ -14,10 +14,9 @@ That rents a GPU box with a 30-minute clock. When the clock runs out, a watchdog
 
 A coding agent such as Claude Code reserves a box, pushes code, runs a job or serves a model, pulls results, and releases. If the agent crashes, loses its connection or forgets, the clock still runs out. A human can drive it the same way.
 
-Every box is a **lease**: a machine plus an expiry time. Vasty adds clocks, a daily budget, owners and groups on top of Vast's API.
+Every box is a **lease**: a machine plus an expiry time. Vasty adds clocks, owners and groups on top of Vast's API.
 
 - **Expire by default.** `reserve` gives a box 30 minutes. Auto-reserved `run` and `serve` boxes get 2 hours. Keeping a box alive takes an explicit `extend`.
-- **Bounded spend.** `max_price` caps dollars per hour per box. `daily_budget` caps projected spend across the account.
 - **Light.** One Python package, one runtime dependency, no daemon, no database. The lease lives in the instance label on Vast, plus one local cache file.
 - **Agent-first I/O.** JSON on stdout when stdout is a pipe, tables when it is a terminal. `ssh` passes remote output through, and `completion` prints a shell script unless `--json` is passed. Every error carries a stable code, a message and a recovery hint.
 
@@ -115,11 +114,11 @@ Errors are one object:
 }
 ```
 
-Exit codes: 0 success, 1 bad input or lookup, 2 provider or box failure, 3 budget exceeded. Once a job has started, attached `run` exits with the remote command's code, 2 when the clock or a dropped connection kills the job, and 130 on SIGINT. `run --detach` exits 0 as soon as the job starts. `ssh -- COMMAND` passes through ssh's own exit status.
+Exit codes: 0 success, 1 bad input or lookup, 2 provider or box failure. Once a job has started, attached `run` exits with the remote command's code, 2 when the clock or a dropped connection kills the job, and 130 on SIGINT. `run --detach` exits 0 as soon as the job starts. `ssh -- COMMAND` passes through ssh's own exit status.
 
 `status` returns a `warnings` array. Each entry has a code, the lease, a message and `fix`, one runnable `vasty` command. An agent can loop over the warnings and run the fixes. `guard` on each lease is `full` or `partial`, with the missing layer named, so an agent knows how much to trust that box's clock.
 
-Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `expired_with_running_jobs`, `budget_low`, `startup_failed`, `flag_mismatch`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
+Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `expired_with_running_jobs`, `startup_failed`, `flag_mismatch`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
 
 ### Result shapes
 
@@ -138,7 +137,7 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 | `sync` | `lease`, `direction`, `src`, `dest` |
 | `config` | `values`, `{key, value}` or `profiles` |
 
-A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fields null. `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at`, `ttl_remaining_s` and `guard`. `cost_source` and `spend_source` are `billing`, `estimated` or `mixed`.
+A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fields null. `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at`, `ttl_remaining_s` and `guard`.
 
 ### Error codes
 
@@ -162,11 +161,9 @@ A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fie
 | `vllm_missing` | 1 | `serve` finds no `vllm` on the box's PATH |
 | `provider_error` | 2 | a provider call fails |
 | `box_unreachable` | 2 | the box does not answer SSH |
-| `spend_unavailable` | 2 | billing coverage for today cannot be read |
 | `sync_failed` | 2 | rsync fails |
 | `serve_failed` | 2 | the inference server exits before `/v1/models` answers |
 | `port_mapping_missing` | 2 | a required port has no external mapping at the readiness deadline |
-| `budget_exceeded` | 3 | the projection passes `daily_budget` |
 
 A bulk command exits with the highest exit code among its failed entries. Parser errors use the same error object.
 
@@ -216,11 +213,20 @@ Vast has no expiry field on an instance, so Vasty enforces the clock itself with
 
 The clock starts when the container starts, which is when Vast starts charging GPU rent. Storage and bandwidth bill from creation. A box that never reaches SSH is destroyed by the waiting `reserve` or by the next sweep once `created + ttl` passes.
 
-## Budget
+## Spend
 
-`daily_budget` caps projected spend for the whole account on a UTC day. Before `reserve`, `extend`, `run` or `serve` spends, Vasty adds up today's charges, the remaining commitment of every live lease, and the new action. Today's charges are what Vast has billed plus an estimate since the last billing update. Past the cap it refuses with `budget_exceeded` and says how much room is left. At 90% it warns with `budget_low`. Adopting an orphan with `tag` only warns, since the box is already billing.
+Per-box spend is `max_price` times `ttl`: `max_price` filters offers by dollars per hour, and the clock ends the box. Storage and bandwidth bill outside that product. The account bound is the prepaid balance. With no saved card, Vast stops instances at $0.
 
-The check is client-side. The Vast dashboard, a direct `vastai` call, or a second machine with its own config can go past it. Vast has no spend-cap setting. The account-level stop is a prepaid balance with no saved card.
+`status` reports Vast's own figures in `totals`:
+
+- `credit` is the prepaid money left on the account, which Vast draws charges from.
+- `balance` is what the account owes Vast beyond its credit, billed to a saved card.
+- `charges_today` is what Vast has billed since 00:00 UTC.
+- `burn_per_hr` sums `price_per_hr` over live leases and orphans.
+
+For runway, read `credit` over `burn_per_hr`. When the balance or charges read fails, those totals are null and `status` warns with `spend_unavailable`.
+
+A lease's `cost` is the sum of Vast's charge rows for its instance since it started, and `release` reports the same figure. `cost: null` means Vast has posted no row yet. `price_per_hr` times `uptime_s` approximates it.
 
 ## State
 
@@ -258,7 +264,6 @@ owner = "nigel"                 # overridden by VASTY_OWNER or --owner
 ttl = "30m"
 run_ttl = "2h"
 max_price = 0.60
-daily_budget = 10.00
 image = "vastai/base-image:cuda-12.6.3-auto"
 
 [profiles.big]
@@ -284,7 +289,7 @@ A `[models]` entry sets `vram`, `gpu` and `image` for `serve --model NAME` ahead
 Done:
 
 - Every verb above, in `src/vasty/`.
-- 1143 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
+- 1091 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
 - One funded live run on Vast, 2026-10-29. Every phase passed except `serve`. See [docs/live-test-report.md](docs/live-test-report.md).
 
 Not done:
