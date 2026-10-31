@@ -104,6 +104,22 @@ def test_billing_fields_default_when_absent(cache: Cache) -> None:
     )
 
 
+def test_charges_without_today_load_as_absent(cache: Cache) -> None:
+    lease = full_lease()
+    cache.save(CacheData(leases={lease.lease: lease}, cached_at=1793236500))
+    body = json.loads(cache.path.read_text())
+    for key in ("balance", "credit", "balance_at"):
+        del body[key]
+    body["charges"] = {"per_instance": {"999": "1.00"}, "covered_through": 1793236400}
+    body["charges_at"] = 1793236500
+    body["charges_start"] = 1793145600
+    cache.path.write_text(json.dumps(body))
+    data = cache.load()
+    assert not data.rebuilt
+    assert data.leases == {lease.lease: lease}
+    assert (data.charges, data.charges_at, data.charges_start) == (None, None, None)
+
+
 def test_file_shape(cache: Cache) -> None:
     lease = full_lease()
     cache.save(CacheData(leases={lease.lease: lease}, cached_at=5))
