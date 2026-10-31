@@ -87,7 +87,7 @@ def test_auto_reserved_run_warns_idle_box_available(h: Harness) -> None:
     assert code == 0, data
     assert idle(data) == [(
         "l-0000a001",
-        "lease l-0000a001 is idle: RTX 3060, 1x12 GB, 50m left, 1h10m short; extend --to 2h",
+        "lease l-0000a001 is idle: RTX 3060, 1x12 GB, 50m left, 1h10m short; extend --to 7200s",
         "vasty status l-0000a001",
     )]
 
