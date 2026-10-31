@@ -11,7 +11,8 @@ endpoint and the key, so `--host`, `--port` and `--api-key` among them raise
 The box's image supplies vLLM. On the box, `serve` checks for `vllm` on PATH
 and raises `vllm_missing` when it is absent. It then starts `vllm serve` as a
 `serve` job on port 8000 with a fresh `vasty-` key, and polls `/v1/models`
-with that key until it answers 200. With `--bind-local` vLLM listens on
+with that key until it answers 200. The job script exports the key as
+`VLLM_API_KEY`, so the `vllm serve` command line carries no secret. With `--bind-local` vLLM listens on
 127.0.0.1 and the poll runs on the box with curl. Any failure after the
 reserve releases a box this call created.
 """
@@ -63,13 +64,9 @@ def check_extra(extra: list[str]) -> None:
             )
 
 
-def server_argv(model: str, host: str, key: str | None, extra: list[str]) -> list[str]:
-    """Return the `vllm serve` argv; pass `key` None for the displayed form."""
-    argv = ["vllm", "serve", model]
-    if key is not None:
-        argv += ["--api-key", key]
-    argv += ["--host", host, "--port", str(SERVE_PORT)]
-    return argv + extra
+def server_argv(model: str, host: str, extra: list[str]) -> list[str]:
+    """Return the `vllm serve` argv; the key goes in `VLLM_API_KEY`."""
+    return ["vllm", "serve", model, "--host", host, "--port", str(SERVE_PORT), *extra]
 
 
 def probe_command(key: str) -> str:
@@ -145,8 +142,8 @@ def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Pl
 
     key = "vasty-" + ctx.random_hex(32)
     host = "127.0.0.1" if plan.bind_local else "0.0.0.0"
-    command = shlex.join(server_argv(plan.model, host, key, plan.extra))
-    shown = shlex.join(server_argv(plan.model, host, None, plan.extra))
+    shown = shlex.join(server_argv(plan.model, host, plan.extra))
+    command = f"export VLLM_API_KEY={shlex.quote(key)}\n{shown}"
     job = Job(
         id=next_job_id(lease), cmd=shown, started_at=None, exit=None, state="serving",
         kind="serve", port=SERVE_PORT,

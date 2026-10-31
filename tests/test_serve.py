@@ -62,7 +62,10 @@ def test_serve_on_box(harness: Harness, box: int, started: list[tuple[Job, str]]
     assert harness.box.state(box).execs == ["command -v vllm"]
     job, command = started[0]
     assert (job.kind, job.port, job.state) == ("serve", 8000, "serving")
-    assert command == f"vllm serve {QWEN} --api-key {KEY} --host 0.0.0.0 --port 8000"
+    assert command == (
+        f"export VLLM_API_KEY={KEY}\nvllm serve {QWEN} --host 0.0.0.0 --port 8000"
+    )
+    assert "--api-key" not in command
     assert KEY not in job.cmd
     assert job.cmd == f"vllm serve {QWEN} --host 0.0.0.0 --port 8000"
     assert harness.http_calls == ["http://198.51.100.9:40080/v1/models"]
@@ -157,7 +160,7 @@ def test_serve_on_unknown_model_serves_path(
     code, data, _ = run_serve(harness, "--on", "ft", "--model", "./out/checkpoint")
     assert code == 0
     assert data["model"] == "./out/checkpoint"
-    assert started[0][1].startswith("vllm serve ./out/checkpoint ")
+    assert started[0][1].splitlines()[1].startswith("vllm serve ./out/checkpoint ")
 
 
 # Passthrough after `--`.
@@ -173,7 +176,7 @@ def test_serve_passes_flags_after_dashes(
     assert code == 0
     job, command = started[0]
     tail = " --max-model-len 16384 --gpu-memory-utilization=0.85"
-    assert command == f"vllm serve {QWEN} --api-key {KEY} --host 0.0.0.0 --port 8000" + tail
+    assert command == f"export VLLM_API_KEY={KEY}\n{job.cmd}"
     assert job.cmd == f"vllm serve {QWEN} --host 0.0.0.0 --port 8000" + tail
     lease = harness.context().cache.load().leases["l-0000a001"]
     assert lease.jobs[0].cmd == job.cmd
