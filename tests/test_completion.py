@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from fakes import Harness
+
 from vasty.cli import VERBS
 
 SRC = Path(__file__).resolve().parent.parent / "src"
