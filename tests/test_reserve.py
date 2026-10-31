@@ -687,7 +687,7 @@ def test_name_miss_warns_idle_box_available(h: Harness) -> None:
     assert data["reused"] is False
     [warning] = idle(data)
     assert warning["message"] == (
-        "lease l-0000a001 (ft) is idle: RTX 3090, 1x24 GB, 50m left, 10m short; extend --to 3600s"
+        "lease l-0000a001 (ft) is idle: RTX 3090, 1x24 GB, 50m left, 10m short; extend --to 1h"
     )
 
 
@@ -695,7 +695,7 @@ def test_name_miss_extend_to_keeps_seconds(h: Harness) -> None:
     add_lease(h, label={"name": "ft"})
     _, data = run_json(h, "reserve", "--name", "other", "--ttl", "5430s")
     [warning] = idle(data)
-    assert warning["message"].endswith("short; extend --to 5430s")
+    assert warning["message"].endswith("short; extend --to 1h30m30s")
 
 
 def test_four_idle_boxes_yield_three_warnings(h: Harness) -> None:
@@ -706,7 +706,7 @@ def test_four_idle_boxes_yield_three_warnings(h: Harness) -> None:
     assert [(w["lease"], w["message"].split(": ")[1]) for w in idle(data)] == [
         ("l-0000a004", "RTX 3090, 1x24 GB, 1h left"),
         ("l-0000a002", "RTX 3090, 1x24 GB, 40m left"),
-        ("l-0000a003", "RTX 3090, 1x24 GB, 15m left, 15m short; extend --to 1800s"),
+        ("l-0000a003", "RTX 3090, 1x24 GB, 15m left, 15m short; extend --to 30m"),
     ]
 
 

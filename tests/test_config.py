@@ -12,7 +12,6 @@ from fakes import Harness
 from vasty.config import (
     Settings,
     emit_toml,
-    format_duration,
     parse_duration,
     parse_key,
     resolve,
@@ -461,9 +460,8 @@ def test_ssh_key_from_config_expands_home(cfg: Env) -> None:
 
 @pytest.mark.parametrize(("text", "seconds"), [("30m", 1800), ("1h30m", 5400), ("2d", 172800),
                                                ("45s", 45), ("1d2h3m4s", 93784)])
-def test_duration_parse_and_format(text: str, seconds: int) -> None:
+def test_duration_parse(text: str, seconds: int) -> None:
     assert parse_duration(text) == seconds
-    assert format_duration(seconds) == text
 
 
 @pytest.mark.parametrize(

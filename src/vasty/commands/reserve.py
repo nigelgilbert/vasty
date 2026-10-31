@@ -50,7 +50,7 @@ from vasty.state import (
     reuse_candidates,
     ttl_remaining,
 )
-from vasty.timeutil import format_duration, iso
+from vasty.timeutil import format_duration, format_duration_exact, iso
 
 if TYPE_CHECKING:
     from vasty.engine import Snapshot
@@ -235,7 +235,7 @@ def idle_warning(lease: CachedLease, shortfall: int, ttl: int, now: int) -> Warn
     left = format_duration(ttl_remaining(lease.label, now))
     message = f"lease {named} is idle: {lease.gpu or '?'}, {lease.gpus}x{vram} GB, {left} left"
     if shortfall:
-        message += f", {format_duration(shortfall)} short; extend --to {ttl}s"
+        message += f", {format_duration(shortfall)} short; extend --to {format_duration_exact(ttl)}"
     return make_warning("idle_box_available", lease.lease, message)
 
 

@@ -146,18 +146,6 @@ def parse_duration(text: str) -> int | None:
         return None
 
 
-def format_duration(seconds: int) -> str:
-    """Format seconds as `1h30m`, `2d` or `45s`."""
-    if seconds <= 0:
-        return "0s"
-    parts = []
-    for unit, size in timeutil.UNITS.items():
-        count, seconds = divmod(seconds, size)
-        if count:
-            parts.append(f"{count}{unit}")
-    return "".join(parts)
-
-
 def _decimal(value: Any, text: bool) -> Decimal | None:
     if isinstance(value, bool):
         return None
