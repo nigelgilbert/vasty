@@ -610,6 +610,7 @@ def test_probe_reads_job_records(local: LocalBox) -> None:
     live = subprocess.Popen(["sleep", "30"])
     dead = subprocess.Popen(["true"])
     dead.wait()
+    has_proc = Path(f"/proc/{live.pid}").exists()
     try:
         local.write("jobs/j-1/cmd", "python train.py --lr 3e-4")
         local.write("jobs/j-1/started", "100\n")
@@ -632,7 +633,11 @@ def test_probe_reads_job_records(local: LocalBox) -> None:
         live.kill()
         live.wait()
     jobs = {j.id: j for j in result.jobs}
-    if not Path(f"/proc/{live.pid}").exists():
+    if has_proc:
+        # With /proc the probe reads sleep's cmdline, finds no jobs/<id>/ and treats the pid as reused.
+        assert jobs["j-1"].state == "unknown"
+        assert jobs["j-4"].state == "unknown"
+    else:
         assert jobs["j-1"].state == "running"
         assert jobs["j-4"].state == "serving"
     assert jobs["j-1"].cmd == "python train.py --lr 3e-4"
