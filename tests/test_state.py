@@ -177,7 +177,7 @@ def test_unreachable_lease_gets_no_expiring_soon() -> None:
 
 def test_guard_partial() -> None:
     [w] = lease_warnings(lease(guard_missing=["watchdog"], reachable_at=NOW), NOW, WARN)
-    assert (w.code, w.message, w.fix) == ("guard_partial", "watchdog not running", "vasty release l-8b12")
+    assert (w.code, w.message, w.fix) == ("guard_partial", "watchdog not running or without curl", "vasty release l-8b12")
 
 
 def test_guard_partial_names_every_layer() -> None:
@@ -202,7 +202,7 @@ def test_probed_pending_lease_with_missing_layers_warns() -> None:
 def test_label_miss_from_another_machine_counts_as_observed() -> None:
     item = lease("pending", label=label(miss=["watchdog"]), guard_missing=["watchdog"])
     [w] = lease_warnings(item, NOW, WARN)
-    assert (w.code, w.message) == ("guard_partial", "watchdog not running")
+    assert (w.code, w.message) == ("guard_partial", "watchdog not running or without curl")
 
 
 def test_adopted_lease_without_answer_warns() -> None:
@@ -273,6 +273,8 @@ def test_fixes_use_the_lease_id_and_shell_quote_it() -> None:
         ("expiring_with_running_job", "l-1", "vasty extend l-1 --by 30m"),
         ("box_unreachable", "l-1", "vasty release l-1"),
         ("guard_partial", "l-1", "vasty release l-1"),
+        ("clock_skew", "l-1", "vasty release l-1"),
+        ("clock_skew_unknown", "l-1", "vasty release l-1"),
         ("orphan", "i-55120", "vasty tag i-55120 --ttl 30m"),
         ("startup_failed", "l-1", "vasty ssh l-1 -- cat /workspace/.vasty/startup.log"),
         ("expired_with_running_jobs", "l-1", "vasty status l-1"),
@@ -287,6 +289,26 @@ def test_fixes_use_the_lease_id_and_shell_quote_it() -> None:
 )
 def test_fix_table(code: str, target: str | None, fix: str) -> None:
     assert fix_for(code, target) == fix
+
+
+@pytest.mark.parametrize("skew, codes_out", [
+    (0, []), (120, []), (-120, []), (121, ["clock_skew"]), (-301, ["clock_skew"]), (None, []),
+])
+def test_clock_skew_warning_past_threshold(skew: int | None, codes_out: list[str]) -> None:
+    item = lease(reachable_at=NOW, clock_skew=skew)
+    assert codes(lease_warnings(item, NOW, WARN)) == codes_out
+
+
+def test_clock_skew_message_names_the_direction() -> None:
+    [w] = lease_warnings(lease(reachable_at=NOW, clock_skew=-300), NOW, WARN)
+    assert w.message == "box clock 5m behind the provider"
+    [w] = lease_warnings(lease(reachable_at=NOW, clock_skew=300), NOW, WARN)
+    assert w.message == "box clock 5m ahead of the provider"
+
+
+def test_clock_skew_unknown_warning() -> None:
+    [w] = lease_warnings(lease(reachable_at=NOW, clock_skew_unknown=True), NOW, WARN)
+    assert (w.code, w.message) == ("clock_skew_unknown", "the probe read no box time")
 
 
 def test_make_warning() -> None:

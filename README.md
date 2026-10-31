@@ -10,7 +10,7 @@ vasty reserve --gpu 4090 --ttl 30m
 
 That rents a GPU box with a 30-minute clock. When the clock runs out, a watchdog on the box is meant to destroy it, and a sweep on the next `vasty` command catches anything the watchdog missed. `extend` keeps a box. `run`, `serve`, `sync`, `ssh`, `tag`, `status` and `release` do the rest.
 
-**Status: work in progress.** Every verb is implemented and unit-tested against fakes, and one funded live run has confirmed unattended expiry. The default image is unpublished. See [Status](#status) before spending money.
+**Status: work in progress.** Every verb is implemented and unit-tested against fakes, and one funded live run has confirmed unattended expiry. See [Status](#status) before spending money.
 
 ## What it is
 
@@ -31,11 +31,10 @@ git clone https://github.com/nigelgilbert/vasty.git && cd vasty
 uv tool install .                                    # or: uv sync && export PATH=$PWD/.venv/bin:$PATH
 export VAST_API_KEY=...                              # from console.vast.ai
 export VASTY_OWNER=claude-code                         # names the boxes you make; see below
-vasty config set defaults.image vastai/base-image:cuda-12.6.3-auto
 vasty config show
 ```
 
-Vasty's own image is unpublished, so the image line points at a Vast base image. Vasty installs what it needs at boot, which slows the first start. A custom image needs Linux, bash, root and apt-get.
+The default image is `vastai/base-image:cuda-12.6.3-auto`. Vasty installs what it needs at boot, which slows the first start. Any image works given Linux, bash, root and apt-get.
 
 Run one command on a fresh box:
 
@@ -96,7 +95,6 @@ vasty reserve --name ft --gpu A100 --ttl 3h --json
   "lease": "l-7f3a2b1c",
   "name": "ft",
   "state": "running",
-  "guard": "full",
   "gpu": "A100",
   "price_per_hr": 1.80,
   "expires_at": "2026-10-29T20:04:00Z",
@@ -120,9 +118,9 @@ Errors are one object:
 
 Exit codes: 0 success, 1 bad input or lookup, 2 provider or box failure. Once a job has started, attached `run` exits with the remote command's code, 2 when the clock or a dropped connection kills the job, and 130 on SIGINT. `run --detach` exits 0 as soon as the job starts. `ssh -- COMMAND` passes through ssh's own exit status.
 
-`status` returns a `warnings` array. Each entry has a code, the lease, a message and `fix`, one runnable `vasty` command. An agent can loop over the warnings and run the fixes. `guard` on each lease is `full` or `partial`, with the missing layer named, so an agent knows how much to trust that box's clock.
+`status` returns a `warnings` array. Each entry has a code, the lease, a message and `fix`, one runnable `vasty` command. An agent can loop over the warnings and run the fixes. A `guard_partial` warning names the missing layer, so an agent knows how much to trust that box's clock. `status --verbose` lists each layer under `guard_layers`.
 
-Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `expired_with_running_jobs`, `startup_failed`, `flag_mismatch`, `idle_box_available`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
+Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `expired_with_running_jobs`, `startup_failed`, `flag_mismatch`, `idle_box_available`, `clock_skew`, `clock_skew_unknown`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
 
 When `reserve`, or `run` or `serve` without `--on`, creates a box, it warns `idle_box_available` for up to three idle leases that would have fit.
 
@@ -132,19 +130,19 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 
 | Command | Returns |
 |---|---|
-| `reserve` | the lease: `lease`, `name`, `owner`, `group`, `state`, `guard`, `guard_missing`, `reused`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `expires_at`, `ttl_remaining_s`, `ssh`, `rsync_target`, `ssh_port`, `ports` |
+| `reserve` | the lease: `lease`, `name`, `owner`, `group`, `state`, `reused`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `expires_at`, `ttl_remaining_s`, `ssh`, `rsync_target`, `ssh_port`, `ports` |
 | `extend` on one lease | `lease`, `expires_at`, `ttl_remaining_s` |
 | `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending` |
 | bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error` |
-| `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s`, `guard`, `guard_missing` |
-| `status` | `leases`, `totals`, `cached_at`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `guard`, `guard_missing`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`; a single-lease target adds `log_tail` |
+| `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s` |
+| `status` | `leases`, `totals`, `cached_at`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`; a single-lease target adds `log_tail` |
 | attached `run` | `lease`, `job`, `exit`, `duration_s`, `released` |
 | `run --detach` | `lease`, `job`, `log_path`, `expires_at` |
 | `serve` | `lease`, `job`, `url`, `api_key`, `expires_at` |
 | `sync` | `lease`, `direction`, `src`, `dest` |
 | `config` | `values`, `{key, value}` or `profiles` |
 
-A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fields null. `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at`, `ttl_remaining_s` and `guard`.
+A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fields null. `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at` and `ttl_remaining_s`.
 
 `busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. `uptime_s` counts from vasty's first `running` sample and is null before it. `--verbose` shows that sample as `running_at`.
 
@@ -164,7 +162,7 @@ A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fie
 | `lease_pending` | 1 | `extend`, `run --on`, `serve --on`, `sync` or `ssh` on a lease SSH cannot reach yet |
 | `name_conflict` | 1 | a new name matches another active lease of the same owner |
 | `confirmation_required` | 1 | orphan `release` without `--yes` in non-TTY mode |
-| `image_unsupported` | 1 | a custom image lacks bash, root or apt-get |
+| `image_unsupported` | 1 | the image lacks bash, root or apt-get |
 | `startup_too_large` | 1 | the encoded `onstart` exceeds 4048 characters |
 | `vllm_missing` | 1 | `serve` finds no `vllm` on the box's PATH |
 | `provider_error` | 2 | a provider call fails |
@@ -219,10 +217,12 @@ Several boxes that belong together share a `--group`. `status --group exp42` sho
 
 Vast has no expiry field on an instance, so Vasty enforces the clock itself with two layers.
 
-1. **On the box.** `reserve` injects a watchdog through Vast's `onstart` hook. It reads the expiry from `/workspace/.vasty/clock`, sleeps until then, re-reads the file so a late `extend` is honored, and destroys the instance with the per-instance key Vast injects into the container. Cron restarts it if it dies. When the key is absent, the lease reports `guard: partial` and the sweep is the enforcer.
+1. **On the box.** `reserve` injects a watchdog through Vast's `onstart` hook. It reads the expiry from `/workspace/.vasty/clock`, sleeps until then, re-reads the file so a late `extend` is honored, and destroys the instance with the per-instance key Vast injects into the container. Cron restarts it if it dies. At start and hourly it reads its own instance row with that key; a 401 or 403 marks the key missing until a later read passes. A box without `curl` marks the watchdog layer. Either way the lease carries a `guard_partial` warning and the sweep is the enforcer.
 2. **Local sweep.** Every networked `vasty` command lists the account's instances, reads each lease label, and destroys anything past its clock. Whatever it destroys shows up in `swept`.
 
 The clock starts when the container starts, which is when Vast starts charging GPU rent. Storage and bandwidth bill from creation. A box that never reaches SSH is destroyed by the waiting `reserve` or by the next sweep once `created + ttl` passes.
+
+The label holds the expiry in provider time and the clock file holds it in the box's own time. Every write to the clock file carries the provider clock at send, and the box adds its own offset before writing. The probe measures the offset on each visit, copies a fresh box's clock file into the label with the offset removed, and warns `clock_skew` when the box clock sits more than two minutes from the provider. `status --verbose` shows the measured offset as `clock_skew_s`. While `clock_unverified` is set, values cross unchanged.
 
 ## Spend
 
@@ -262,7 +262,7 @@ Any machine with the API key sees the same leases, owners and groups. An instanc
 | `gone` | Vanished with time left on its clock. Kept in history for 24h. |
 | `orphan` | An instance vasty did not create. No clock until `tag` gives it one. |
 
-`status` with no target lists active leases and orphans. History states show when named directly. `guard` is `full` when the watchdog is running, its destroy key is present and the clock file matches the label. Otherwise it is `partial` and `guard_missing` names `watchdog`, `destroy_key` or `clock_file`.
+`status` with no target lists active leases and orphans. History states show when named directly. A lease with the watchdog running, its destroy key present and the clock file matching the label has no `guard_partial` warning. Otherwise the warning names `watchdog`, `destroy_key` or `clock_file`.
 
 ## Configuration
 
@@ -275,7 +275,6 @@ owner = "nigel"                 # overridden by VASTY_OWNER or --owner
 ttl = "30m"
 run_ttl = "2h"
 max_price = 0.60
-image = "vastai/base-image:cuda-12.6.3-auto"
 
 [profiles.train]
 gpu = "A100"
@@ -303,7 +302,6 @@ Done:
 
 Not done:
 
-- The default image `vasty/base:cuda12.4` is unpublished. See the quick start for the workaround.
 - Not on PyPI. Install from the repo.
 
 ## Development

@@ -25,6 +25,8 @@ if TYPE_CHECKING:
     from vasty.engine import Snapshot
 
 GUARD_LAYERS: tuple[str, ...] = ("watchdog", "destroy_key", "clock_file")
+CLOCK_SKEW_WARN_S = 120
+"""Box clock skew past this many seconds raises `clock_skew`."""
 LIVE_JOB_STATES: frozenset[str] = frozenset({"running", "serving"})
 
 _PENDING_STATUSES = frozenset({"created", "loading"})
@@ -32,7 +34,7 @@ _STOPPED_STATUSES = frozenset({"exited", "stopped"})
 _UNREACHABLE_STATUSES = frozenset({"offline", "unknown"})
 
 _LAYER_MESSAGES: dict[str, str] = {
-    "watchdog": "watchdog not running",
+    "watchdog": "watchdog not running or without curl",
     "destroy_key": "destroy key missing",
     "clock_file": "clock file out of sync",
 }
@@ -43,6 +45,8 @@ _FIXES: dict[str, list[str]] = {
     "expiring_with_running_job": ["vasty", "extend", _L, "--by", "30m"],
     "box_unreachable": ["vasty", "release", _L],
     "guard_partial": ["vasty", "release", _L],
+    "clock_skew": ["vasty", "release", _L],
+    "clock_skew_unknown": ["vasty", "release", _L],
     "orphan": ["vasty", "tag", _L, "--ttl", "30m"],
     "startup_failed": ["vasty", "ssh", _L, "--", "cat", "/workspace/.vasty/startup.log"],
     "expired_with_running_jobs": ["vasty", "status", _L],
@@ -221,11 +225,13 @@ def lease_warnings(lease: CachedLease, now: int, warn_before_expiry: int) -> lis
     """Return the per-lease warnings with their fixes.
 
     Codes: `expiring_soon` or `expiring_with_running_job`, `box_unreachable`,
-    `guard_partial`, `startup_failed` on active leases, and
-    `expired_with_running_jobs` on an `expired` lease. `guard_partial` needs
-    observed layers: a probe answered (`reachable_at`), another machine's
-    probe wrote `miss=` to the label, or `tag` adopted the box without a
-    guard.
+    `guard_partial`, `clock_skew`, `clock_skew_unknown`, `startup_failed` on
+    active leases, and `expired_with_running_jobs` on an `expired` lease.
+    `guard_partial` needs observed layers: a probe answered (`reachable_at`),
+    another machine's probe wrote `miss=` to the label, or `tag` adopted the
+    box without a guard. `clock_skew` fires when the last probe measured the
+    box clock more than `CLOCK_SKEW_WARN_S` from the provider clock;
+    `clock_skew_unknown` when the last probe returned no box time.
     """
     target = lease.lease
     jobs = live_jobs(lease)
@@ -255,6 +261,12 @@ def lease_warnings(lease: CachedLease, now: int, warn_before_expiry: int) -> lis
     if level == "partial" and observed:
         message = ", ".join(_LAYER_MESSAGES[layer] for layer in missing)
         out.append(make_warning("guard_partial", target, message))
+    if lease.clock_skew is not None and abs(lease.clock_skew) > CLOCK_SKEW_WARN_S:
+        sign = "ahead of" if lease.clock_skew > 0 else "behind"
+        message = f"box clock {format_duration(abs(lease.clock_skew))} {sign} the provider"
+        out.append(make_warning("clock_skew", target, message))
+    if lease.clock_skew_unknown:
+        out.append(make_warning("clock_skew_unknown", target, "the probe read no box time"))
     if startup_failed(lease):
         if lease.startup_exit is not None:
             message = f"startup exited {lease.startup_exit}"

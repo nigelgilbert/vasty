@@ -24,7 +24,7 @@ from typing import Literal, Protocol, TextIO
 from vasty.errors import VastyError, invalid
 from vasty.ids import job_number
 from vasty.models import Job, JobState, ProbeResult
-from vasty.onstart import LAYERS, ROOT, WORKDIR, adopt_script
+from vasty.onstart import LAYERS, ROOT, WORKDIR, adopt_script, clock_translation
 
 
 class BoxUnreachableError(VastyError):
@@ -50,18 +50,31 @@ class ExecResult:
 
 
 class BoxAccess(Protocol):
-    def probe(self, target: SshTarget, label_expires: int | None, timeout: float = 5.0) -> ProbeResult:
-        """Run the probe. Rewrite the clock file when `label_expires` is set and differs.
+    """SSH access to one box.
+
+    `expires` and `label_expires` are provider time. `provider_now` is the
+    provider clock at send; with it the box moves the value into its own time
+    base before writing the clock file. None writes the value as given.
+    """
+
+    def probe(
+        self,
+        target: SshTarget,
+        label_expires: int | None,
+        provider_now: int | None = None,
+        timeout: float = 5.0,
+    ) -> ProbeResult:
+        """Run the probe. Rewrite the clock file when it is off the label past the tolerance.
 
         Raise `BoxUnreachableError` when SSH does not answer.
         """
         ...
 
-    def write_clock(self, target: SshTarget, expires: int) -> None:
+    def write_clock(self, target: SshTarget, expires: int, provider_now: int | None = None) -> None:
         """Write the clock file by temp file and rename."""
         ...
 
-    def adopt(self, target: SshTarget, expires: int) -> list[str]:
+    def adopt(self, target: SshTarget, expires: int, provider_now: int | None = None) -> list[str]:
         """Write the clock file, copy the container env and start the watchdog.
 
         Return the guard layers still missing.
@@ -163,6 +176,8 @@ _JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SIGNAL = re.compile(r"^(?:[A-Z][A-Z0-9+-]*|[0-9]{1,2})$")
 _RSYNC_VERSION = re.compile(r"version\s+v?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?")
 WATCHDOG_STALE_S = 180
+CLOCK_TOLERANCE_S = 5
+"""How far the clock file may sit from the translated label before the probe rewrites it."""
 JOB_CLAIM_TRIES = 10
 """How many job ids `SshBox.start_job` tries before it reports the id as taken."""
 LOG_LINES = 100
@@ -236,26 +251,35 @@ def _job_lines(root: str, pattern: str) -> str:
     )
 
 
-def probe_script(label_expires: int | None, root: str) -> str:
+def probe_script(label_expires: int | None, root: str, provider_now: int | None = None) -> str:
     """Return the POSIX shell the probe runs on the box.
 
-    It rewrites the clock file when `label_expires` is set and differs, then
-    prints `key=value` lines between `vasty_probe=1` and `vasty_probe=end`.
+    With `label_expires`, the box computes the target clock value `T`:
+    `label_expires + box_now - provider_now`, or `label_expires` when
+    `provider_now` is None. It rewrites the clock file when the file is off
+    `T` by more than `CLOCK_TOLERANCE_S`, then prints `key=value` lines
+    between `vasty_probe=1` and `vasty_probe=end`.
     """
     label = "" if label_expires is None else str(int(label_expires))
+    sent = "" if provider_now is None else str(int(provider_now))
+    tol = CLOCK_TOLERANCE_S
     return (
-        f"R={shlex.quote(root)}; L={label}\n"
+        f"R={shlex.quote(root)}; L={label}; P={sent}\n"
         "echo vasty_probe=1\n"
-        'echo "now=$(date +%s)"\n'
+        'bn=$(date +%s); echo "now=$bn"\n'
         "rc(){ head -c 64 \"$R/clock\" 2>/dev/null | tr -d ' \\n\\r\\t'; }\n"
-        "c=$(rc); rw=none\n"
-        'if [ -n "$L" ] && [ "$c" != "$L" ]; then\n'
-        "  if printf '%s\\n' \"$L\" 2>/dev/null >\"$R/clock.tmp.$$\""
+        "c=$(rc); rw=none; T=$L\n"
+        'if [ -n "$L" ] && [ -n "$P" ]; then case $bn in \'\'|*[!0-9]*) ;; *) T=$((L+bn-P)) ;; esac; fi\n'
+        'off=0\n'
+        'if [ -n "$T" ]; then case $c in \'\'|*[!0-9]*) off=1 ;; '
+        f"*) d=$((c-T)); [ \"$d\" -gt {tol} ] || [ \"$d\" -lt -{tol} ] && off=1 ;; esac; fi\n"
+        'if [ "$off" = 1 ]; then\n'
+        "  if printf '%s\\n' \"$T\" 2>/dev/null >\"$R/clock.tmp.$$\""
         ' && mv -f "$R/clock.tmp.$$" "$R/clock" 2>/dev/null; then rw=ok\n'
         '  else rw=failed; rm -f "$R/clock.tmp.$$" 2>/dev/null; fi\n'
         "  c=$(rc)\n"
         "fi\n"
-        'echo "clock=$c"; echo "rewrite=$rw"\n'
+        'echo "clock=$c"; echo "target=$T"; echo "rewrite=$rw"\n'
         '[ -e "$R/guard" ] && echo guard_file=1\n'
         "echo \"guard=$(cat \"$R/guard\" 2>/dev/null | tr '\\n\\r\\t' '   ')\"\n"
         '[ -e "$R/startup.started" ] && echo startup_started=1\n'
@@ -305,12 +329,16 @@ def _parse_job(line: str, root: str) -> Job | None:
 def parse_probe(stdout: str, label_expires: int | None, root: str) -> ProbeResult:
     """Parse probe output into a `ProbeResult`.
 
-    `watchdog` is missing when `alive` is older than 180s, or absent once
-    `onstart` has written the guard file or started the startup hook.
-    `destroy_key` is missing when the env file lacks the container key.
-    `clock_file` is missing when the clock file is unreadable or still differs
-    from the label. `adopted` is set when the adoption script has run on the
-    box. Raise `BoxUnreachableError` on a partial answer.
+    `watchdog` is missing when `alive` is older than 180s, absent once the
+    watchdog has written the guard file or `onstart` has started the startup
+    hook, or listed in the guard file, which the watchdog publishes each loop
+    from its curl check. `destroy_key` is missing when the env file lacks the
+    container key or the guard file lists it, which the watchdog's key check
+    maintains.
+    `clock_file` is missing when the clock file is unreadable or still off the
+    script's target by more than `CLOCK_TOLERANCE_S`. `adopted` is set when
+    the adoption script has run on the box. Raise `BoxUnreachableError` on a
+    partial answer.
     """
     lines = stdout.splitlines()
     if "vasty_probe=1" not in lines or "vasty_probe=end" not in lines:
@@ -329,6 +357,7 @@ def parse_probe(stdout: str, label_expires: int | None, root: str) -> ProbeResul
             values[key] = value
     now = _int(values.get("now"))
     clock = _int(values.get("clock"))
+    target = _int(values.get("target"))
     alive = _int(values.get("alive"))
     startup_started = values.get("startup_started") == "1"
     guard_file = values.get("guard_file") == "1"
@@ -340,14 +369,11 @@ def parse_probe(stdout: str, label_expires: int | None, root: str) -> ProbeResul
         watchdog_down = onstart_done
     else:
         watchdog_down = now is not None and now - alive > WATCHDOG_STALE_S
-    if watchdog_down:
+    if watchdog_down or "watchdog" in file_layers:
         missing.append("watchdog")
-    if onstart_done:
-        if values.get("key") != "1":
-            missing.append("destroy_key")
-    elif "destroy_key" in file_layers:
+    if (onstart_done and values.get("key") != "1") or "destroy_key" in file_layers:
         missing.append("destroy_key")
-    if clock is None or (label_expires is not None and clock != label_expires):
+    if clock is None or (target is not None and abs(clock - target) > CLOCK_TOLERANCE_S):
         missing.append("clock_file")
     for layer in file_layers:
         if layer not in ("watchdog", "destroy_key", "clock_file") and layer not in missing:
@@ -364,6 +390,7 @@ def parse_probe(stdout: str, label_expires: int | None, root: str) -> ProbeResul
         unsupported=values.get("unsupported", "").split(),
         guard_file=guard_file,
         adopted=values.get("adopted") == "1",
+        box_now=now,
     )
 
 
@@ -478,28 +505,35 @@ class SshBox:
 
     # BoxAccess.
 
-    def probe(self, target: SshTarget, label_expires: int | None, timeout: float = 5.0) -> ProbeResult:
-        script = probe_script(label_expires, self.root)
+    def probe(
+        self,
+        target: SshTarget,
+        label_expires: int | None,
+        provider_now: int | None = None,
+        timeout: float = 5.0,
+    ) -> ProbeResult:
+        script = probe_script(label_expires, self.root, provider_now)
         result = self._ssh(
             target, "sh -s", input=script, timeout=timeout, connect_timeout=max(1, int(timeout))
         )
         return parse_probe(result.stdout, label_expires, self.root)
 
-    def write_clock(self, target: SshTarget, expires: int) -> None:
-        n = int(expires)
+    def write_clock(self, target: SshTarget, expires: int, provider_now: int | None = None) -> None:
         script = (
             f"R={shlex.quote(self.root)}\n"
-            f"mkdir -p \"$R\" && printf '%s\\n' {n} >\"$R/clock.tmp.$$\""
+            + clock_translation(expires, provider_now)
+            + "mkdir -p \"$R\" && printf '%s\\n' \"$E\" >\"$R/clock.tmp.$$\""
             ' && mv -f "$R/clock.tmp.$$" "$R/clock"'
-            f' && [ "$(cat "$R/clock")" = {n} ] && echo vasty_clock=ok\n'
+            ' && [ "$(cat "$R/clock")" = "$E" ] && echo vasty_clock=ok\n'
         )
         result = self._ssh(target, "sh -s", input=script, timeout=15.0)
         if "vasty_clock=ok" not in result.stdout.split():
             raise BoxUnreachableError(f"Could not write the clock file. {result.stderr.strip()}")
 
-    def adopt(self, target: SshTarget, expires: int) -> list[str]:
+    def adopt(self, target: SshTarget, expires: int, provider_now: int | None = None) -> list[str]:
         script = adopt_script(
-            expires, root=self.root, workdir=self.workdir, services=self.services
+            expires, provider_now=provider_now, root=self.root, workdir=self.workdir,
+            services=self.services,
         )
         result = self._script(target, script, timeout=60.0)
         for line in result.stdout.splitlines():

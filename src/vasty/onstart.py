@@ -2,15 +2,17 @@
 
 `build_onstart` returns the shell command Vast runs when the container starts.
 It decodes a gzip and base64 payload and pipes it to bash. The payload writes
-the clock file, the env file and the guard file under `/workspace/.vasty`,
-starts the watchdog under cron and `nohup`, then runs the user's startup
-script once through a wrapper that writes `startup.started`, `startup.exit`
-and `startup.log`.
+the clock file and the env file under `/workspace/.vasty`, starts the
+watchdog under cron and `nohup`, then runs the user's startup script once
+through a wrapper that writes `startup.started`, `startup.exit` and
+`startup.log`. The watchdog alone writes the guard file, so the payload's own
+view of the layers in `$g` stays local; the adopt script prints it as
+`missing=` for `tag`.
 
-The default image carries the watchdog at `IMAGE_WATCHDOG`. With a custom
-image the payload also carries the watchdog and an essentials installer. A
-custom image that lacks root or needs packages without apt-get gets an
-`unsupported` file listing what it lacks; a missing bash writes `bash` there.
+The payload carries the watchdog and an essentials installer, so any image
+with Linux, bash, root and apt-get works. An image that lacks root or needs
+packages without apt-get gets an `unsupported` file listing what it lacks; a
+missing bash writes `bash` there.
 The probe reports that file as `ProbeResult.unsupported`, and callers map a
 non-empty list to `image_unsupported`.
 
@@ -30,7 +32,6 @@ from vasty.errors import VastyError
 ONSTART_LIMIT = 4048
 ROOT = "/workspace/.vasty"
 WORKDIR = "/workspace"
-IMAGE_WATCHDOG = "/opt/vasty/watchdog.sh"
 PROC_ENVIRON = "/proc/1/environ"
 STARTUP_INTERRUPTED = -1
 """The `startup.exit` value for a hook cut off by a container restart."""
@@ -157,7 +158,22 @@ def _watchdog_part(services: bool, alive_wait: float, keep_running: bool = False
     return out
 
 
-_GUARD_WRITE = "printf '%s\\n' $g>\"$R/guard.tmp\";mv -f \"$R/guard.tmp\" \"$R/guard\"\n"
+_CURL_CHECK = 'command -v curl>/dev/null||case "$g" in *watchdog*);;*)g="$g watchdog";;esac\n'
+"""Add the watchdog layer to `$g` when the box has no curl, since the destroy call needs it."""
+
+
+def clock_translation(expires: int, provider_now: int | None) -> str:
+    """Return shell that sets `E` to `expires` moved into the box's time base.
+
+    With `provider_now`, `E` is `expires + box_now - provider_now`. Without
+    it, or when `date` prints nothing numeric, `E` is `expires`.
+    """
+    if provider_now is None:
+        return f"E={int(expires)}\n"
+    return (
+        f"E={int(expires)};bn=$(date +%s)\n"
+        f'case $bn in \'\'|*[!0-9]*);;*)E=$((E+bn-{int(provider_now)}));;esac\n'
+    )
 
 
 def _startup_part(startup: str | None) -> str:
@@ -184,11 +200,9 @@ def _startup_part(startup: str | None) -> str:
 def build_payload(
     ttl: int,
     startup: str | None,
-    custom_image: bool,
     *,
     root: str = ROOT,
     workdir: str = WORKDIR,
-    watchdog_path: str | None = None,
     services: bool = True,
     apt: str = "apt-get",
     essentials: tuple[tuple[str, str], ...] = ESSENTIALS,
@@ -198,38 +212,38 @@ def build_payload(
     """Return the bash script that `onstart` decodes and runs.
 
     The clock file gets `now + ttl` only when it is absent or empty, so a
-    container restart keeps an extended value. Missing guard layers go to the
-    guard file one per line. The whole script sits in one brace group so bash
-    parses it before any command reads stdin.
+    container restart keeps an extended value. The whole script sits in one
+    brace group so bash parses it before any command reads stdin.
     """
     if ttl <= 0:
         raise ValueError("ttl must be positive")
-    if watchdog_path is None:
-        watchdog_path = f"{root}/watchdog.sh" if custom_image else IMAGE_WATCHDOG
-    body = _head(root, workdir, watchdog_path)
+    body = _head(root, workdir, f"{root}/watchdog.sh")
     body += (
         f'[ -s "$R/clock" ]||{{ echo $(($(date +%s)+{int(ttl)})) >"$R/clock.tmp"'
         '&&mv -f "$R/clock.tmp" "$R/clock";}\n'
     )
     body += _env_part(proc_environ)
-    if custom_image:
-        body += _installer(apt, essentials)
-        body += _heredoc('"$WD.tmp"', _compact(watchdog_script()), "VASTY_WATCHDOG_EOF")
-        body += 'mv -f "$WD.tmp" "$WD"\n'
+    body += _installer(apt, essentials)
+    body += _heredoc('"$WD.tmp"', _compact(watchdog_script()), "VASTY_WATCHDOG_EOF")
+    body += 'mv -f "$WD.tmp" "$WD"\n'
     body += _watchdog_part(services, alive_wait)
-    body += _GUARD_WRITE
+    body += _CURL_CHECK
     body += _startup_part(startup)
     return "{\n" + body + "} </dev/null\n"
 
 
-def encode_payload(payload: str, custom_image: bool, root: str = ROOT) -> str:
-    """Wrap a payload in the `onstart` command that decodes and runs it."""
+def encode_payload(payload: str, root: str = ROOT) -> str:
+    """Wrap a payload in the `onstart` command that decodes and runs it.
+
+    The command checks for bash first and writes `bash` to `unsupported` when
+    the image lacks it.
+    """
     data = base64.b64encode(gzip.compress(payload.encode("utf-8"), compresslevel=9, mtime=0))
-    cmd = f"echo {data.decode('ascii')}|base64 -d|gunzip|bash"
-    if custom_image:
-        r = shlex.quote(root)
-        cmd = f"command -v bash >/dev/null||{{ mkdir -p {r};echo bash>{r}/unsupported;exit 1;}};" + cmd
-    return cmd
+    r = shlex.quote(root)
+    return (
+        f"command -v bash >/dev/null||{{ mkdir -p {r};echo bash>{r}/unsupported;exit 1;}};"
+        f"echo {data.decode('ascii')}|base64 -d|gunzip|bash"
+    )
 
 
 def decode_onstart(command: str) -> str:
@@ -239,20 +253,20 @@ def decode_onstart(command: str) -> str:
     return gzip.decompress(base64.b64decode(command[start:end])).decode("utf-8")
 
 
-def build_onstart(ttl: int, startup: str | None, custom_image: bool) -> str:
+def build_onstart(ttl: int, startup: str | None) -> str:
     """Build the encoded `onstart` command.
 
-    Include the clock-file write, the env file, the startup wrapper and the
-    user's script, compressed with gzip and base64. With a custom image, also
-    include the watchdog and the essentials installer. Raise
-    `startup_too_large` when the result exceeds 4048 characters.
+    Include the clock-file write, the env file, the essentials installer, the
+    watchdog, the startup wrapper and the user's script, compressed with gzip
+    and base64. Raise `startup_too_large` when the result exceeds 4048
+    characters.
     """
-    cmd = encode_payload(build_payload(ttl, startup, custom_image), custom_image)
+    cmd = encode_payload(build_payload(ttl, startup))
     if len(cmd) > ONSTART_LIMIT:
         raise VastyError(
             "startup_too_large",
             f"The encoded onstart is {len(cmd)} characters; Vast allows {ONSTART_LIMIT}.",
-            "Move setup steps into a script you fetch from the box, or use the default image.",
+            "Move setup steps into a script the hook fetches onto the box.",
             details={"size": len(cmd), "limit": ONSTART_LIMIT},
         )
     return cmd
@@ -261,6 +275,7 @@ def build_onstart(ttl: int, startup: str | None, custom_image: bool) -> str:
 def adopt_script(
     expires: int,
     *,
+    provider_now: int | None = None,
     root: str = ROOT,
     workdir: str = WORKDIR,
     services: bool = True,
@@ -273,19 +288,23 @@ def adopt_script(
     env from `/proc/1/environ`, installs the watchdog at
     `/workspace/.vasty/watchdog.sh`, starts it under cron and `nohup`, and marks
     startup done. It prints `missing=` followed by the layers still missing.
+
+    `expires` is provider time. With `provider_now`, the box writes
+    `expires + box_now - provider_now` so the clock file lands in its own
+    time base. Without it the box writes `expires` as given.
     """
     body = _head(root, workdir, f"{root}/watchdog.sh")
     body += ': >"$R/adopted"\n'
+    body += clock_translation(expires, provider_now)
     body += (
-        f'echo {int(expires)} >"$R/clock.tmp"&&mv -f "$R/clock.tmp" "$R/clock"\n'
-        f'[ "$(cat "$R/clock" 2>/dev/null)" = {int(expires)} ]||g="$g clock_file"\n'
+        'echo $E >"$R/clock.tmp"&&mv -f "$R/clock.tmp" "$R/clock"\n'
+        '[ "$(cat "$R/clock" 2>/dev/null)" = "$E" ]||g="$g clock_file"\n'
     )
     body += _env_part(proc_environ)
     body += _heredoc('"$WD.tmp"', watchdog_script(), "VASTY_WATCHDOG_EOF")
     body += 'mv -f "$WD.tmp" "$WD"\n'
     body += _watchdog_part(services, alive_wait, keep_running=True)
-    body += 'command -v curl>/dev/null||case "$g" in *watchdog*);;*)g="$g watchdog";;esac\n'
-    body += _GUARD_WRITE
+    body += _CURL_CHECK
     body += '[ -e "$R/startup.started" ]||date +%s>"$R/startup.started"\n'
     body += '[ -e "$R/startup.exit" ]||echo 0 >"$R/startup.exit"\n'
     body += 'echo "missing=$g"\n'

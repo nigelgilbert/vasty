@@ -19,7 +19,7 @@ Open questions and where each is answered:
 | Container key can read its own instance row | 1 | curl `GET /instances/ID/` with the key | HTTP status |
 | `ports` absent until running | 1 | `reserve --no-wait`, poll `vastai show instances --raw` every 10s | first sample with `ports`, or "transition not observed" |
 | `/charges` clips to the day and its lag | 1, 3 | `vasty status` beside the balance drop | `spent_today` vs balance drop |
-| Container key `DELETE` destroys a running box | 2a | watchdog runs unattended | box gone or not |
+| Container key `DELETE` destroys a running box | 2a, standing canary | watchdog runs unattended | box gone or not |
 | Container key `DELETE` while `loading` | deferred | | |
 | Label length at create, 404 as unauthorized, `on-demand` spelling, `schedule_job` | deferred | | |
 
@@ -27,11 +27,11 @@ Each phase lists its commands, the pass check, the spend cap, and the cleanup. T
 
 ## 2. Facts that shape the run
 
-- The default image `vasty/base:cuda12.4` is not published. Docker Hub has no `vasty` namespace. Every live box except `sv` in phase 5 uses `vastai/base-image:cuda-12.6.3-auto` through `defaults.image` in the test config. This exercises the custom-image path in `onstart.py`: the essentials installer and the watchdog carried in `onstart`. The published-image path stays untested until the image exists.
+- Every live box except `sv` in phase 5 uses the default image `vastai/base-image:cuda-12.6.3-auto`. `onstart` carries the essentials installer and the watchdog on every image.
 - vasty takes the most reliable offer under `max_price` (the offer sort: reliability, bandwidth, price). The test config pins `gpu = "3060"` and a `max_price` read from the live pool, so the rate is known before the first create. A snapshot of verified on-demand offers on 2026-10-29 (unauthenticated `POST /bundles/`, cheapest `dph_total`): RTX 3060 $0.056 with 27 offers, RTX A2000 $0.052, GTX 1080 Ti $0.062, RTX 2080 Ti $0.084, RTX 3070 $0.082, RTX 3090 $0.156, RTX 4090 $0.342. `dph_total` carries the disk charge at a median $0.20/GB/month, so 16 GB adds about $0.005/hr.
 - Vast bills no GPU time while an instance is `loading`. Storage and bandwidth bill in every state. The `cuda-12.6.3-auto` tag is 6 GB compressed and is often cached on hosts; `vastai/base-image:cuda-12.9-mini-py312` is 2.5 GB when a pull is slow. `vllm/vllm-openai:v0.32.0` is 9.2 GB compressed.
 - `vastai/base-image` ships cron, rsync, curl and python 3.12. Vast's runtime injects sshd in SSH launch mode. tmux is absent, so the essentials installer in `onstart` puts it there on every box. Boot is 1 to 5 minutes plus the pull.
-- `onstart` writes `startup.started` last, after the installer, the watchdog and `/etc/cron.d/vasty`. A probe that lands earlier can report `running` with `guard: full` before the watchdog exists. Every phase that depends on the guard or on tmux checks the box first (section 4, "box ready check").
+- `onstart` writes `startup.started` last, after the installer, the watchdog and `/etc/cron.d/vasty`. A probe that lands earlier can report `running` with no `guard_partial` warning before the watchdog exists. Every phase that depends on the guard or on tmux checks the box first (section 4, "box ready check").
 - Vast injects `CONTAINER_ID` and `CONTAINER_API_KEY` into every instance. The create response names the key as restricted to start, stop and destroy of that instance. The raw `DELETE` the watchdog sends is untested until phase 2a.
 - vasty creates `ssh_proxy` on an offer without direct ports and then requires no port mapping, so a proxy box has no 8000 or 8080 mapping. Search does not filter on `direct_port_count`.
 - `vasty status` runs the sweep. `vasty status --cached` reads `leases.json` and shows a local countdown only. Watching a box leave means `vastai show instances --raw`.
@@ -122,7 +122,7 @@ Pass:
 - Once `running`, `status p1` returns `ports` with 22, 8000 and 8080 mapped. A proxy box (no `direct_port_count`) returns `{}` for ports; record it as an offer note.
 - `expires_at` as epoch seconds equals the clock file.
 - The instance label on Vast parses as `vasty:v1;lease=X;name=p1;owner=live-test;created=N;ttl=900;expires=M`.
-- The JSON `guard` is `full`. If `partial`, record `guard_missing` and whether `CONTAINER_API_KEY` is set.
+- No `guard_partial` warning. If one appears, record its message and whether `CONTAINER_API_KEY` is set.
 - The curl line prints an HTTP status. Record it as the answer to "the container key reads its own row".
 - `status` reports `cost_source` in billing, mixed or estimated, and a numeric `cost`. Record `cost`, `uptime_s` and `totals.spent_today` from both calls beside the balance drop.
 - `release` returns `uptime_s`, `cost`, `jobs: []`, and `cost` is within $0.02 of `price_per_hr` × `uptime_s` / 3600.
@@ -130,7 +130,7 @@ Pass:
 
 ### Phase 2: the clock. Cap $1.00.
 
-2a. Watchdog alone.
+2a. Watchdog alone. This is the standing DELETE canary: every later live run repeats it as its first spend, since the watchdog's hourly `GET` of its own row proves the key reads but says nothing about delete scope.
 
 ```
 vasty reserve --name wd --ttl 8m
@@ -223,7 +223,7 @@ vasty status i-ID --verbose
 vastai show instances --raw            # every 60s past expires_at
 ```
 
-Pass: the orphan appears with `state: orphan` and the `vasty tag` fix. `tag` returns `results[0].guard: full`. If `partial`, record it and run `vasty status i-ID` once to retry the adoption. The watchdog destroys the box within 2 minutes of the clock. If the box is still listed at `expires_at` + 3m, run `vasty release i-ID --yes` and fail the check.
+Pass: the orphan appears with `state: orphan` and the `vasty tag` fix. `tag` returns no `guard_partial` warning. If it does, record it and run `vasty status i-ID` once to retry the adoption. The watchdog destroys the box within 2 minutes of the clock. If the box is still listed at `expires_at` + 3m, run `vasty release i-ID --yes` and fail the check.
 
 ```
 vasty reserve --name g0 --group grp --ttl 15m
