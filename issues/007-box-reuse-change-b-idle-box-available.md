@@ -2,7 +2,7 @@
 
 **Type**: AFK
 
-**Status:** 🔲 Not started
+**Status:** ✅ Done in 0cce9ab, f70b804 and a94bfbf
 
 ## Parent
 
@@ -20,14 +20,14 @@
 
 ## Acceptance criteria
 
-- [ ] `normalize_instance` reads `cuda_max_good` from the row and leaves it None when absent.
-- [ ] `hardware_mismatch` has a test per clause: gpu, vram, gpus, image, price, cuda with a floor, cuda unknown with a floor, cuda unknown without a floor, ports.
-- [ ] `flag_mismatch` tests pass unchanged after it calls `hardware_mismatch`.
-- [ ] `reuse_candidates` excludes a busy lease, a lease of another owner, a `pending` lease, a lease with `destroy_pending`, a lease with `startup_exit` 1 and a lease with zero `ttl_remaining`.
-- [ ] Four idle candidates yield three warnings, tier one before tier two, most time left first.
-- [ ] `reserve`, auto-reserve `run` and auto-reserve `serve` on the fake provider each return `idle_box_available` with `fix` equal to `vasty status l-x` when an idle compatible lease exists.
-- [ ] `reserve --name X` on an existing lease returns `reused: true` and no `idle_box_available`.
-- [ ] `uv run pytest` and `uv run mypy` pass.
+- [x] `normalize_instance` reads `cuda_max_good` from the row and leaves it None when absent.
+- [x] `hardware_mismatch` has a test per clause: gpu, vram, gpus, image, price, cuda with a floor, cuda unknown with a floor, cuda unknown without a floor, ports.
+- [x] `flag_mismatch` tests pass unchanged after it calls `hardware_mismatch`.
+- [x] `reuse_candidates` excludes a busy lease, a lease of another owner, a `pending` lease, a lease with `destroy_pending`, a lease with `startup_exit` 1 and a lease with zero `ttl_remaining`.
+- [x] Four idle candidates yield three warnings, tier one before tier two, most time left first.
+- [x] `reserve`, auto-reserve `run` and auto-reserve `serve` on the fake provider each return `idle_box_available` with `fix` equal to `vasty status l-x` when an idle compatible lease exists.
+- [x] `reserve --name X` on an existing lease returns `reused: true` and no `idle_box_available`.
+- [x] `uv run pytest` and `uv run mypy` pass.
 
 ## Blocked by
 
