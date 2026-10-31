@@ -145,13 +145,13 @@ def test_status_unreachable_jobs_unknown(account: Harness) -> None:
 def test_status_spend_unavailable(
     harness: Harness, failing: str, nulls: list[str], kept: list[str]
 ) -> None:
-    add_lease(harness)
-    harness.provider.billed = {1: Decimal("1.00")}
+    row = add_lease(harness)
+    harness.provider.billed = {row.id: Decimal("1.00")}
     harness.provider.fail[failing] = VastyError("provider_error", "down", "Run vasty status.")
     data = status(harness)
     assert all(data["totals"][key] is None for key in nulls)
     assert all(data["totals"][key] is not None for key in kept)
-    assert data["leases"][0]["cost"] is None
+    assert data["leases"][0]["cost"] == (None if failing == "charges" else 1.0)
     assert ("spend_unavailable", None) in codes(data)
 
 
