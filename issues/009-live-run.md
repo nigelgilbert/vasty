@@ -4,10 +4,6 @@
 
 **Status:** 🔲 Not started
 
-## Parent
-
-`docs/followups-plan.md`, step 4.
-
 ## What to build
 
 Run the serve path and the new fields against Vast, with the cap Nigel sets. Cover:
@@ -22,7 +18,7 @@ Run the serve path and the new fields against Vast, with the cap Nigel sets. Cov
 
 Record the run in `docs/live-test-report.md` with the commands, the JSON returned and the ledger lines, in the style of the earlier phases. Fill in the README context number from the result.
 
-Then delete `docs/filter-offers-on-host-cuda.md`, `docs/uptime-counts-the-image-pull.md`, `docs/replace-daily-budget-with-vast-pass-through.md`, `docs/followups-plan.md` and the issue files this PR closes, including this one. The decision docs and the live test docs stay.
+Then delete this issue.
 
 ## Acceptance criteria
 
@@ -30,16 +26,6 @@ Then delete `docs/filter-offers-on-host-cuda.md`, `docs/uptime-counts-the-image-
 - [ ] `docs/live-test-report.md` has a section for this run covering the seven items above, each marked PASS or FAIL with the JSON returned.
 - [ ] The README serve section states the context served on the 24 GB host, taken from the run.
 - [ ] Every box the run created shows as `released` or `expired` in `vasty status --all --everyone` at the end, and the total spend is under the cap.
-- [ ] `ls docs/filter-offers-on-host-cuda.md docs/uptime-counts-the-image-pull.md docs/replace-daily-budget-with-vast-pass-through.md docs/followups-plan.md` reports every file missing, and `ls issues/` is empty.
+- [ ] `ls issues/` is empty.
 - [ ] `uv run pytest` and `uv run mypy` pass.
 
-## Blocked by
-
-- #001
-- #002
-- #003
-- #004
-- #005
-- #006
-- #007
-- #008
