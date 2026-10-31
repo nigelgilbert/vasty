@@ -17,6 +17,7 @@ Run the serve path and the new fields against Vast, with the cap Nigel sets. Cov
 - `uptime_s` against the balance ledger, comparing the first `running` sample with the GPU hours Vast bills;
 - per-lease `cost` going from null to billed within the first minutes;
 - `idle_box_available` on a second `reserve` while the first box sits idle;
+- `idle_box_available` on a second `reserve` while an `ssh_proxy` box sits idle, to see whether Vast fills the port mapping on proxy boxes; an empty mapping fails the ports check and keeps the box out of the candidates;
 - two failure paths, driven by an agent reading only the error objects: `serve --on` a box reserved with the vLLM image and no `cuda` floor that landed on a 12.x host, and a bare `serve --model X` with no profile. Record whether the agent recovers from `serve_failed` with its log tail and from `vllm_missing` with its hint. A miss on either is the evidence for `cuda_too_low` or a builtin `vllm` profile, both deferred.
 
 Record the run in `docs/live-test-report.md` with the commands, the JSON returned and the ledger lines, in the style of the earlier phases. Fill in the README context number from the result.
@@ -26,7 +27,7 @@ Then delete `docs/filter-offers-on-host-cuda.md`, `docs/uptime-counts-the-image-
 ## Acceptance criteria
 
 - [ ] Nigel's go and the cap are recorded at the top of the new report section before the first `reserve`.
-- [ ] `docs/live-test-report.md` has a section for this run covering the six items above, each marked PASS or FAIL with the JSON returned.
+- [ ] `docs/live-test-report.md` has a section for this run covering the seven items above, each marked PASS or FAIL with the JSON returned.
 - [ ] The README serve section states the context served on the 24 GB host, taken from the run.
 - [ ] Every box the run created shows as `released` or `expired` in `vasty status --all --everyone` at the end, and the total spend is under the cap.
 - [ ] `ls docs/filter-offers-on-host-cuda.md docs/uptime-counts-the-image-pull.md docs/replace-daily-budget-with-vast-pass-through.md docs/followups-plan.md` reports every file missing, and `ls issues/` is empty.

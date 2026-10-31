@@ -424,10 +424,10 @@ def test_reuse_candidates_exclude(kw: dict[str, Any]) -> None:
     assert reuse_candidates(snap, settings(gpu="3060"), 1800, NOW, None) == []
 
 
-def test_reuse_candidates_pass_ports() -> None:
-    snap = snapshot(box(ports={22: 40022}))
-    assert reuse_candidates(snap, settings(), 1800, NOW, [8000]) == []
-    assert len(reuse_candidates(snap, settings(), 1800, NOW, None)) == 1
+def test_reuse_candidates_require_every_requested_port() -> None:
+    snap = snapshot(box(ports={22: 40022, 8000: 48000}))
+    assert reuse_candidates(snap, settings(), 1800, NOW, [22, 8000, 8080]) == []
+    assert len(reuse_candidates(snap, settings(), 1800, NOW, [22, 8000])) == 1
 
 
 def test_reuse_candidates_tier_one_first_and_cap_at_three() -> None:

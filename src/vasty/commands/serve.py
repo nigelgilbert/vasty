@@ -110,9 +110,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         from vasty.commands import reserve
         from vasty.commands.run import auto_ttl
 
-        reserved = reserve.reserve_lease(
-            ctx, args, snap, ttl=auto_ttl(ctx), wait=True, reuse_ports=[SERVE_PORT]
-        )
+        reserved = reserve.reserve_lease(ctx, args, snap, ttl=auto_ttl(ctx), wait=True)
         lease = reserved.lease
         warnings = list(reserved.result.warnings)
         swept = merge_swept(swept, reserved.result.swept)

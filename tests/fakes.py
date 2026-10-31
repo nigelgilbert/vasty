@@ -487,7 +487,6 @@ class FakeReserve:
 
     def __call__(
         self, ctx: Context, args: Any, snap: Any, *, ttl: int, wait: bool = True,
-        reuse_ports: list[int] | None = None,
     ) -> Any:
         from vasty import engine
         from vasty.commands.reserve import Reserved

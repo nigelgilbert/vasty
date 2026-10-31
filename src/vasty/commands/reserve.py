@@ -79,7 +79,6 @@ def reserve_lease(
     *,
     ttl: int,
     wait: bool,
-    reuse_ports: list[int] | None = None,
 ) -> Reserved:
     """Reserve a box from the creation flags in `args` and `ctx.settings`.
 
@@ -88,8 +87,8 @@ def reserve_lease(
     `VastyError` on failure; a box this call created and then gave up on is
     destroyed before the error propagates.
 
-    A creation adds one `idle_box_available` warning per reuse candidate.
-    `reuse_ports` lists the ports a candidate has mapped.
+    A creation adds one `idle_box_available` warning per reuse candidate. A
+    candidate maps every requested port.
     """
     settings = ctx.settings
     name = getattr(args, "name", None)
@@ -112,7 +111,7 @@ def reserve_lease(
             if mismatch is not None:
                 warnings.append(mismatch)
         else:
-            for idle, shortfall in reuse_candidates(snap, settings, ttl, snap.now, reuse_ports):
+            for idle, shortfall in reuse_candidates(snap, settings, ttl, snap.now, ports):
                 warnings.append(idle_warning(idle, shortfall, ttl, snap.now))
             custom = settings.image != DEFAULT_IMAGE
             onstart_cmd = onstart.build_onstart(ttl, settings.startup, custom)

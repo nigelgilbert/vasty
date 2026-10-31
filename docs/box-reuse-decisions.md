@@ -30,7 +30,7 @@ A candidate is a lease in the snapshot that meets all of:
 - `label.owner` equals `settings.owner`
 - state `running`, `reachable_at` set, `destroy_pending` false, `guard` full or partial with `startup_exit` 0
 - `busy` false
-- hardware compatible with the resolved settings, whatever their source: `gpu` name match, `vram_gb` at or above `vram`, `gpus` equal, `image` equal when the lease records one, `price_per_hr` at or under `max_price`, the instance row's `cuda_max_good` at or above the resolved `cuda` when one is set, unknown counting as a mismatch, requested `ports` present in the mapping when `serve` is the caller
+- hardware compatible with the resolved settings, whatever their source: `gpu` name match, `vram_gb` at or above `vram`, `gpus` equal, `image` equal when the lease records one, `price_per_hr` at or under `max_price`, the instance row's `cuda_max_good` at or above the resolved `cuda` when one is set, unknown counting as a mismatch, requested `ports` present in the mapping
 - `ttl_remaining` above zero
 
 Candidates sort into two tiers. Tier one has `ttl_remaining` at or above the requested `ttl`. Tier two is shorter and the message names the shortfall and `extend --to`. At most three warnings, tier one first, most time left first.
