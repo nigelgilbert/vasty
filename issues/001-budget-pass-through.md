@@ -20,15 +20,15 @@ README: the spend section says per-box spend is `max_price` times `ttl`, storage
 
 ## Acceptance criteria
 
-- [ ] `grep -rn "daily_budget\|budget_exceeded\|budget_low\|spend_source\|daily_budget_source\|spent_today\|remaining_budget\|cost_source\|budget_check\|spend_from\|instance_start\|RESERVE_BUDGET_HINT" src/ tests/ README.md` returns nothing, and `src/vasty/budget.py` and `tests/test_budget.py` are gone.
-- [ ] `EXIT_CODES` in `errors.py` has no value 3, and the README exit code line lists 0, 1 and 2.
-- [ ] `status` with charge rows reports `totals.balance`, `totals.credit`, `totals.charges_today` and `totals.burn_per_hr`, with `charges_today` equal to Vast's billed total unchanged.
-- [ ] A test asserts `reserve`, `extend`, `run`, `serve` and `tag` make no `balance` or `charges` call on the fake provider.
-- [ ] A config file with `daily_budget` raises `invalid_config` naming the key.
-- [ ] A lease with no charge row reports `cost: null`; one with rows across two days reports their sum from `status` and from `release`.
-- [ ] `status` with a failing charges read reports null totals and a `spend_unavailable` warning, and `errors.py` no longer lists `spend_unavailable` as an error code.
-- [ ] `CacheData` round-trips `balance`, `credit` and `charges_start` through `leases.json`.
-- [ ] `uv run pytest` and `uv run mypy` pass.
+- [x] `grep -rn "daily_budget\|budget_exceeded\|budget_low\|spend_source\|daily_budget_source\|spent_today\|remaining_budget\|cost_source\|budget_check\|spend_from\|instance_start\|RESERVE_BUDGET_HINT" src/ tests/ README.md` returns nothing, and `src/vasty/budget.py` and `tests/test_budget.py` are gone.
+- [x] `EXIT_CODES` in `errors.py` has no value 3, and the README exit code line lists 0, 1 and 2.
+- [x] `status` with charge rows reports `totals.balance`, `totals.credit`, `totals.charges_today` and `totals.burn_per_hr`, with `charges_today` equal to Vast's billed total unchanged.
+- [x] A test asserts `reserve`, `extend`, `run`, `serve` and `tag` make no `balance` or `charges` call on the fake provider.
+- [x] A config file with `daily_budget` raises `invalid_config` naming the key.
+- [x] A lease with no charge row reports `cost: null`; one with rows across two days reports their sum from `status` and from `release`.
+- [x] `status` with a failing charges read reports null totals and a `spend_unavailable` warning, and `errors.py` no longer lists `spend_unavailable` as an error code.
+- [x] `CacheData` round-trips `balance`, `credit` and `charges_start` through `leases.json`.
+- [x] `uv run pytest` and `uv run mypy` pass.
 
 ## Blocked by
 

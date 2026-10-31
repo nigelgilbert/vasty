@@ -18,15 +18,15 @@ README: the sample config gains a `train` profile and a `vllm` profile, the latt
 
 ## Acceptance criteria
 
-- [ ] `grep -rn "BUILTIN_MODELS\|ModelEntry\|MODEL_KEYS\|MODEL_LAYER_KEYS\|model_unknown\|model_entry\|ctx\.model\|\"quant\"\|--quant\|\[models" src/ tests/ README.md` returns nothing.
-- [ ] A config file with a `[models."X"]` table raises `invalid_config` naming `models`.
-- [ ] `serve --profile vllm --model Qwen/Qwen3-14B-AWQ` on the fake provider sends the profile's `vram`, `image` and `cuda` to `search_offers`.
-- [ ] `serve --model X -- --max-model-len 16384` starts a job whose command ends with `--max-model-len 16384`.
-- [ ] `serve --model X -- --port 9000`, `-- --host 0.0.0.0` and `-- --api-key=k` each raise `invalid_arguments` with zero calls on the fake provider.
-- [ ] `serve --model X` with no `--image` and no profile on a box without `vllm` releases the box and raises `vllm_missing` with a hint that names `--image vllm/vllm-openai:v0.32.0`.
-- [ ] The README sample config contains `[profiles.vllm]` with `image`, `vram = 24` and `cuda = 13`, and `[profiles.train]`.
-- [ ] `grep -c "Qwen/Qwen3-72B-Instruct" README.md` returns 0.
-- [ ] `uv run pytest` and `uv run mypy` pass.
+- [x] `grep -rn "BUILTIN_MODELS\|ModelEntry\|MODEL_KEYS\|MODEL_LAYER_KEYS\|model_unknown\|model_entry\|ctx\.model\|\"quant\"\|--quant\|\[models" src/ tests/ README.md` returns nothing.
+- [x] A config file with a `[models."X"]` table raises `invalid_config` naming `models`.
+- [x] `serve --profile vllm --model Qwen/Qwen3-14B-AWQ` on the fake provider sends the profile's `vram`, `image` and `cuda` to `search_offers`.
+- [x] `serve --model X -- --max-model-len 16384` starts a job whose command ends with `--max-model-len 16384`.
+- [x] `serve --model X -- --port 9000`, `-- --host 0.0.0.0` and `-- --api-key=k` each raise `invalid_arguments` with zero calls on the fake provider.
+- [x] `serve --model X` with no `--image` and no profile on a box without `vllm` releases the box and raises `vllm_missing` with a hint that names `--image vllm/vllm-openai:v0.32.0`.
+- [x] The README sample config contains `[profiles.vllm]` with `image`, `vram = 24` and `cuda = 13`, and `[profiles.train]`.
+- [x] `grep -c "Qwen/Qwen3-72B-Instruct" README.md` returns 0.
+- [x] `uv run pytest` and `uv run mypy` pass.
 
 ## Blocked by
 
