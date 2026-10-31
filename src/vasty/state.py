@@ -160,13 +160,14 @@ def hardware_mismatch(
     Keys come back in the order `gpu`, `vram`, `gpus`, `max_price`, `image`,
     `cuda`, `ports`. `image` is checked when the lease records one. `cuda`
     reads `cuda_max_good` from the instance row `inst` when the settings
-    carry a floor, and an absent row or value counts as a mismatch. `ports`
-    is checked when the caller passes them.
+    carry a floor. An unknown `vram_gb` or `cuda_max_good`, from an absent
+    row or value, skips its clause. `ports` is checked when the caller
+    passes them.
     """
     out: list[str] = []
     if settings.gpu and not gpu_matches(settings.gpu, lease.gpu):
         out.append("gpu")
-    if settings.vram is not None and (lease.vram_gb is None or lease.vram_gb < settings.vram):
+    if settings.vram is not None and lease.vram_gb is not None and lease.vram_gb < settings.vram:
         out.append("vram")
     if settings.gpus != lease.gpus:
         out.append("gpus")
@@ -176,7 +177,7 @@ def hardware_mismatch(
         out.append("image")
     if settings.cuda is not None:
         cuda = inst.cuda_max_good if inst is not None else None
-        if cuda is None or cuda < settings.cuda:
+        if cuda is not None and cuda < settings.cuda:
             out.append("cuda")
     if ports is not None and any(p not in lease.ports for p in ports):
         out.append("ports")

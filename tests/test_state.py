@@ -380,9 +380,13 @@ def test_hardware_mismatch_cuda_below_floor() -> None:
     assert hardware_mismatch(box(), row(cuda=12.4), settings(cuda=13), None) == ["cuda"]
 
 
-def test_hardware_mismatch_cuda_unknown_with_floor() -> None:
-    assert hardware_mismatch(box(), row(cuda=None), settings(cuda=12), None) == ["cuda"]
-    assert hardware_mismatch(box(), None, settings(cuda=12), None) == ["cuda"]
+def test_hardware_mismatch_cuda_unknown_with_floor_skips() -> None:
+    assert hardware_mismatch(box(), row(cuda=None), settings(cuda=12), None) == []
+    assert hardware_mismatch(box(), None, settings(cuda=12), None) == []
+
+
+def test_hardware_mismatch_vram_unknown_with_floor_skips() -> None:
+    assert hardware_mismatch(box(vram_gb=None), row(), settings(vram=16), None) == []
 
 
 def test_hardware_mismatch_cuda_unknown_without_floor() -> None:
