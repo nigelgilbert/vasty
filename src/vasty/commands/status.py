@@ -148,15 +148,13 @@ def short_cmd(cmd: str, kind: str) -> str:
 
 
 def gpu_text(gpu: str | None, gpus: int, vram_gb: float | None) -> str:
-    """Return the GPU name, prefixed with count and per-GPU GB as `2x12` when `gpus` is above one."""
+    """Return the GPU cell as count, per-GPU GB and name, such as `1x12 3060`."""
     if gpu is None:
         return "?"
     name = gpu
     for prefix in ("RTX ", "GTX "):
         if name.startswith(prefix):
             name = name[len(prefix):]
-    if gpus <= 1:
-        return name
     vram = "?" if vram_gb is None else str(int(vram_gb))
     return f"{gpus}x{vram} {name}"
 

@@ -265,7 +265,7 @@ def test_uptime_null_before_running(harness: Harness) -> None:
     add_lease(harness, label={"name": "ft", "created": NOW - 1200}, actual_status="loading")
     assert by_lease(status(harness))["l-0000a001"]["uptime_s"] is None
     _, out, _ = harness.run("status", "--plain")
-    assert out.splitlines()[1].split()[7] == "—"
+    assert out.splitlines()[1].split()[8] == "—"
 
 
 def test_history_only_when_named_or_verbose(harness: Harness) -> None:
@@ -356,7 +356,7 @@ def test_status_human_table(account: Harness) -> None:
     assert "j-3 vllm (unknown)" in rows["l-8b11"]
     assert "4090" in rows["l-a003"] and "RTX" not in rows["l-a003"]
     orphan = rows["i-55120"].split()
-    assert orphan[1:5] == ["—", "—", "?", "3090"] and "none" in orphan and "?" in orphan[-3:]
+    assert orphan[1:6] == ["—", "—", "?", "1x24", "3090"] and "none" in orphan and "?" in orphan[-3:]
     assert "WARNINGS" in lines
     warn = next(line for line in lines if "expiring_soon" in line)
     assert warn.split()[0] == "l-8b12" and warn.endswith("fix: vasty extend l-8b12 --by 30m")
