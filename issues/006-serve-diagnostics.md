@@ -2,7 +2,7 @@
 
 **Type**: AFK
 
-**Status:** 🔲 Not started
+**Status:** ✅ Done in f6adf3c, abd6279, f3609ee and c1b26e8
 
 ## Parent
 
@@ -20,15 +20,15 @@ The `vllm_missing` hint under `--on` names the lease and says to install `vllm` 
 
 ## Acceptance criteria
 
-- [ ] `serve` on a fake box whose job exits 1 raises `serve_failed` with `details.exit`, `details.lease` and `details.log_tail`, and the fake records one `log_tail` call.
-- [ ] `serve` past the readiness deadline raises `serve_failed` with `details.log_tail`, and the fake records the `log_tail` call before the `TERM` signal.
-- [ ] A tail read that raises leaves `serve_failed` with `exit` and `lease` and no `log_tail`.
-- [ ] A log of 200 lines yields 100 lines; a log whose last 100 lines exceed 64 KiB is cut to 64 KiB.
-- [ ] A log line that contains the key comes back with `<redacted>` in its place.
-- [ ] The started job's command contains no `--api-key`, the displayed `cmd` contains no key, and the job script sets `VLLM_API_KEY`.
-- [ ] `grep -rn "LOG_LINES = " src/` returns one line.
-- [ ] `serve --on LEASE` on a box without `vllm` raises `vllm_missing` with a hint naming `LEASE` and no `reserve` or `--image`.
-- [ ] `uv run pytest` and `uv run mypy` pass.
+- [x] `serve` on a fake box whose job exits 1 raises `serve_failed` with `details.exit`, `details.lease` and `details.log_tail`, and the fake records one `log_tail` call.
+- [x] `serve` past the readiness deadline raises `serve_failed` with `details.log_tail`, and the fake records the `log_tail` call before the `TERM` signal.
+- [x] A tail read that raises leaves `serve_failed` with `exit` and `lease` and no `log_tail`.
+- [x] A log of 200 lines yields 100 lines; a log whose last 100 lines exceed 64 KiB is cut to 64 KiB.
+- [x] A log line that contains the key comes back with `<redacted>` in its place.
+- [x] The started job's command contains no `--api-key`, the displayed `cmd` contains no key, and the job script sets `VLLM_API_KEY`.
+- [x] `grep -rn "LOG_LINES = " src/` returns one line.
+- [x] `serve --on LEASE` on a box without `vllm` raises `vllm_missing` with a hint naming `LEASE` and no `reserve` or `--image`.
+- [x] `uv run pytest` and `uv run mypy` pass.
 
 ## Blocked by
 

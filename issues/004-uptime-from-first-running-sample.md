@@ -2,7 +2,7 @@
 
 **Type**: AFK
 
-**Status:** 🔲 Not started
+**Status:** ✅ Done in 8a7840c
 
 ## Parent
 
@@ -16,11 +16,11 @@
 
 ## Acceptance criteria
 
-- [ ] A lease with `running_at` 20 minutes after `created` reports `uptime_s` measured from `running_at` in `status` and `release`.
-- [ ] A lease without `running_at` reports `uptime_s: null` in JSON and a dash in the table.
-- [ ] `engine.refresh` on a `loading` row leaves `running_at` None; the first `running` row sets it to the snapshot time; a later `running` row leaves the value unchanged.
-- [ ] `running_at` survives a cache save and load.
-- [ ] `uv run pytest` and `uv run mypy` pass.
+- [x] A lease with `running_at` 20 minutes after `created` reports `uptime_s` measured from `running_at` in `status` and `release`.
+- [x] A lease without `running_at` reports `uptime_s: null` in JSON and a dash in the table.
+- [x] `engine.refresh` on a `loading` row leaves `running_at` None; the first `running` row sets it to the snapshot time; a later `running` row leaves the value unchanged.
+- [x] `running_at` survives a cache save and load.
+- [x] `uv run pytest` and `uv run mypy` pass.
 
 ## Blocked by
 
