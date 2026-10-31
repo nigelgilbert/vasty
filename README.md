@@ -146,7 +146,7 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 
 A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fields null. `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at`, `ttl_remaining_s` and `guard`.
 
-`busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. The `status` table shows `idle` in the jobs column for a lease with `busy` false, and `2x12 3060` in the GPU column when `gpus` is above one. `uptime_s` counts from the first `running` sample, when Vast starts GPU billing, and is null before it. `--verbose` shows that sample as `running_at`.
+`busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. `uptime_s` counts from the first `running` sample, when Vast starts GPU billing, and is null before it. `--verbose` shows that sample as `running_at`.
 
 ### Error codes
 
