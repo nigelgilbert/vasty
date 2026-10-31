@@ -154,10 +154,6 @@ def decode(text: str) -> CacheData:
     if not isinstance(raw_leases, dict):
         raise CorruptCache("leases is not an object")
     leases = {str(k): _from_json(v, CachedLease) for k, v in raw_leases.items()}
-    raw_charges = body.get("charges")
-    if isinstance(raw_charges, dict) and "today" not in raw_charges:
-        # Drop charges written before `today` existed so the next read fetches them again.
-        body["charges"] = body["charges_at"] = body["charges_start"] = None
     return CacheData(
         leases=leases,
         cached_at=cached_at,
