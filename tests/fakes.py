@@ -213,6 +213,8 @@ class BoxState:
     adopt_missing: list[str] = field(default_factory=list)
     job_exit: int | None = 0
     signals: list[tuple[str, str]] = field(default_factory=list)
+    tails: list[str | None] = field(default_factory=list)
+    """Job ids `log_tail` read, in call order."""
     execs: list[str] = field(default_factory=list)
     exec_results: dict[str, ExecResult] = field(default_factory=dict)
     exec_errors: dict[str, BaseException] = field(default_factory=dict)
@@ -320,6 +322,7 @@ class FakeBox:
 
     def log_tail(self, target: SshTarget, job_id: str | None, lines: int) -> list[str]:
         box = self._get(target)
+        box.tails.append(job_id)
         if job_id is None:
             if not box.jobs:
                 return []

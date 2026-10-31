@@ -12,9 +12,10 @@ The box's image supplies vLLM. On the box, `serve` checks for `vllm` on PATH
 and raises `vllm_missing` when it is absent. It then starts `vllm serve` as a
 `serve` job on port 8000 with a fresh `vasty-` key, and polls `/v1/models`
 with that key until it answers 200. The job script exports the key as
-`VLLM_API_KEY`, so the `vllm serve` command line carries no secret. With `--bind-local` vLLM listens on
-127.0.0.1 and the poll runs on the box with curl. Any failure after the
-reserve releases a box this call created.
+`VLLM_API_KEY`, so the `vllm serve` command line carries no secret. With
+`--bind-local` vLLM listens on 127.0.0.1 and the poll runs on the box with
+curl. `serve_failed` carries the job's last log lines with the key redacted.
+Any failure after the reserve releases a box this call created.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from __future__ import annotations
 import argparse
 import shlex
 from dataclasses import dataclass
+from typing import Any
 
 from vasty import engine
 from vasty.cli import Outcome
@@ -39,7 +41,7 @@ from vasty.commands._common import (
 from vasty.context import Context
 from vasty.errors import VastyError, invalid
 from vasty.models import SERVE_PORT, CachedLease, Job, ServeResult, WarningItem
-from vasty.remote import SshTarget
+from vasty.remote import LOG_LINES, SshTarget
 from vasty.state import effective_expiry
 from vasty.timeutil import iso
 
@@ -49,6 +51,7 @@ HTTP_TIMEOUT_S = 5.0
 PREFLIGHT_TIMEOUT_S = 30.0
 PREFLIGHT_COMMAND = "command -v vllm"
 VLLM_IMAGE = "vllm/vllm-openai:v0.32.0"
+LOG_TAIL_BYTES = 64 * 1024
 # vLLM flags that `serve` sets itself.
 OWNED_FLAGS = ("--host", "--port", "--api-key")
 
@@ -67,6 +70,12 @@ def check_extra(extra: list[str]) -> None:
 def server_argv(model: str, host: str, extra: list[str]) -> list[str]:
     """Return the `vllm serve` argv; the key goes in `VLLM_API_KEY`."""
     return ["vllm", "serve", model, "--host", host, "--port", str(SERVE_PORT), *extra]
+
+
+def redact_tail(lines: list[str], key: str) -> list[str]:
+    """Replace `key` with `<redacted>` and keep the last `LOG_TAIL_BYTES` bytes of the lines."""
+    text = "\n".join(line.replace(key, "<redacted>") for line in lines)
+    return text.encode("utf-8")[-LOG_TAIL_BYTES:].decode("utf-8", errors="ignore").splitlines()
 
 
 def probe_command(key: str) -> str:
@@ -200,23 +209,36 @@ def _wait_ready(
         if status.exit is not None or status.state == "exited":
             code = status.exit
             save_lease(ctx, lease, lambda record: finish_job(record, job_id, code, status.finished_at))
-            raise VastyError(
-                "serve_failed",
-                f"vLLM exited {code} before /v1/models answered.",
-                log_hint,
-                details={"exit": code},
-            )
+            message = f"vLLM exited {code} before /v1/models answered."
+            raise _serve_failed(ctx, target, lease, job_id, key, message, log_hint, code)
         if ctx.mono() >= deadline:
+            message = f"/v1/models did not answer within {int(READY_DEADLINE_S)}s."
+            error = _serve_failed(ctx, target, lease, job_id, key, message, log_hint, None)
             try:
                 ctx.box.signal_job(target, job_id, "TERM")
             except VastyError:
                 pass
-            raise VastyError(
-                "serve_failed",
-                f"/v1/models did not answer within {int(READY_DEADLINE_S)}s.",
-                log_hint,
-            )
+            raise error
         ctx.sleep(POLL_INTERVAL_S)
+
+
+def _serve_failed(
+    ctx: Context,
+    target: SshTarget,
+    lease: CachedLease,
+    job_id: str,
+    key: str,
+    message: str,
+    hint: str,
+    code: int | None,
+) -> VastyError:
+    """Return `serve_failed` with the job's redacted log tail; a failed read leaves it out."""
+    details: dict[str, Any] = {"exit": code, "lease": lease.lease}
+    try:
+        details["log_tail"] = redact_tail(ctx.box.log_tail(target, job_id, LOG_LINES), key)
+    except (VastyError, OSError):
+        pass
+    return VastyError("serve_failed", message, hint, details=details)
 
 
 def _human(result: ServeResult) -> str:

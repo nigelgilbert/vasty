@@ -93,6 +93,7 @@ def test_serve_failure_releases_reserved_box(h: Harness) -> None:
     code, data = run_json(h, "serve", "--model", "Qwen/Qwen3-14B-AWQ", "--max-price", "2")
     assert code == 2
     assert data["error"] == "serve_failed"
+    assert "log_tail" in data["details"]
     assert h.provider.instances == {}
 
 

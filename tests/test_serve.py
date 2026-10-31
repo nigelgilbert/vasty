@@ -92,8 +92,8 @@ def test_serve_fresh_key_per_job(harness: Harness, box: int) -> None:
     assert (first["job"], second["job"]) == ("j-1", "j-2")
 
 
-def test_serve_job_exit_before_ready_is_serve_failed(harness: Harness, box: int) -> None:
-    harness.http_status = 0
+def exit_job(harness: Harness, box: int) -> None:
+    """Make the box report every job as exited 1."""
 
     def exited(target: SshTarget, job_id: str) -> Job:
         job = harness.box.state(box).jobs[job_id]
@@ -101,17 +101,76 @@ def test_serve_job_exit_before_ready_is_serve_failed(harness: Harness, box: int)
         return job
 
     harness.box.job_status = exited  # type: ignore[method-assign]
+
+
+def test_serve_job_exit_before_ready_is_serve_failed(harness: Harness, box: int) -> None:
+    harness.http_status = 0
+    exit_job(harness, box)
+    harness.box.state(box).logs["j-1"] = ["loading", "Error 804", "Engine core initialization failed."]
     code, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
     assert code == 2 and data["error"] == "serve_failed"
     assert "exited 1" in data["message"]
+    assert data["details"] == {
+        "exit": 1, "lease": "l-0000a001",
+        "log_tail": ["loading", "Error 804", "Engine core initialization failed."],
+    }
+    assert harness.box.state(box).tails == ["j-1"]
     assert box in harness.provider.instances
 
 
 def test_serve_deadline_is_serve_failed(harness: Harness, box: int) -> None:
     harness.http_status = 503
+    state = harness.box.state(box)
+    state.logs["j-1"] = ["loading"]
+    real = harness.box.log_tail
+    signals_at_tail: list[list[tuple[str, str]]] = []
+
+    def tail(target: SshTarget, job_id: str | None, lines: int) -> list[str]:
+        signals_at_tail.append(list(state.signals))
+        return real(target, job_id, lines)
+
+    harness.box.log_tail = tail  # type: ignore[method-assign]
     code, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
     assert code == 2 and data["error"] == "serve_failed"
-    assert harness.box.state(box).signals == [("j-1", "TERM")]
+    assert data["details"] == {"exit": None, "lease": "l-0000a001", "log_tail": ["loading"]}
+    assert signals_at_tail == [[]]
+    assert state.signals == [("j-1", "TERM")]
+
+
+def test_serve_failed_without_log_tail_when_read_fails(harness: Harness, box: int) -> None:
+    harness.http_status = 0
+    exit_job(harness, box)
+
+    def tail(target: SshTarget, job_id: str | None, lines: int) -> list[str]:
+        raise BoxUnreachableError()
+
+    harness.box.log_tail = tail  # type: ignore[method-assign]
+    code, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
+    assert code == 2 and data["error"] == "serve_failed"
+    assert data["details"] == {"exit": 1, "lease": "l-0000a001"}
+
+
+def test_serve_failed_log_tail_keeps_last_lines_and_redacts_key(
+    harness: Harness, box: int
+) -> None:
+    harness.http_status = 0
+    exit_job(harness, box)
+    lines = [f"line {n}" for n in range(199)] + [f"argv: --api-key {KEY} --port 8000"]
+    harness.box.state(box).logs["j-1"] = lines
+    _, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
+    tail = data["details"]["log_tail"]
+    assert len(tail) == 100
+    assert tail[0] == "line 100"
+    assert tail[-1] == "argv: --api-key <redacted> --port 8000"
+    assert KEY not in json.dumps(data)
+
+
+def test_redact_tail_keeps_the_last_64_kib() -> None:
+    lines = [f"{n:04d}" + "x" * 995 for n in range(100)]
+    tail = serve.redact_tail(lines, KEY)
+    assert len("\n".join(tail).encode("utf-8")) == serve.LOG_TAIL_BYTES
+    assert tail[-1] == lines[-1]
+    assert tail[1:] == lines[-(len(tail) - 1):]
 
 
 def test_serve_vllm_missing_on_box(
