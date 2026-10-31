@@ -136,6 +136,16 @@ def test_status_busy_null_while_pending(harness: Harness) -> None:
     assert out.splitlines()[1].split()[-1] == "—"
 
 
+def test_status_busy_null_while_unreachable(harness: Harness) -> None:
+    lease = add_lease(harness)
+    harness.run("status")
+    harness.box.state(lease.id).reachable = False
+    row = by_lease(status(harness))["l-0000a001"]
+    assert (row["state"], row["busy"], row["jobs"]) == ("unreachable", None, [])
+    _, out, _ = harness.run("status", "--plain")
+    assert out.splitlines()[1].split()[-1] == "—"
+
+
 def test_status_totals(account: Harness) -> None:
     totals = status(account)["totals"]
     assert totals == {
