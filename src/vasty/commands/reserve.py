@@ -68,8 +68,9 @@ def reserve_lease(
     """Reserve a box from the creation flags in `args` and `ctx.settings`.
 
     Apply name idempotency, offer search, create with recovery and the
-    readiness wait. `run` and `serve` call this for auto-reserve. Raise `VastyError` on failure; a box this call created and
-    then gave up on is destroyed before the error propagates.
+    readiness wait. `run` and `serve` call this for auto-reserve. Raise
+    `VastyError` on failure; a box this call created and then gave up on is
+    destroyed before the error propagates.
     """
     settings = ctx.settings
     name = getattr(args, "name", None)

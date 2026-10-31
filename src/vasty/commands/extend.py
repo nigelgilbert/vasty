@@ -40,6 +40,7 @@ from vasty.state import effective_expiry
 from vasty.targeting import resolve_target
 from vasty.timeutil import format_duration, iso, parse_duration, parse_time
 
+
 @dataclasses.dataclass(frozen=True)
 class Change:
     """How the command moves each clock: by a delta, or to one expiry.
