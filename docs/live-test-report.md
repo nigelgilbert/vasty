@@ -1,248 +1,319 @@
-# vasty live test report, 2026-10-29
+# vasty live test report, 2026-10-31
 
-Account 836500, burner. Starting credit $20.00, balance $0. Run from `/private/tmp/vasty-live` with the repo venv on PATH. Raw command output stays local under `docs/live/`, which is gitignored.
+Second funded run, for issue 009. Account 836500, credit $19.86 at start, card on file. Run from `/private/tmp/vasty-live2` by an Opus agent with a Fable overseer, Nigel supervising. Raw command output is under `docs/live/`, which is gitignored.
 
-## Setup
+Nigel's go, recorded before the first reserve: cap $5.00 cumulative balance drop, per-box ceiling $0.45/hr.
 
-| Step | Result |
-|---|---|
-| 0 `vastai show instances --raw` | `[]`, nothing to destroy |
-| 1 account | id 836500, credit 20.00, balance 0, `has_billing: true` (confirmed with Nigel before phase 1, see below) |
-| 2 ssh key | `~/.ssh/id_ed25519` present |
-| 3 env | no `VASTY_*`, no `~/.config/vasty/config.toml` |
-| 4 fixtures | `fx/hello.py`, `fx/data.txt` |
-| 5 offer pool | 32 verified RTX 3060 offers, dph 0.052 to 0.207. Top 5 by reliability all 0.999, max dph 0.084. `max_price` set to 0.09. No host under `direct_port_count` 3. Bandwidth outliers: Vietnam hosts at $0.04/GB, Texas at $0.039/GB, Poland at $0.0088/GB. Full table in `docs/live/setup-5-offers.json`. |
-| 6 config | `vasty.toml` written |
-| 7 `vasty config show` | owner, ttl, run_ttl, gpu, max_price, daily_budget, warn_before_expiry, disk, image all `source: project`. Pass. |
-| 8 `import vastai` | 244,611 us cumulative (244 ms) |
-| 9 `vasty status` empty | `leases: []`, `spent_today: 0.0`, `spend_source: billing`, no warnings. Pass. |
+## Spend
 
-Nigel confirmed a card is saved on the account. The $5.50 cumulative balance drop in plan section 6 is the only ceiling.
-
-## Phase 1: one box, full lifecycle. Cap $0.50. PASS with notes.
-
-Instance 58321352, lease `l-ce63a58a`, offer 45600114 (Poland, 0.999 reliability, $0.0088/GB bandwidth), `price_per_hr` 0.06. Reserve at 23:27:15Z, `actual_status: running` at 23:28:09Z. Boot 54 s. Image was cached on the host (pull to loaded in 10 s).
-
-| Check | Result |
-|---|---|
-| `reserve --no-wait` | `state: pending`, `guard: partial`, `guard_missing: [watchdog, destroy_key, clock_file]`, `ports: null`. Pass. |
-| `ports` absent until running | Samples at 1 s, 11 s (`actual_status: null`), 22 s and 33 s (`loading`) all had `ports: null`. The 44 s sample was `running` with 22, 8000, 8080 mapped. Transition observed: ports appear with `running`. `docs/live/p1-02-first-sample-with-ports.json`. |
-| Second `reserve --name p1` | `reused: true`, same lease, `vastai show instances --raw` lists one instance. Pass. |
-| `ports` once running | `{"22": 15124, "8000": 15121, "8080": 15129}`. Direct box. Pass. |
-| `expires_at` vs clock file | `2026-10-29T23:43:05Z` = 1793317385 = clock file. Pass. |
-| Label | `vasty:v1;lease=l-ce63a58a;name=p1;owner=live-test;created=1793316437;ttl=900;expires=1793317385`. Pass. `expires - created` = 948 s, so the clock starts at onstart, 48 s after create. |
-| `guard` | `full`, `guard_layers` all `ok`. Pass. Box ready check: `startup.exit` 0, `alive` and `guard` present, tmux at `/usr/bin/tmux`. |
-| `CONTAINER_API_KEY` in `/workspace/.vasty/env` | set. `CONTAINER_ID=58321352` also set. |
-| Container key reads its own row | `GET /instances/58321352/` with the container key: HTTP 200. |
-| Watchdog | `/etc/cron.d/vasty` runs `watchdog.sh` every minute; `pgrep` shows pid 384 running it. `/workspace/.vasty` holds alive, clock, env, guard, jobs, startup.exit, startup.started, watchdog.lock, watchdog.log, watchdog.sh. |
-| `status` cost fields | `cost_source: mixed`, `cost` 0.02 at 23:38 and 0.03 at 23:40, `totals.spent_today: 1.5`, `spend_source: mixed`. Balance drop at those times: $0.0118 and $0.0131. |
-| `release` | `uptime_s: 793`, `cost: 0.03`, `jobs: []`, `destroy_pending: true`. 0.06 × 793 / 3600 = 0.0132, within $0.02 of 0.03. Pass. Instances `[]` right after. |
-
-Observations:
-
-- `spent_today` 1.5 against a real balance drop of $0.013. Charge rows lag, so the estimator counts the live box from 00:00 UTC (23.5 h × 0.06 = 1.41) and `spend_source` flips to `mixed`. This is the plan's section 2 caveat in action. `remaining_budget` dropped to 4.5 on a run that had cost one cent.
-- `cost` rounds to cents, so the $0.02 tolerance is loose at this rate.
-- `status p1` (one lease) includes `log_tail`; `status` (list) omits it.
-- `cat /workspace/.vasty/guard` printed an empty line. The guard file exists but holds no content.
-- The ssh target in `reserve` is `root@91.150.160.38:15124` (direct), while the Vast row's `ssh_host` is `ssh5.vast.ai:17744` (proxy). vasty prefers the direct mapping.
-- The plan's section 4 box ready check was run 10 minutes after boot because of a bug in my poll script, so the earliest point at which `startup.exit` appears is not measured here. `vasty status p1` at 23:28:17 (8 s after `running`) returned `guard: full`, so the watchdog landed within those 8 s or the probe reported full early. Phase 2 checks this sooner.
-
-## Phase 2: the clock. Cap $1.00.
-
-### 2a watchdog alone. PASS.
-
-Instance 58322443, lease `l-15c77c42`, Korean host at $0.08/hr. `reserve --ttl 8m` blocked from 23:43:10Z to 23:47:23Z (4m13s, image pulled). Returned `running`, `guard: full`, `expires_at: 23:55:12Z`, `ttl_remaining_s: 469`. The box ready check passed on the first try right after `reserve` returned: `startup.exit` 0, `alive` and `guard` present, tmux installed. So the blocking `reserve` returned after the watchdog was installed. No bug against the `pending` state rule.
-
-Watched with `vastai show instances --raw` every 30 s from 23:47:47Z. Listed as `running` at expires -15 s (23:54:57Z). Gone at 23:55:27Z, 16 s after `expires_at`. No vasty process ran on the laptop between `expires_at` and the disappearance. `docs/live/p2a-03-watch.txt`.
-
-Answers the open question: the container key `DELETE` destroys a running box. Confirmed by disappearance.
-
-The 6 m rerun is skipped: boot took over 3 minutes.
-
-### 2b sweep alone. PASS.
-
-Instance 58323451, lease `l-7807c965`, $0.07/hr. `reserve --ttl 8m` 23:55:42Z to 23:57:40Z (1m58s). Ready check passed at once. Killed cron entry, watchdog process and `alive` at 23:57:53Z. `vasty status sw` then reported `guard: partial`, `guard_missing: [watchdog]`, warning `guard_partial` with fix `vasty release l-7807c965`. Recheck at 23:59:17Z: `watchdog_dead`, `alive` absent.
-
-`expires_at` 00:05:34Z. `vastai show instances --raw` still listed 58323451 as `running` at expires +5 s and +62 s. `vasty status sw` at 00:06:36Z returned `swept: [{lease: l-7807c965, name: sw, expired_at: 00:05:34Z, ok: true, error: null}]`, lease `state: expired`, `destroy_pending: true`. `vastai show instances --raw` returned `[]` immediately after. A second `vasty status sw` reports `expired` with `swept: []`.
-
-Note: the UTC day rolled over at 00:00 during this phase. `spent_today` reset to 0.01 and `spend_source` returned to `billing`.
-
-### 2c extend both ways. PASS.
-
-Instance 58324722, lease `l-b293ffae`, $0.07/hr, same Korean host as 2b. `reserve --ttl 10m` 00:06:55Z to 00:07:21Z (26 s, image cached). `expires_at: 00:17:08Z`.
-
-| Step | Returned `expires_at` | Clock file | Match |
+| Reading | UTC | Credit | Drop |
 |---|---|---|---|
-| `extend --by 10m` | 00:27:08Z | 1793320028 | yes |
-| `VASTY_DAILY_BUDGET=0.01 extend --by 10m` | `budget_exceeded`, exit 3, `details: {projected: 0.05, remaining: -0.03, daily_budget: 0.01}` | 1793320028, unchanged | yes |
-| `extend --to 3m` | 00:10:42Z | 1793319042 | yes |
+| Start | 07:21 | 19.8603 | 0 |
+| After rd released | 07:40 | 19.5456 | 0.3146 |
+| After D2 | 07:54 | 19.5381 | 0.3222 |
+| After R round 1 | 08:15 | 19.5193 | 0.3410 |
+| After R round 2, end | 08:43 | 19.4870 | 0.3733 |
 
-Label after the sequence: `...created=1793318816;ttl=600;expires=1793319042`, equal to the clock file. The label was read only after the final extend; the clock file was read after each one.
+Boxes created:
 
-Watched past 00:10:42Z. Listed `running` at +1 s, gone at +31 s. A shortened clock is honored after the watchdog's sleep.
+| Name | Lease | Instance | GPU | Host | $/hr | Fate |
+|---|---|---|---|---|---|---|
+| rd | `l-fe6aab28` | 58505964 | RTX 3090 24 GB, driver 590, CUDA 13.1 | Taiwan, $26.67/TB down | 0.28 | released, cost 0.31 |
+| rd2 | `l-f85bcec9` | | Tesla V100 32 GB | | 0.24 | released while loading, cost null |
+| cl | `l-a93ebd84` | 58507490 | RTX 3060 12 GB, driver 550, CUDA 12.4 | Poland, $9/TB down | 0.06 | released in R1 |
+| bare | `l-e5e67fc6` | 58507967 | RTX 3060 12 GB, CUDA 12.8 | South Korea | 0.09 | destroyed by `serve` on `vllm_missing`, uptime 20 s |
+| R1 retry | `l-14cabb6b` | 58508415 | RTX 3060 12 GB, driver 580, CUDA 13.0 | South Korea | 0.09 | destroyed by `serve` on `vllm_missing`, uptime 15 s |
+| R2 retry | `l-a7730687` | 58509291 | RTX 3060 12 GB, driver 535, CUDA 12.2 | Poland | 0.07 | destroyed by `serve` on `serve_failed`, uptime 74 s |
+| R1b retry | `l-f6be4fd7` | 58509958 | RTX 3060 12 GB, driver 580, CUDA 13.0 | South Korea, $6.67/TB | 0.09 | served, released, uptime 198 s, cost 0.01 |
+| R2b retry | `l-2787ec15` | 58511601 | RTX 3060 12 GB, driver 595, CUDA 13.2 | Poland, $9/TB | 0.07 | served, released, uptime 119 s, cost 0.01 |
 
-### 2d reserve past budget. PASS.
+Vast's charge row for rd, the one box that ran long enough to bill: $0.314. GPU 0.210 h at $0.267 = $0.056, disk 0.287 h = $0.004, download 9.6 GB at $0.026/GB = $0.251, upload $0.003. The weights were four fifths of the bill; the image was cached on the host.
 
-`VASTY_DAILY_BUDGET=0.01 vasty reserve --name nope`: `budget_exceeded`, exit 3, `details: {projected: 0.03, remaining: -0.01, daily_budget: 0.01}`, hint names `--ttl`, `--max-price` and release. `vastai show instances --raw` returned `[]`.
+## Setup, no spend
 
-Observation: after 2d, `vasty status` with no selector returned `leases: []` and no warnings, while `vasty status wd` and `vasty status sw` by name returned the expired lease. The default list hides expired leases.
+- `vastai show instances --raw` returned `[]`. Credit 19.86028973688, `has_billing: true`.
+- `vasty` reads the API key from the env var named by `api_key_env` only. With the key in `~/.config/vastai/vast_api_key` and nothing exported, every networked verb returns `auth_missing`. Every vasty call in this run set `VAST_API_KEY` inline from that file.
+- The run 1 config carried `gpu = "3060"`, `disk = 16` and `daily_budget` in `[defaults]`. `config show` rejects `daily_budget` as `invalid_config`. `config show --profile vllm` resolved `gpu "3060"` and `disk 16` from the project defaults into the profile, so the README serve example from that config would have returned `no_offers` (a 12 GB card against `vram = 24`). The three lines were removed. Final profile: `image vllm/vllm-openai:v0.32.0`, `vram 24`, `cuda 13`, `max_price 0.45`; disk 50 from the builtin default. Files `docs/live/a-07-config-show-vllm.txt` and `a-09-config-show-vllm.txt`.
+- Serve pool, verified single GPU, 24 GB and up, CUDA 13 and up, under $0.45, 40 GB disk: 64 offers. RTX 3090 x23, RTX 4090 x10, RTX PRO 4000 x10, Tesla V100 x4, RTX 3090 Ti x3, CMP 170HX x3, Quadro RTX 8000 x2, RTX A6000 x2, one each of P40, A5000, Titan RTX, 4080 Super, Quadro RTX 6000, RTX 5000 Ada, A40. The vastai CLI takes `gpu_ram` in GB. `docs/live/a-12-offers-serve-table.md`.
+- Proxy-only pool (`direct_port_count=0`, verified, single GPU): one offer at 07:20, an RTX 5090 at $0.4943/hr in Nevada. Gone by 07:42.
 
-Phase 2 balance: start 19.9862, end 19.9531 after the second post-phase read. Drop $0.033 against a $1.00 cap.
+## Item 1: README serve example. PASS.
 
-## Phase 3: run and sync. Cap $1.00. PASS.
+```
+vasty serve --profile vllm --model Qwen/Qwen3-14B-AWQ --ttl 1h --name rd --json
+```
 
-| Check | Result |
-|---|---|
-| `run -- nvidia-smi -L` | Printed `GPU 0: NVIDIA GeForce RTX 3060`. `exit: 0`, `duration_s: 2`, `released: true`, `error: null`. Whole command 31 s (00:13:46Z to 00:14:17Z). Instances `[]` after. Pass. |
-| `run -- false` | Exit code 1, `exit: 1`, `error: null`, `released: true`. 51 s. Instances `[]` after. Pass. |
-| `run --sync fx -- python3 hello.py` | Printed `hostname: 02f726e22312` and the GPU line. `exit: 0`, `released: true`. 46 s. Pass. |
-| `reserve --name rb --ttl 15m` | Instance 58325740, lease `l-b970ddcc`, $0.06/hr, Poland host. 2m50s to running. Ready check passed at once. |
-| `sync rb push fx/ work/` | Returned `direction: push`, `src`, `dest`. Pass. |
-| `run --on rb -- cat work/data.txt` | Printed the fixture line. `exit: 0`, `released: false`. Pass. |
-| `run --on rb --detach` | Returned `job: j-2`, `log_path: /workspace/.vasty/jobs/j-2/log`, `expires_at` in 5 s. Pass. |
-| `status rb` during the job | `jobs` lists j-1 `exited 0` and j-2 `running`, `exit: null`. `log_tail: []`. |
-| `status rb` after | j-2 `exited`, `exit: 0`, `duration_s: 120`, `log_tail: ["done"]`. Seen at 00:21:23Z, 2m08s after start. Pass. |
-| `sync rb pull` | `docs/live/out.txt` holds `done`. Pass. |
-| SIGINT | Script printed `130 4.5`. vasty printed the job summary `exit: 130`, `duration_s: 8`, `released: false`. `rb` stayed listed. Pass. |
-| `release rb` | `uptime_s: 346`, `cost: 0.01`, three jobs with exit 0, 0, 130. Pass. |
-
-No `budget_exceeded` during the phase. Three auto-reserved boxes each lived under a minute and the balance moved by less than a cent each.
-
-## Phase 4: owners, groups, orphans. Cap $1.00. PASS.
-
-### Orphan
-
-`vastai create instance 45598257 --image vastai/base-image:cuda-12.6.3-auto --disk 16 --ssh --direct` at 00:24:30Z returned `new_contract: 58326611` and an `instance_api_key` (redacted in `docs/live/p4-02-create.json`). Running with `ssh_host`/`ssh_port` after 76 s.
-
-| Check | Result |
-|---|---|
-| `vasty status` | Lease `i-58326611`, `state: orphan`, `owner: null`, `guard: null`, `expires_at: null`, `price_per_hr: 0.05`. Warning `orphan`, message `not created by vasty`, fix `vasty tag i-58326611 --ttl 30m`. `totals.live: 0`, `live_mine: 0` while the orphan is listed. Pass. |
-| `vasty tag i-58326611 --ttl 8m` | `results[0]`: lease `l-3905726c`, `owner: live-test`, `expires_at: 00:33:59Z`, `guard: full`. Exit 0. stderr printed `could not attach the SSH key to l-3905726c: Vast attach ssh key failed: SSH key already associated with instance.` Harmless on this account, since `vastai create --ssh` had already attached the same key. Pass. |
-| `status i-58326611 --verbose` | The `i-` id resolved to the new lease. Label `vasty:v1;lease=l-3905726c;owner=live-test;created=1793319959;ttl=480;expires=1793320439`, `guard_layers` all `ok`, `ports: {"22": 11724}` (no 8000/8080, as `vastai create` did not map them). |
-| Watchdog | Listed `running` at expires -27 s, gone at +4 s. Pass. |
-
-### Group
-
-| Check | Result |
-|---|---|
-| `reserve g0 --group grp` | Instance 58327540, `l-b7020ec5`, $0.07/hr, 26 s to running. |
-| `reserve g1 --group grp` | Instance 58327595, `l-577c8702`, $0.06/hr, 60 s to running. |
-| `status --group grp` | Both listed, `live: 2`, `burn_per_hr: 0.13`. Pass. |
-| `extend --group grp --to 12m` | `results` with two entries, each `ok: true`, `error: null`, both `expires_at: 00:47:47Z`. Pass. Labels then read `ttl=900;expires=1793321267`, so `expires=` tracks the extend while `ttl=` keeps the original value. |
-| `VASTY_OWNER=other release --all` | `results: []`, exit 0. Both boxes still listed on Vast. Pass. |
-| `release --group grp` | Two summaries, `ok: true`, `uptime_s` 78 and 109, `cost: 0.0`, `destroy_pending: true`. Instances `[]` after. Pass. |
-
-No `budget_exceeded` during the phase.
-
-Nigel gave the go for phase 5 at 00:42:27Z.
-## Phase 5: serve. Cap $2.00. FAIL (dependency pin).
-
-Instance 58328062, lease `l-c38505e0`, $0.08/hr, Korean host. `reserve --name sv --vram 12 --ttl 45m --disk 40` 00:42:28Z to 00:43:05Z. Ready check passed at once. `df -h /workspace`: 40G overlay, 1.5M used. `ports` had 8000 mapped (10872).
-
-`vasty serve --on sv --model Qwen/Qwen2.5-0.5B-Instruct` started 00:43:24Z and returned at 00:46:29Z, exit 2:
+Started 07:21:17Z. vasty picked the RTX 3090 on its own. Returned at 07:30:38Z, 561 s, exit 0:
 
 ```json
-{"error": "serve_failed", "message": "vLLM exited 1 before /v1/models answered.",
- "hint": "Read the log: vasty ssh l-c38505e0 -- tail -n 100 /workspace/.vasty/jobs/j-1/log",
- "details": {"exit": 1}}
+{
+  "lease": "l-fe6aab28",
+  "job": "j-1",
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "url": "http://220.130.209.122:41672/v1",
+  "api_key": "<redacted>",
+  "expires_at": "2026-10-31T08:26:11Z",
+  "warnings": [],
+  "swept": []
+}
 ```
 
-`details.output` was absent. The venv install itself finished in about 2 minutes: 6.8 GB under `/workspace/.vasty/venv`. The job ran 8 s. Log (`docs/live/p5-05-serve-log.txt`):
+Timeline, from `docs/live/b-00-instance-watch.txt` and the job log:
+
+| UTC | Event |
+|---|---|
+| 07:21:17 | serve starts, instance created |
+| 07:26:17 | Vast reports `running`; boot 5m00s |
+| 07:26:38 | vLLM 0.32.0 starts, V1 engine, float16, FlashAttention 2 |
+| 07:29:00 | "Loading weights took 11.25 seconds" |
+| 07:29:03 | "Model loading took 9.44 GiB memory and 104.32 seconds" (includes the 9.6 GB download) |
+| 07:30:00 | torch.compile 55.46 s |
+| 07:30:14 | "GPU KV cache size: 65,200 tokens, Maximum concurrency for 40,960 tokens per request: 1.59x" |
+| 07:30:34 | "Starting vLLM server on http://0.0.0.0:8000" |
+| 07:30:38 | serve returns |
+
+Context served on the 24 GB host: vLLM chose `max_seq_len=40960`, the model's full window, with 9.95 GiB of KV cache. Job command recorded in `/workspace/.vasty/jobs/j-1/cmd`: `vllm serve Qwen/Qwen3-14B-AWQ --host 0.0.0.0 --port 8000`.
+
+Endpoint checks (`docs/live/b-04*`):
+
+| Call | Result |
+|---|---|
+| `GET /models`, no key | 401 `{"error":"Unauthorized"}` |
+| `GET /models`, key | 200, one model, `max_model_len` 40960 |
+| chat, 45k chars | `prompt_tokens` 8559, 200 completion tokens, 7.10 s |
+| chat, 63.8k chars | `prompt_tokens` 12039, 200 completion tokens, 5.68 s (prefix cache shared with the previous prompt) |
+| chat, "Say hi" | 1.00 s |
+
+The second 12,039-token prompt against a cold job (item 2 below) took 9.35 s.
+
+Boot observation: one `status` sample at 07:27:47, 90 s into the run and during the weight download, returned `state: unreachable`, job `unknown`, warning `box_unreachable`. The samples 60 s either side were `running`. `docs/live/b-01b-boot-06.json`.
+
+## Item 2: `-- --max-model-len 16384` pass-through. PASS.
+
+Run on the same box after the first job was stopped (see item 5 for the stop).
 
 ```
-[transformers] Disabling PyTorch because PyTorch >= 2.6 is required but found 2.4.0
-...
-  File ".../vllm/config.py", line 1764, in _get_and_verify_max_len
-    assert "factor" in rope_scaling
-AssertionError
+vasty serve --on l-fe6aab28 --model Qwen/Qwen3-14B-AWQ --json -- --max-model-len 16384
 ```
 
-Installed versions: vllm 0.6.3, torch 2.4.0, transformers 5.22.0, tokenizers 0.23.3. `pip install vllm==0.6.3` pulls an unpinned transformers, and transformers 5.x refuses torch 2.4 and rewrites Qwen2.5's `rope_scaling` into a form without `factor`. The retry (`j-2`) failed the same way in 8 s. The model itself never downloaded. Fixed in PR #1.
+Returned job `j-2` in 149 s with the same url and a new key. The old key then gets 401. `docs/live/b-06*`.
 
-The curl checks were not reachable. `release sv`: `uptime_s: 313`, `cost: 0.02`, two jobs each `exit: 1`.
+- `jobs/j-2/cmd`: `vllm serve Qwen/Qwen3-14B-AWQ --host 0.0.0.0 --port 8000 --max-model-len 16384`
+- log: `non-default args: {..., 'max_model_len': 16384}`, "Using max model len 16384", `max_seq_len=16384`, "Maximum concurrency for 16,384 tokens per request: 3.98x"
+- `GET /models` with the j-2 key: 200, `max_model_len` 16384
+- warm reload: "Loading weights took 5.13 seconds", "Model loading took 9.44 GiB memory and 12.02 seconds"; torch.compile ran again, 55.63 s
+- 12,039-token prompt: 9.35 s
 
-Redaction: the vLLM arg dump in the job log carried the serve `api_key`. It was redacted by value in three saved files. `grep -rE "vasty-[0-9a-f]{64}" out/` returns nothing.
+## Item 3: `uptime_s` against the ledger. PASS.
 
-## Phase 5 rerun, 2026-10-30. PASS on a CUDA 13 host.
+`running_at` in the verbose view: 07:26:18Z. Vast's own first `running` sample: 07:26:17Z. Release at 07:38:32Z returned `uptime_s: 738`. Vast's charge row bills 0.210 GPU hours, 756 s. The two differ by 18 s, with Vast's clock starting at its `running` transition and vasty's at its first `running` sample plus the destroy lag. `docs/live/b-07b-release.json`, `b-07e-charges.json`.
 
-Run against PR #1 at `9a813dd`, same account and config. Raw output in `docs/live/p5r/`.
+The charge row needs epoch seconds: `vastai show invoices-v1 --charges -s 1793404800 -e 1793432342 --raw`. The CLI raises `TypeError` on a date string, a vastai bug, `docs/live/b-07d`.
 
-### The plan's command picks hosts that cannot run the image
+## Item 4: per-lease `cost`, null to billed. PASS.
 
-`vllm/vllm-openai:v0.32.0` is built on CUDA 13.0 (`NVIDIA_REQUIRE_CUDA=cuda>=13.0`). A GeForce card needs driver 580 or later for it, since CUDA forward compatibility covers datacenter GPUs only. vasty's offer search ignores `cuda_max_good`. At 05:30Z, 4 of the top 5 verified RTX 3060 offers by reliability ran CUDA 12.2 to 12.8.
+`status` samples beside the ledger (`docs/live/b-01b-boot-summary.txt`, `b-02-sample-summary.txt`):
 
-| Try | Flags beyond the plan | Host | CUDA | Outcome |
+| UTC | state | cost | uptime_s | ledger drop |
 |---|---|---|---|---|
-| 1 | none | KR, 3060, $0.084/hr | 12.8 | `running` after 20m35s (9.2 GB pull), `serve_failed` in 54 s |
-| 2 | `--region KR` | same machine, 43213 | 12.8 | released while `loading` |
-| 3 | `--region CA` | Quebec, 3060 | 12.4 | released while `loading` |
-| 4 | `--gpu 5060ti --max-price 0.21` | AU, 5060 Ti 16 GB, $0.184/hr | 13.0 | pass |
+| 07:22:00 | pending | null | null | 0.0000 |
+| 07:22:33 | pending | 0.0 | null | 0.0001 |
+| 07:26:41 | running | 0.0 | 23 | 0.0011 |
+| 07:27:47 | unreachable | 0.01 | 90 | 0.0070 |
+| 07:28:54 | running | 0.01 | 157 | 0.1499 |
+| 07:30:01 | running | 0.27 | 225 | 0.2719 |
+| 07:31:23 | running | 0.28 | 309 | 0.2781 |
+| 07:33:44 | running | 0.29 | 446 | 0.2902 |
+| 07:35:58 | running | 0.30 | 581 | 0.3000 |
+| 07:38:13 | running | 0.31 | 716 | 0.3117 |
 
-Try 1: `torch.cuda.is_available()` is `False` in the container. The job log ends in `RuntimeError: ... Error 804: forward compatibility was attempted on non supported HW` from `init_device`. `serve` returned `serve_failed` with `details: {"exit": 1}`. The retry was skipped because the host is the cause. Tries 2 and 3 show `--region` racing the pool: the 12.8 offer returned as soon as try 1 released it. All 30 RTX 5060 Ti offers ran CUDA 13.0 or later.
+`cost` is null before the first sample, 0.0 while pending, then follows the balance drop within a cent once the bandwidth charge lands at 07:30. The `cost_source` field in issue 009's brief no longer exists in the code.
 
-### Try 4
+## Item 5: `idle_box_available` on a second reserve. PASS.
 
-`reserve` 05:56:12Z to 06:01:36Z: `running`, `guard: full`, port 8000 mapped to 11116. The ready check passed at once and `torch.cuda.is_available()` was `True`.
+A reuse candidate has no live job, so the first serve job was stopped the way `remote.signal_job` does it, since no verb stops a job:
 
-`vasty serve --on sv --model Qwen/Qwen2.5-0.5B-Instruct` ran 06:02:06Z to 06:07:28Z, exit 0, and returned `url` and `api_key`. Job log: weights downloaded in 18 s, two CUDA graph captures of 103 s and 107 s, engine init 237 s.
+```
+vasty ssh l-fe6aab28 -- 'kill -s TERM -- -$(cat /workspace/.vasty/jobs/j-1/pid)'
+```
 
-| Check | Result |
-|---|---|
-| `curl -H "Authorization: Bearer $KEY" URL/models` | 200, lists `Qwen/Qwen2.5-0.5B-Instruct` |
-| `curl URL/models` | 401 |
-| chat completion, added | 200, `PONG!` |
+vLLM exited 143, GPU memory fell to 1 MiB, `status` showed `busy: false`. Then:
 
-`release sv`: `uptime_s: 719`, `cost: 0.06`, job `j-1` served 357 s.
+```
+vasty reserve --profile vllm --name rd2 --ttl 20m --no-wait --json
+```
 
-### Negative check. PASS.
+```json
+{
+  "lease": "l-f85bcec9",
+  "name": "rd2",
+  "state": "pending",
+  "reused": false,
+  "gpu": "Tesla V100",
+  "vram_gb": 32.768,
+  "price_per_hr": 0.24,
+  "warnings": [
+    {
+      "code": "idle_box_available",
+      "lease": "l-fe6aab28",
+      "message": "lease l-fe6aab28 (rd) is idle: RTX 3090, 1x24 GB, 52m left",
+      "fix": "vasty status l-fe6aab28"
+    }
+  ],
+  "swept": []
+}
+```
 
-`reserve --name pl --ttl 10m` on the default image: 3060, $0.06/hr, `running` in 46 s. `serve --on pl` returned `vllm_missing`, exit 1, with a hint naming `vllm/vllm-openai:v0.32.0`. `status pl` reported `running`.
+The warning informs and the create goes ahead. rd2 was released at once: `uptime_s null, cost null, jobs [], destroy_pending true`. `docs/live/b-05c-reserve-rd2.json`, `b-05d-release-rd2.json`.
 
-### Other readings
+Release of rd: `uptime_s 738, cost 0.31`, jobs `j-1` exit 143 after 395 s and `j-2` exit null after 259 s. `vastai show instances --raw` was `[]` ten seconds later.
 
-- `spent_today` read 0.13 against 0.10 real at 06:07Z with the 5060 Ti live. The pre-fix estimate would have billed that box from midnight, about $1.10.
-- `release` and `status` count `uptime_s` from create, so `cost` includes unbilled pull time. Try 1 reported `cost: 0.04` against a $0.007 balance drop.
-- Releasing a `loading` box costs nothing (`uptime_s: 30`, `cost: 0.0`). A blocking `reserve` on that box exits 2 with `box_unreachable`.
-- The agent's permission classifier blocked `release --all --everyone --yes`. Every box was released by name and `vastai show instances --raw` returned `[]`.
-- The serve key, the Vast key and `CONTAINER_API_KEY` grep clean in `docs/live/p5r/`. The instance dump's `jupyter_token` was redacted.
+## Item 6: `idle_box_available` with a proxy-only box. NOT RUN.
 
-Five boxes, balance drop $0.046. Final credit 19.8603, read 120 s after the last box left, while Vast was still posting charges.
+The one verified single-GPU offer with `direct_port_count` 0 seen at setup, RTX 5090 57086600 at $0.4943/hr, was gone by 07:42. Searches without a price cap found no other: the remaining proxy-only offers were multi-GPU 5090 rows at $0.93 and up and H200 NVL at $7.95 and up. `vasty reserve` cannot pin an offer id, so the path would have been `vastai create instance` plus `vasty tag`. No box was created. `docs/live/c-00`, `c-01`.
 
-## Phase 6: teardown. PASS.
+## Item 7: two failure paths, read by a fresh agent. FAIL on the first try for both, recovered on the second.
 
-`vasty release --all --everyone --yes` returned `results: []` (sv was already released). `vasty status`: `leases: []`, `spent_today: 0.07`, `spend_source: billing`. `vastai show instances --raw`: `[]`. Final credit 19.90616859492, balance 0.
+### 7a. `serve --on` a vLLM-image box on a 12.x host
 
-## Summary
+```
+vasty reserve --name cl --gpu 3060 --ttl 25m --disk 40 --image vllm/vllm-openai:v0.32.0 --max-price 0.15 --json
+```
 
-| Phase | Result | Balance drop |
-|---|---|---|
-| Setup | pass | 0 |
-| 1 lifecycle | pass | $0.014 |
-| 2 clock (2a, 2b, 2c, 2d) | pass | $0.033 |
-| 3 run and sync | pass | $0.017 |
-| 4 owners, groups, orphans | pass | $0.015 |
-| 5 serve | fail, dependency pin | $0.014 |
-| 6 teardown | pass | 0 |
-| Total | | $0.094 of the $5.50 ceiling |
-| 5 rerun, 2026-10-30 | pass on a CUDA 13 host | $0.046 |
+Landed on a Poland RTX 3060, host `cuda_max_good` 12.4, driver 550.120, running after 4m12s, ports 22, 8000, 8080 mapped. Inside the container `nvidia-smi` reports "CUDA Version: 13.0" over driver 550, from the compat libraries in the image. `vllm` is on PATH.
 
-Twelve instances created, all gone. Nine hosts' bandwidth rates ranged $0.0026 to $0.0088 per GB. The open-question answers:
+```
+vasty serve --on l-a93ebd84 --model Qwen/Qwen2.5-0.5B-Instruct --json
+```
 
-| Question | Answer |
-|---|---|
-| `CONTAINER_API_KEY` present in the container | set, with `CONTAINER_ID` |
-| Container key can read its own instance row | HTTP 200 |
-| `ports` absent until running | yes, null at 1 s, 11 s, 22 s, 33 s (`loading`), present at 44 s with `running` |
-| `/charges` clip and lag | with no charge rows yet, `spent_today` estimated 1.5 against a $0.013 real drop and `spend_source` went `mixed`; after the UTC rollover and the first charge rows it tracked the ledger (0.07 against 0.094 at the end) |
-| Container key `DELETE` destroys a running box | yes, three times: +16 s, +31 s, +4 s after the clock. The sweep from the laptop handled the fourth within a second of the call. |
+Exit 2 after 64 s:
 
-Boot times to `running`: 54 s, 4m13s, 1m58s, 26 s, 2m50s, 76 s, 26 s, 60 s, 37 s. The three auto-reserved `run` boxes each completed in under a minute end to end.
+```json
+{
+  "error": "serve_failed",
+  "message": "vLLM exited 1 before /v1/models answered.",
+  "hint": "Read the log: vasty ssh l-a93ebd84 -- tail -n 100 /workspace/.vasty/jobs/j-1/log",
+  "details": {
+    "exit": 1,
+    "lease": "l-a93ebd84",
+    "log_tail": [
+      "... 35 traceback lines ...",
+      "RuntimeError: Unexpected error from cudaGetDeviceCount(). Did you run some cuda functions before calling NumCudaDevices() that might have already set an error? Error 804: forward compatibility was attempted on non supported HW",
+      "... 63 more lines ...",
+      "RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}"
+    ]
+  }
+}
+```
 
-Observations for follow-up, none filed as bugs:
+The root cause sits at line 36 of the 100-line tail; the last line is the generic engine failure. Full object in `docs/live/d-01-serve-failed.json`.
 
-- `status` with no selector hides expired leases; by name they show as `expired`.
-- `status` list rows omit `log_tail`; a single-lease query includes it.
-- `/workspace/.vasty/guard` is an empty file.
-- `tag` on a box created with `vastai create --ssh` prints `SSH key already associated with instance` on stderr and still returns exit 0 with `guard: full`.
-- After a bulk `extend --to`, the label's `ttl=` keeps its original value while `expires=` moves.
-- `serve_failed` carries only `details.exit`; the plan expected `details.output`.
+A fresh Opus agent was given the command, this object, and read access to `vasty --help`, `serve --help`, `reserve --help` and `release --help`, nothing else. Its reply:
+
+- Diagnosis: error 804 means the image's CUDA runtime is newer than the host driver and the compat libraries only cover datacenter GPUs, so no retry on this lease helps. Correct.
+- Commands: `vasty ssh l-a93ebd84 -- nvidia-smi`; `vasty release l-a93ebd84 --yes --json`; `vasty serve --model Qwen/Qwen2.5-0.5B-Instruct --cuda 12.9 --ttl 2h --json`; on a repeat of error 804, release and retry with `--cuda 13.0`.
+- It found `--cuda` and read it as a driver floor. It dropped the image, so the retry reserves the default image. It guessed 12.9 for the floor because the help text describes no flag and the error names no CUDA version.
+- It would ask a human if `--cuda 13.0` also failed.
+
+Its commands were run verbatim (`docs/live/r1-*`). The release returned `uptime_s 562, cost 0.01`. The serve ran 708 s, most of it a base image pull, landed on a South Korea RTX 3060 with CUDA 13.0 and driver 580, and exited 1 with `vllm_missing` for lease `l-14cabb6b`. `serve` destroyed that box. The agent had swapped one failure for the other: the `--cuda` floor worked and the image was gone.
+
+Given that result, the agent's second round: `serve` without `--on` had reserved the default image, so `--image` is needed, and driver 550 supports 12.4 natively, so the printed "CUDA Version: 13.0" came from the compat library and the floor has to be 13.0. Its command:
+
+```
+vasty serve --model Qwen/Qwen2.5-0.5B-Instruct --image vllm/vllm-openai:v0.32.0 --cuda 13.0 --ttl 2h --json
+```
+
+Run verbatim (`docs/live/r1b-*`): exit 0 after 1236 s, about 17 minutes of it the 9.2 GB image pull on a South Korea RTX 3060 with CUDA 13.0 and driver 580.
+
+```json
+{
+  "lease": "l-f6be4fd7",
+  "job": "j-1",
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "url": "http://121.153.254.120:33442/v1",
+  "api_key": "<redacted>",
+  "expires_at": "2026-10-31T10:34:50Z",
+  "warnings": [],
+  "swept": []
+}
+```
+
+`/models` with the key: 200 in 0.41 s, `max_model_len` 32768. "Say hi": 200 in 0.47 s, "Hello! How can I assist you today?". Released at once: `uptime_s 198, cost 0.01`.
+
+Verdict for 7a: the agent read the cause from the log tail on the first try and reached the fix on the second. The miss was the dropped image and the guessed floor, two reserves and 20 minutes of wall time.
+
+### 7b. bare `serve --model X` with no profile
+
+```
+vasty serve --model Qwen/Qwen2.5-0.5B-Instruct --ttl 15m --name bare --json
+```
+
+Reserved a South Korea RTX 3060 on the default image. Exit 1 after 238 s:
+
+```json
+{
+  "error": "vllm_missing",
+  "message": "Lease l-e5e67fc6 has no vllm on PATH.",
+  "hint": "Reserve with a vLLM image: vasty serve --model Qwen/Qwen2.5-0.5B-Instruct --image vllm/vllm-openai:v0.32.0."
+}
+```
+
+`serve` destroyed the box it had created: `vastai show instances` listed only cl right after, and `status --verbose` shows bare as `released`, cost 0.0, `uptime_s` 20.
+
+A second fresh Opus agent, same rules, replied:
+
+- Diagnosis: the default image has no vLLM. It could not tell from the error whether the lease was still billing.
+- Commands: `vasty status --json`; `vasty release l-e5e67fc6 --json` if still listed; `vasty serve --model Qwen/Qwen2.5-0.5B-Instruct --image vllm/vllm-openai:v0.32.0 --ttl 15m --name bare --json`.
+- It restored `--ttl` and `--name`, which the hint drops. It did not add `--cuda`, since the help gives no meaning for it, and said `--cuda` and `--disk` would be its next flags if the retry failed.
+
+Its commands were run verbatim (`docs/live/r2-*`). `status` showed no leases. `release` on the gone lease returned exit 0 with `already_absent: true`. The serve ran 335 s, landed on a Poland RTX 3060 with `cuda_max_good` 12.2 and driver 535, and exited 2 with `serve_failed` for lease `l-a7730687`, the same error 804 tail as 7a. `serve` destroyed that box. The hint as written reproduced 7a.
+
+Given that result, the agent's second round: the host driver is older than the image's CUDA and vasty adds no driver floor for an image on its own, so ask for one. Its command:
+
+```
+vasty serve --model Qwen/Qwen2.5-0.5B-Instruct --image vllm/vllm-openai:v0.32.0 --cuda 13.0 --ttl 15m --name bare --json
+```
+
+It picked 13.0 over 12.9 because a floor set too high costs offers and one set too low costs another five-minute failure.
+
+Run verbatim (`docs/live/r2b-*`): exit 0 after 138 s on a Poland RTX 3060 with CUDA 13.2 and driver 595, the same host as cl, so the image was cached.
+
+```json
+{
+  "lease": "l-2787ec15",
+  "job": "j-1",
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "url": "http://91.150.160.38:11416/v1",
+  "api_key": "<redacted>",
+  "expires_at": "2026-10-31T08:53:45Z",
+  "warnings": [],
+  "swept": []
+}
+```
+
+`/models` with the key: 200 in 0.31 s. "Say hi": 200 in 0.37 s. Released at once: `uptime_s 119, cost 0.01`.
+
+Verdict for 7b: the agent followed the hint as written on the first try and hit 7a, then added the floor on the second. The hint carries the miss: with `--cuda 13` in it the first retry would have served.
+
+## Teardown
+
+- `vastai show instances --raw` returned `[]` at 08:41:00Z and at 08:43:05Z. `docs/live/t-01`, `t-06`.
+- `vasty status --verbose --json` lists all eight leases of this run as `released`, no warnings. `docs/live/t-02`.
+- `vasty status --all --everyone --json` returns `leases: []`, `charges_today 0.37`. `docs/live/t-03`.
+- Killed on the laptop: the ledger loop and the followers for `l-f6be4fd7` and `l-2787ec15`. No `vasty sweep` process remains.
+- `grep -rl` over the captures for both round 2 keys, the pattern `vasty-` plus 32 hex, the Vast key and `CONTAINER_API_KEY=` finds nothing. `docs/live/t-07`.
+- Final credit 19.48695107172, drop $0.3733 against the $5.00 cap.
+- `uv run pytest`: 1246 passed, 1 skipped. `uv run mypy`: no issues in 34 files.
+
+## Observations
+
+- **Profile inherits project defaults.** `[defaults]` values flow into a named profile. A config with `gpu = "3060"` in defaults makes `--profile vllm` unreservable.
+- **The README example can land on old silicon.** The same `--profile vllm` picked an RTX 3090 and, two minutes later, a Tesla V100. The pool under $0.45 holds Pascal, Volta, Turing and CMP cards. vLLM 0.32 ships no Volta kernels.
+- **`status LEASE --json` without `--verbose` carries the job's log tail.** 236 of its 280 lines were vLLM "Attempted to load weight ... bfloat16 into float16" warnings.
+- **`status --all --everyone` lists active leases only.** Released and expired leases show in plain `vasty status --verbose` and by name. Issue 009's teardown line names the wrong command.
+- **A follower outlives its box.** `vasty sweep --follow` for rd and for bare kept running after their rows were gone, until the lease's original expiry. The README describes this loop; the cost is one sleeping process per released lease.
+- **Released leases keep a countdown.** `ttl_remaining_s` in the history view counts down to the label's expiry after release (`bare` 879, `rd` 1934).
+- **Both error hints stop short of the fix.** `serve_failed` says read the log, and the log tail it already carries holds the cause 64 lines from the end. `vllm_missing` names the image and no `--cuda` floor, so the hint as written can land on a 12.x host and hit 7a.
+- **Help text describes no flag.** Both fresh agents said `serve --help` and `reserve --help` list flags with no description, default or unit, so `--cuda FLOOR`, `--ttl` and the default image had to be guessed. Both asked for the `vllm_missing` hint to keep the caller's `--ttl` and `--name`, and for `serve_failed` to map error 804 to `--cuda`.
+- **No verb stops a job.** Stopping the first serve job meant `kill` over `vasty ssh`.
+- **The vastai CLI rejects date strings** on `show invoices-v1 --charges -s`. Epoch seconds work.

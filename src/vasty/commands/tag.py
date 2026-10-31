@@ -4,10 +4,10 @@ On a lease, `tag` rewrites `name`, `group` and `owner` in the label and keeps
 unknown fields and the clock. Before the first write, `tag` checks every
 target whose name or owner changes for name conflicts and formats every new
 label. On an orphan, `tag` writes a new `vasty:` label with `expires = now + ttl`
-and `miss` listing every guard layer, then attaches the SSH key and runs the
-adoption script over SSH. The label stays when a later step fails; the lease
-then shows `guard: partial` and later networked commands retry the missing
-steps (see `engine`).
+and `miss` listing every guard layer, then attaches the SSH key, runs the
+adoption script over SSH and starts a detached `vasty sweep --follow`. The label stays when a later step fails; the lease
+then carries a `guard_partial` warning and later networked commands retry the
+missing steps (see `engine`).
 """
 
 from __future__ import annotations
@@ -15,16 +15,16 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import shlex
-from decimal import Decimal
 
-from vasty import budget, engine, ids, labels, views
+from vasty import engine, ids, labels, views
 from vasty.cli import Outcome
 from vasty.commands._common import taken_ids
+from vasty.commands.sweep import spawn_follow
 from vasty.context import Context
 from vasty.errors import VastyError, invalid
 from vasty.ids import orphan_id
 from vasty.keys import public_key
-from vasty.models import HISTORY_STATES, CachedLease, Instance, Label, TagResult, WarningItem
+from vasty.models import HISTORY_STATES, CachedLease, Instance, Label, TagResult
 from vasty.state import GUARD_LAYERS, derive_state, effective_expiry
 from vasty.timeutil import format_duration, parse_duration
 
@@ -114,27 +114,27 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
 
     snap = engine.refresh(ctx)
     resolved = resolve_target(ctx, snap, args, write=True)
-    warnings: list[WarningItem] = []
+    not_spawned = None
     if resolved.orphans:
-        lease, extra = adopt(ctx, snap, resolved.orphans[0], setters, ttl)
-        results = [lease]
-        warnings += extra
+        results = [adopt(ctx, snap, resolved.orphans[0], setters, ttl)]
+        not_spawned = spawn_follow(ctx, results[0].lease)
     else:
         if ttl is not None:
             raise invalid("--ttl applies to orphans only.", "vasty extend LEASE --by 30m")
         results = update(ctx, snap, resolved.leases, setters)
     warnings = (
         views.warnings_for(results, snap.now, ctx.settings.warn_before_expiry)
-        + warnings
         + list(snap.warnings)
     )
+    if not_spawned is not None:
+        warnings.append(not_spawned)
     entries = [views.tag_entry(lease, snap.now) for lease in results]
     result = TagResult(results=entries, warnings=warnings, swept=snap.swept)
     human = None
     if ctx.mode == "human":
         lines = [
             f"{e.lease}  name={e.name or '—'}  group={e.group or '—'}  owner={e.owner}  "
-            f"expires {format_duration(e.ttl_remaining_s or 0)}  guard {e.guard}"
+            f"expires {format_duration(e.ttl_remaining_s or 0)}"
             for e in entries
         ]
         human = "\n".join(lines) if lines else "no leases matched"
@@ -185,8 +185,8 @@ def _write_failed(lease: CachedLease, written: list[str], why: str) -> VastyErro
 
 def adopt(
     ctx: Context, snap: engine.Snapshot, inst: Instance, setters: Setters, ttl: int | None
-) -> tuple[CachedLease, list[WarningItem]]:
-    """Give an orphan a `vasty:` label and a guard. Return the lease and the budget warnings.
+) -> CachedLease:
+    """Give an orphan a `vasty:` label and a guard and return the lease.
 
     Raise `invalid_arguments` for an unreadable `vasty:` label or a missing
     `--ttl`, and `name_conflict` for a name the owner already uses.
@@ -209,7 +209,6 @@ def adopt(
     )
     check_names(snap, {lease_id: label})
     text = labels.format_label(label)
-    warnings = _budget_warnings(ctx, snap, budget.cost(inst.dph_total, ttl))
 
     row = ctx.provider.get_instance(inst.id)
     if row is None:
@@ -234,7 +233,7 @@ def adopt(
         lease.last_provider_error = str(err)
     finally:
         engine.store_lease(ctx, lease)
-    return lease, warnings
+    return lease
 
 
 def _guard_steps(ctx: Context, lease: CachedLease) -> None:
@@ -247,7 +246,9 @@ def _guard_steps(ctx: Context, lease: CachedLease) -> None:
             ctx.provider.attach_ssh_key(key, lease.instance_id)
         except VastyError as err:
             ctx.warn(f"vasty: could not attach the SSH key to {lease.lease}: {err.message}")
-    missing = ctx.box.adopt(engine.ssh_target(lease), effective_expiry(lease.label))
+    missing = ctx.box.adopt(
+        engine.ssh_target(lease), effective_expiry(lease.label), engine.provider_now(ctx)
+    )
     present = set(missing)
     lease.guard_missing = [layer for layer in GUARD_LAYERS if layer in present]
 
@@ -259,15 +260,3 @@ def _record_miss(ctx: Context, lease: CachedLease) -> None:
     label = dataclasses.replace(lease.label, miss=list(lease.guard_missing))
     if engine.write_label(ctx, lease.instance_id, lease.label.expires, label):
         lease.label = label
-
-
-def _budget_warnings(ctx: Context, snap: engine.Snapshot, extra: Decimal) -> list[WarningItem]:
-    try:
-        projected, _ = engine.projection_for(ctx, snap, extra)
-    except VastyError as err:
-        if err.code != "spend_unavailable":
-            raise
-        return [budget.spend_unavailable_warning()]
-    low = budget.budget_low_warning(projected, ctx.settings.daily_budget)
-    return [low] if low is not None else []
-

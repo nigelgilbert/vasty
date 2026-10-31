@@ -5,11 +5,11 @@ from typing import Any
 
 import pytest
 
-from fakes import NOW, Harness, add_lease, lease_label
+from fakes import NOW, START, Harness, add_lease, lease_label
 from vasty import engine
 from vasty.errors import VastyError
 from vasty.labels import parse
-from vasty.models import Instance, Job, Label
+from vasty.models import Balance, Instance, Job, Label
 from vasty.timeutil import iso
 
 
@@ -393,12 +393,12 @@ def test_reconcile_gone_with_time_left(harness: Harness) -> None:
 
 def test_reconcile_adopts_another_machines_lease(harness: Harness) -> None:
     add_lease(harness, "l-0000b001", label={"owner": "nick", "name": "scratch"},
-              gpu_name="RTX 4090", dph_total=Decimal("0.38"), image="vasty/base:cuda12.4")
+              gpu_name="RTX 4090", dph_total=Decimal("0.38"), image="vastai/base-image:cuda-12.6.3-auto")
     snap = refresh(harness)
     lease = snap.leases["l-0000b001"]
     assert lease.state == "running"
     assert (lease.gpu, lease.price_per_hr, lease.image) == ("RTX 4090", Decimal("0.38"),
-                                                             "vasty/base:cuda12.4")
+                                                             "vastai/base-image:cuda-12.6.3-auto")
     assert (lease.ssh_host, lease.ssh_port) == ("198.51.100.9", 40022)
     assert lease.ports == {22: 40022, 8000: 40080, 8080: 40081}
     assert "l-0000b001" in harness.context().cache.load().leases
@@ -466,6 +466,56 @@ def test_probe_copies_clock_file_to_label(harness: Harness) -> None:
     assert label_of(harness, row.id).expires == NOW + 1234
     assert snap.leases["l-0000a001"].label.expires == NOW + 1234
     assert snap.leases["l-0000a001"].reachable_at == NOW
+
+
+def test_probe_copies_clock_file_to_label_minus_skew(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": None})
+    box = harness.box.state(row.id)
+    box.clock_offset = 300
+    box.clock = NOW + 1234 + 300
+    snap = refresh(harness)
+    lease = snap.leases["l-0000a001"]
+    assert label_of(harness, row.id).expires == NOW + 1234
+    assert lease.clock_skew == 300
+    assert lease.clock_skew_unknown is False
+    assert box.clock == NOW + 1234 + 300
+    assert "clock_file" not in lease.guard_missing
+
+
+def test_probe_rewrites_clock_in_box_time(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": NOW + 1800})
+    box = harness.box.state(row.id)
+    box.clock_offset = -500
+    box.clock = NOW + 1800
+    lease = refresh(harness).leases["l-0000a001"]
+    assert box.clock == NOW + 1800 - 500
+    assert lease.clock_skew == -500
+    assert "clock_file" not in lease.guard_missing
+
+
+def test_unverified_clock_skips_translation(harness: Harness) -> None:
+    harness.provider.date_header = False
+    row = add_lease(harness, label={"expires": None})
+    box = harness.box.state(row.id)
+    box.clock_offset = 300
+    box.clock = NOW + 1234
+    lease = refresh(harness).leases["l-0000a001"]
+    assert label_of(harness, row.id).expires == NOW + 1234
+    assert lease.clock_skew is None
+    assert box.clock == NOW + 1234
+
+
+def test_probe_without_box_time_marks_skew_unknown(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": None})
+    box = harness.box.state(row.id)
+    box.box_now_hidden = True
+    box.clock = NOW + 1234
+    lease = refresh(harness).leases["l-0000a001"]
+    assert label_of(harness, row.id).expires == NOW + 1234
+    assert lease.clock_skew is None and lease.clock_skew_unknown is True
+    box.box_now_hidden = False
+    lease = refresh(harness).leases["l-0000a001"]
+    assert lease.clock_skew == 0 and lease.clock_skew_unknown is False
 
 
 def test_probe_writes_and_clears_miss(harness: Harness) -> None:
@@ -543,6 +593,16 @@ def test_probe_skipped_when_not_running(harness: Harness) -> None:
     assert refresh(harness).leases["l-0000a001"].state == "pending"
     add_lease(harness, "l-0000a002", actual_status="stopped")
     assert refresh(harness).leases["l-0000a002"].state == "stopped"
+
+
+def test_running_at_set_on_first_running_sample(harness: Harness) -> None:
+    row = add_lease(harness, actual_status="loading")
+    assert refresh(harness).leases["l-0000a001"].running_at is None
+    harness.time.advance(60)
+    harness.provider.instances[row.id].actual_status = "running"
+    assert refresh(harness).leases["l-0000a001"].running_at == NOW + 60
+    harness.time.advance(60)
+    assert refresh(harness).leases["l-0000a001"].running_at == NOW + 60
 
 
 def test_probe_false_keeps_state(harness: Harness) -> None:
@@ -672,7 +732,7 @@ def test_failed_adoption_rerun_keeps_layers_in_label(
 
     row = adopted_orphan(harness, reachable=True)
 
-    def fail(target: SshTarget, expires: int) -> list[str]:
+    def fail(target: SshTarget, expires: int, provider_now: int | None = None) -> list[str]:
         raise BoxUnreachableError("adopt failed")
 
     monkeypatch.setattr(harness.box, "adopt", fail)
@@ -688,7 +748,7 @@ def test_held_adoption_rerun_keeps_layers_in_label(
 
     row = adopted_orphan(harness, reachable=True)
 
-    def fail(target: SshTarget, expires: int) -> list[str]:
+    def fail(target: SshTarget, expires: int, provider_now: int | None = None) -> list[str]:
         raise BoxUnreachableError("adopt failed")
 
     monkeypatch.setattr(harness.box, "adopt", fail)
@@ -734,7 +794,7 @@ def test_marker_without_guard_file_or_startup_keeps_layers_and_reruns(
     box.adopted = True
     real_adopt = harness.box.adopt
 
-    def fail(target: SshTarget, expires: int) -> list[str]:
+    def fail(target: SshTarget, expires: int, provider_now: int | None = None) -> list[str]:
         raise BoxUnreachableError("adopt failed")
 
     monkeypatch.setattr(harness.box, "adopt", fail)
@@ -793,118 +853,98 @@ def test_ssh_target_direct_and_proxy(harness: Harness) -> None:
     assert exc.value.code == "lease_pending"
 
 
-# Spend and budget.
+# Billing.
 
 
-def test_spend_sources_and_charges_cache(harness: Harness) -> None:
-    add_lease(harness, dph_total=Decimal("0.60"))
+def calls(harness: Harness, name: str) -> list[Any]:
+    return [arg for call, arg in harness.provider.calls if call == name]
+
+
+def test_read_charges_caches_for_60s(harness: Harness) -> None:
+    add_lease(harness)
     harness.provider.billed = {999: Decimal("1.00")}
-    harness.provider.covered_through = NOW - 1800
     ctx = harness.context()
     snap = engine.refresh(ctx)
-    spent, source = engine.spend(ctx, snap)
-    # With no start_date the estimate runs from covered_through, NOW - 1800, past the label's created.
-    assert spent == Decimal("1.30")
-    assert source == "mixed"
-    charge_calls = lambda: [c for c in harness.provider.calls if c[0] == "charges"]  # noqa: E731
-    assert len(charge_calls()) == 1
+    engine.read_charges(ctx, snap)
+    charges = snap.charges
+    assert charges is not None
+    assert charges.per_instance == {999: Decimal("1.00")}
+    assert charges.today == Decimal("1.00")
+    assert len(calls(harness, "charges")) == 1
     harness.time.advance(30)
-    engine.spend(ctx, engine.refresh(ctx))
-    assert len(charge_calls()) == 1
+    engine.read_charges(ctx, engine.refresh(ctx))
+    assert len(calls(harness, "charges")) == 1
     harness.time.advance(31)
-    engine.spend(ctx, engine.refresh(ctx))
-    assert len(charge_calls()) == 2
+    engine.read_charges(ctx, engine.refresh(ctx))
+    assert len(calls(harness, "charges")) == 2
 
 
-def test_spend_runs_from_start_date_over_label(harness: Harness) -> None:
-    add_lease(harness, dph_total=Decimal("0.60"), start_date=NOW - 300)
+def test_charges_start_reaches_back_to_the_oldest_lease(harness: Harness) -> None:
+    ctx = harness.context()
+    engine.read_charges(ctx, engine.refresh(ctx))
+    assert calls(harness, "charges") == [(START, NOW)]
+    add_lease(harness, label={"created": START - 3600, "ttl": 4 * 3600})
+    engine.read_charges(ctx, engine.refresh(ctx))
+    assert calls(harness, "charges")[-1] == (START - 86_400, NOW)
+    assert ctx.cache.load().charges_start == START - 86_400
+
+
+def test_read_charges_failure_sets_none(harness: Harness) -> None:
     harness.provider.billed = {999: Decimal("1.00")}
-    harness.provider.covered_through = NOW - 1800
     ctx = harness.context()
-    spent, source = engine.spend(ctx, engine.refresh(ctx))
-    # Start the estimate at start_date, NOW - 300, while the label's created stays at NOW - 600.
-    assert spent == Decimal("1.05")
-    assert source == "mixed"
-
-
-def test_spend_billing_and_estimated(harness: Harness) -> None:
-    ctx = harness.context()
-    harness.provider.billed = {1: Decimal("2.00")}
-    harness.provider.covered_through = NOW
+    engine.read_charges(ctx, engine.refresh(ctx))
+    harness.time.advance(61)
+    harness.provider.fail["charges"] = VastyError("provider_error", "down", "retry")
     snap = engine.refresh(ctx)
-    assert engine.spend(ctx, snap) == (Decimal("2.00"), "billing")
-    add_lease(harness, label={"ttl": 7200}, dph_total=Decimal("1.00"))
-    harness.provider.billed = {}
-    harness.time.advance(3600)
-    snap = engine.refresh(ctx)
-    spent, source = engine.spend(ctx, snap)
-    assert (spent, source) == (Decimal("1.00"), "estimated")
+    assert snap.charges is not None
+    engine.read_charges(ctx, snap)
+    assert snap.charges is None
 
 
-def test_spend_unknown_coverage(harness: Harness) -> None:
+def test_read_balance_caches_balance_and_credit(harness: Harness) -> None:
+    harness.provider.account_balance = Decimal("0")
+    harness.provider.account_credit = Decimal("19.90")
     ctx = harness.context()
     snap = engine.refresh(ctx)
-    assert engine.spend(ctx, snap) == (None, None)
-    with pytest.raises(VastyError) as exc:
-        engine.budget_check(ctx, snap, Decimal("1"))
-    assert exc.value.code == "spend_unavailable"
-
-
-def test_budget_check_refuses_and_reports(harness: Harness) -> None:
-    add_lease(harness, label={"expires": NOW + 3600}, dph_total=Decimal("2.00"))
-    harness.provider.billed = {1: Decimal("5.00")}
-    harness.provider.covered_through = NOW
-    ctx = harness.context()
-    snap = engine.refresh(ctx)
-    projected, daily = engine.budget_check(ctx, snap, Decimal("1.00"))
-    assert (projected, daily) == (Decimal("8.00"), Decimal("10.00"))
-    with pytest.raises(VastyError) as exc:
-        engine.budget_check(ctx, snap, Decimal("4.00"))
-    assert exc.value.code == "budget_exceeded"
-    assert exc.value.details == {"projected": 11.0, "remaining": 3.0, "daily_budget": 10.0}
-
-
-def test_budget_check_replace_expiry(harness: Harness) -> None:
-    add_lease(harness, label={"expires": NOW + 3600}, dph_total=Decimal("2.00"))
-    harness.provider.covered_through = NOW
-    ctx = harness.context()
-    snap = engine.refresh(ctx)
-    projected, _ = engine.budget_check(ctx, snap, replace={"l-0000a001": NOW + 7200})
-    assert projected == Decimal("4.00")
-    with pytest.raises(VastyError):
-        engine.budget_check(ctx, snap, replace={"l-0000a001": NOW + 6 * 3600})
-    shorter, _ = engine.budget_check(ctx, snap, replace={"l-0000a001": NOW + 60})
-    assert shorter < Decimal("2.00")
-
-
-def test_locked_active_takes_cache_state_and_keeps_snapshot_only_leases(harness: Harness) -> None:
-    add_lease(harness, "l-0000a001", dph_total=Decimal("1.00"))
-    add_lease(harness, "l-0000a002", dph_total=Decimal("1.00"))
-    ctx = harness.context()
-    snap = engine.refresh(ctx)
+    engine.read_balance(ctx, snap)
+    assert snap.balance == Balance(Decimal("0"), Decimal("19.90"))
     data = ctx.cache.load()
-    data.leases["l-0000a001"].state = "released"
-    del data.leases["l-0000a002"]
-    data.leases["l-0000a003"] = engine.lease_from_row(
-        harness.provider.add_instance(label=lease_label("l-0000a003")),
-        Label(lease="l-0000a003", owner="claude", created=NOW, ttl=3600),
-    )
-    ctx.cache.save(data)
-    assert [lease.lease for lease in engine.locked_active(ctx, snap)] == ["l-0000a002", "l-0000a003"]
+    assert (data.balance, data.credit, data.balance_at) == (Decimal("0"), Decimal("19.90"), NOW)
+    harness.time.advance(59)
+    engine.read_balance(ctx, engine.refresh(ctx))
+    assert len(calls(harness, "balance")) == 1
+    harness.time.advance(1)
+    harness.provider.fail["balance"] = VastyError("provider_error", "down", "retry")
+    engine.read_balance(ctx, engine.refresh(ctx))
+    data = ctx.cache.load()
+    assert (data.balance, data.credit, data.balance_at) == (Decimal("0"), Decimal("19.90"), NOW)
 
 
-def test_budget_check_counts_cache_lease_added_after_refresh(harness: Harness) -> None:
-    harness.provider.covered_through = NOW
+def test_cached_snapshot_keeps_billing_read_today_only(harness: Harness) -> None:
+    harness.provider.billed = {999: Decimal("1.00")}
     ctx = harness.context()
     snap = engine.refresh(ctx)
-    row = harness.provider.add_instance(label=lease_label("l-0000a001"), dph_total=Decimal("2.00"))
-    engine.store_lease(ctx, engine.lease_from_row(
-        row, Label(lease="l-0000a001", owner="claude", created=NOW, ttl=3600, expires=NOW + 3600),
-    ))
-    assert engine.budget_check(ctx, snap)[0] == Decimal("0")
-    with ctx.cache.lock():
-        projected, _ = engine.budget_check(ctx, snap, leases=engine.locked_active(ctx, snap))
-    assert projected == Decimal("2.00")
+    engine.read_charges(ctx, snap)
+    engine.read_balance(ctx, snap)
+    cached = engine.cached_snapshot(ctx)
+    assert cached.charges == snap.charges
+    assert cached.balance == snap.balance
+    harness.time.advance(86_400)
+    cached = engine.cached_snapshot(ctx)
+    assert cached.charges is None
+    assert cached.balance is None
+
+
+def test_cached_snapshot_keeps_balance_read_earlier_today(harness: Harness) -> None:
+    harness.provider.account_credit = Decimal("19.90")
+    ctx = harness.context()
+    snap = engine.refresh(ctx)
+    engine.read_balance(ctx, snap)
+    harness.time.advance(6 * 3600)
+    engine.refresh(ctx)
+    cached = engine.cached_snapshot(ctx)
+    assert cached.cached_at == NOW + 6 * 3600
+    assert cached.balance == snap.balance
 
 
 # Guard of a lease no probe on this machine has answered.

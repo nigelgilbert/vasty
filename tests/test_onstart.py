@@ -18,7 +18,6 @@ import pytest
 
 from vasty.errors import VastyError
 from vasty.onstart import (
-    IMAGE_WATCHDOG,
     ONSTART_LIMIT,
     STARTUP_INTERRUPTED,
     adopt_script,
@@ -72,9 +71,18 @@ class Watchdog:
             self.stubs / "curl",
             "#!/bin/sh\n"
             "printf '%s\\037' \"$@\" >>\"$STUB_DIR/curl.log\"; echo >>\"$STUB_DIR/curl.log\"\n"
+            'for a in "$@"; do [ "$a" = -w ] && cat "$STUB_DIR/curl_code" 2>/dev/null; done\n'
             'exit "$(cat "$STUB_DIR/curl_exit" 2>/dev/null || echo 0)"\n',
         )
         self.set_now(1000)
+        self.set_code("200")
+
+    def set_code(self, code: str) -> None:
+        (self.stubs / "curl_code").write_text(code)
+
+    def guard(self) -> list[str]:
+        path = self.root / "guard"
+        return path.read_text().split() if path.exists() else []
 
     def set_now(self, now: int) -> None:
         (self.stubs / "now").write_text(f"{now}\n")
@@ -114,11 +122,19 @@ class Watchdog:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
         )
 
-    def curl_calls(self) -> list[list[str]]:
+    def _curl_log(self) -> list[list[str]]:
         log = self.stubs / "curl.log"
         if not log.exists():
             return []
         return [line.split("\x1f")[:-1] for line in log.read_text().splitlines()]
+
+    def curl_calls(self) -> list[list[str]]:
+        """Return the DELETE calls."""
+        return [args for args in self._curl_log() if "-X" in args]
+
+    def key_checks(self) -> list[list[str]]:
+        """Return the authenticated GET calls of the key check."""
+        return [args for args in self._curl_log() if "-X" not in args]
 
     def sleeps(self) -> list[tuple[int, str]]:
         log = self.stubs / "sleeps"
@@ -282,6 +298,91 @@ def test_live_lock_holder_keeps_lock(wd: Watchdog) -> None:
         holder.wait()
 
 
+def test_key_check_runs_at_start_and_hourly(wd: Watchdog) -> None:
+    wd.set_env()
+    wd.set_clock("90000\n")
+    wd.hook(1, 'echo 2000 >"$STUB_DIR/now"')
+    wd.hook(2, 'echo 4601 >"$STUB_DIR/now"')
+    wd.run(max_loops=4)
+    checks = wd.key_checks()
+    assert len(checks) == 2
+    args = checks[0]
+    assert "Authorization: Bearer k-secret" in args
+    assert args[-1] == "https://console.vast.ai/api/v0/instances/123/"
+    assert "-X" not in args
+    assert wd.guard() == []
+
+
+def test_key_check_unauthorized_adds_destroy_key(wd: Watchdog) -> None:
+    wd.set_env()
+    wd.set_clock("5000\n")
+    wd.set_code("403")
+    done = wd.run(max_loops=1)
+    assert wd.guard() == ["destroy_key"]
+    assert "key check: HTTP 403" in done.stdout
+
+
+def test_key_check_pass_clears_destroy_key(wd: Watchdog) -> None:
+    wd.set_env()
+    wd.set_clock("5000\n")
+    (wd.root / "guard").write_text("destroy_key\nclock_file\n")
+    wd.run(max_loops=1)
+    assert wd.guard() == []
+
+
+def test_new_watchdog_keeps_a_refused_key_until_a_conclusive_check(wd: Watchdog) -> None:
+    wd.set_env()
+    wd.set_clock("5000\n")
+    (wd.root / "guard").write_text("destroy_key\n")
+    wd.set_code("000")
+    wd.run(max_loops=1)
+    assert wd.guard() == ["destroy_key"]
+    wd.set_code("200")
+    wd.run(max_loops=1)
+    assert wd.guard() == []
+
+
+def test_guard_file_is_published_before_alive(wd: Watchdog) -> None:
+    wd.set_env(key=None)
+    wd.set_clock("5000\n")
+    wd.run(max_loops=1)
+    assert (wd.root / "guard").stat().st_mtime <= (wd.root / "alive").stat().st_mtime
+
+
+@pytest.mark.parametrize("code", ["000", "500", "404", ""])
+def test_key_check_other_failures_change_nothing(wd: Watchdog, code: str) -> None:
+    wd.set_env()
+    wd.set_clock("5000\n")
+    (wd.root / "guard").write_text("destroy_key\n")
+    wd.set_code(code)
+    wd.run(max_loops=1)
+    assert wd.guard() == ["destroy_key"]
+    (wd.root / "guard").write_text("")
+    wd.run(max_loops=1)
+    assert wd.guard() == []
+
+
+def test_key_check_skipped_without_key(wd: Watchdog) -> None:
+    wd.set_env(key=None)
+    wd.set_clock("5000\n")
+    wd.run(max_loops=1)
+    assert wd.key_checks() == []
+    assert wd.guard() == ["destroy_key"]
+
+
+def test_missing_curl_marks_watchdog_each_loop(wd: Watchdog) -> None:
+    wd.set_env()
+    wd.set_clock("5000\n")
+    env = wd.env(1)
+    env["VASTY_CURL"] = "vasty-no-such-curl"
+    done = subprocess.run(["bash", str(wd.script)], env=env, capture_output=True, text=True,
+                          timeout=30)
+    assert done.returncode == 0, done.stderr
+    assert wd.guard() == ["watchdog"]
+    wd.run(max_loops=1)
+    assert wd.guard() == []
+
+
 def test_stale_lock_is_taken_over(wd: Watchdog) -> None:
     dead = subprocess.Popen(["true"])
     dead.wait()
@@ -306,25 +407,21 @@ class Box:
         self.workdir.mkdir()
         self.environ = tmp / "environ"
         self.environ.write_bytes(b"PATH=/bin\0")
-        self.watchdog = tmp / "image-watchdog.sh"
-        self.watchdog.write_text(watchdog_script())
 
-    def payload(self, ttl: int = 600, startup: str | None = None, custom: bool = False,
-                **kw: object) -> str:
+    def payload(self, ttl: int = 600, startup: str | None = None, **kw: object) -> str:
         args: dict[str, object] = dict(
             root=str(self.root), workdir=str(self.workdir), services=False,
-            proc_environ=str(self.environ), alive_wait=5.0,
+            proc_environ=str(self.environ), alive_wait=5.0, essentials=(),
         )
-        if not custom:
-            args["watchdog_path"] = str(self.watchdog)
         args.update(kw)
-        return build_payload(ttl, startup, custom, **args)  # type: ignore[arg-type]
+        return build_payload(ttl, startup, **args)  # type: ignore[arg-type]
 
     def run(self, payload: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         base = {
             "PATH": os.environ["PATH"],
             "VASTY_POLL": "1",
             "VASTY_MAX_LOOPS": "1",
+            "VASTY_API": "http://127.0.0.1:9",
             "CONTAINER_ID": "777",
             "CONTAINER_API_KEY": "ck-777",
         }
@@ -352,10 +449,9 @@ def box(tmp_path: Path) -> Box:
     return Box(tmp_path)
 
 
-def test_payload_parses_for_each_mode() -> None:
-    for custom in (False, True):
-        for startup in (None, "echo hi\n"):
-            bash_n(build_payload(1800, startup, custom))
+def test_payload_parses_with_and_without_startup() -> None:
+    for startup in (None, "echo hi\n"):
+        bash_n(build_payload(1800, startup))
 
 
 def test_onstart_writes_clock_env_guard_and_exit(box: Box) -> None:
@@ -392,15 +488,28 @@ def test_onstart_missing_key_marks_destroy_key(box: Box) -> None:
     assert not (box.root / "env").exists()
 
 
-def test_onstart_without_watchdog_marks_watchdog(box: Box) -> None:
-    box.run(box.payload(watchdog_path=str(box.tmp / "absent.sh"), alive_wait=0.4))
-    assert box.guard() == ["watchdog"]
+def test_onstart_leaves_the_guard_file_to_the_watchdog(box: Box) -> None:
+    box.root.mkdir(parents=True)
+    (box.root / "guard").write_text("clock_file\n")
+    box.run(box.payload())
+    assert box.guard() == []
+    assert '"$R/guard.tmp"' not in box.payload()
 
 
-def test_default_image_uses_image_watchdog() -> None:
-    payload = build_payload(600, None, False)
-    assert f"WD={IMAGE_WATCHDOG}" in payload
-    assert "VASTY_WATCHDOG_EOF" not in payload
+def test_onstart_marks_watchdog_when_it_does_not_start(box: Box) -> None:
+    stubs = box.tmp / "stubs"
+    stubs.mkdir()
+    write_exe(stubs / "nohup", "#!/bin/sh\nexit 0\n")
+    path = f"{stubs}:{os.environ['PATH']}"
+    box.run(box.payload(alive_wait=0.4), env={"PATH": path})
+    assert not (box.root / "guard").exists()
+    assert not (box.root / "alive").exists()
+
+
+def test_onstart_carries_watchdog_and_cron_line() -> None:
+    payload = build_payload(600, None)
+    assert "VASTY_WATCHDOG_EOF" in payload
+    assert 'command -v curl>/dev/null||case "$g" in *watchdog*);;*)g="$g watchdog";;esac' in payload
     assert "/etc/cron.d/vasty" in payload
     assert "* * * * * root" in payload
 
@@ -440,11 +549,11 @@ def test_startup_containing_the_delimiter_runs(box: Box) -> None:
     assert "line" in box.read("startup.log")
 
 
-def test_custom_image_installs_essentials_and_writes_watchdog(box: Box) -> None:
+def test_onstart_installs_essentials_and_writes_watchdog(box: Box) -> None:
     apt = box.tmp / "apt-get"
     write_exe(apt, f'#!/bin/sh\necho "$@" >>{box.tmp}/apt.log\n')
     essentials = (("vasty-missing-tool", "vasty-pkg"), ("sh", "sh-pkg"))
-    box.run(box.payload(custom=True, apt=str(apt), essentials=essentials))
+    box.run(box.payload(apt=str(apt), essentials=essentials))
     log = (box.tmp / "apt.log").read_text()
     assert "update -qq" in log
     assert "install -y -qq --no-install-recommends vasty-pkg" in log
@@ -453,15 +562,15 @@ def test_custom_image_installs_essentials_and_writes_watchdog(box: Box) -> None:
     assert box.guard() == []
 
 
-def test_custom_image_without_apt_is_unsupported(box: Box) -> None:
+def test_image_without_apt_is_unsupported(box: Box) -> None:
     essentials = (("vasty-missing-tool", "vasty-pkg"),)
-    box.run(box.payload(custom=True, apt=str(box.tmp / "no-apt"), essentials=essentials))
+    box.run(box.payload(apt=str(box.tmp / "no-apt"), essentials=essentials))
     assert "apt-get" in box.read("unsupported").split()
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="runs as root")
-def test_custom_image_without_root_is_unsupported(box: Box) -> None:
-    box.run(box.payload(custom=True, essentials=()))
+def test_image_without_root_is_unsupported(box: Box) -> None:
+    box.run(box.payload())
     assert "root" in box.read("unsupported").split()
 
 
@@ -469,27 +578,22 @@ def test_custom_image_without_root_is_unsupported(box: Box) -> None:
 
 
 def test_onstart_command_decodes_to_payload() -> None:
-    cmd = build_onstart(1800, "echo hi\n", False)
-    assert cmd.startswith("echo ") and cmd.endswith("|base64 -d|gunzip|bash")
-    assert decode_onstart(cmd) == build_payload(1800, "echo hi\n", False)
-
-
-def test_custom_onstart_checks_for_bash() -> None:
-    cmd = build_onstart(1800, None, True)
+    cmd = build_onstart(1800, "echo hi\n")
     assert cmd.startswith("command -v bash >/dev/null||")
-    assert "VASTY_WATCHDOG_EOF" in decode_onstart(cmd)
+    assert cmd.endswith("|base64 -d|gunzip|bash")
+    assert decode_onstart(cmd) == build_payload(1800, "echo hi\n")
 
 
-def test_onstart_sizes_fit() -> None:
-    sizes = {custom: len(build_onstart(1800, None, custom)) for custom in (False, True)}
-    print(f"onstart sizes: default={sizes[False]} custom={sizes[True]}", file=sys.stderr)
-    assert sizes[False] < sizes[True] <= ONSTART_LIMIT
+def test_onstart_size_fits() -> None:
+    size = len(build_onstart(1800, None))
+    print(f"onstart size: {size}", file=sys.stderr)
+    assert size <= ONSTART_LIMIT
 
 
 def test_large_startup_is_rejected() -> None:
     script = "".join(f"echo {os.urandom(16).hex()}\n" for _ in range(200))
     with pytest.raises(VastyError) as err:
-        build_onstart(1800, script, False)
+        build_onstart(1800, script)
     assert err.value.code == "startup_too_large"
     assert err.value.details is not None and err.value.details["size"] > ONSTART_LIMIT
 
@@ -501,11 +605,27 @@ def test_adopt_script_parses() -> None:
     bash_n(adopt_script(4102444800))
 
 
+def test_adopt_script_with_provider_now_parses() -> None:
+    bash_n(adopt_script(4102444800, provider_now=4102444000))
+
+
+def test_adopt_translates_the_clock_into_box_time(box: Box) -> None:
+    sent = int(time.time()) - 600
+    script = adopt_script(4102444800, provider_now=sent, root=str(box.root),
+                          workdir=str(box.workdir), services=False,
+                          proc_environ=str(box.environ), alive_wait=5.0)
+    done = box.run(script, env={"CONTAINER_ID": "", "CONTAINER_API_KEY": ""})
+    assert "clock_file" not in done.stdout
+    written = int(box.read("clock"))
+    assert 0 <= written - (4102444800 + 600) <= 5
+
+
 def test_adopt_writes_the_marker_before_the_guard() -> None:
     script = adopt_script(4102444800)
     marker = script.index(': >"$R/adopted"')
     assert script.count(': >"$R/adopted"') == 1
-    assert marker < script.index("printf '%s\\n' $g>\"$R/guard.tmp\"")
+    assert marker < script.index('nohup bash "$WD"')
+    assert '"$R/guard.tmp"' not in script
 
 
 def test_adopt_writes_clock_env_and_starts_watchdog(box: Box) -> None:

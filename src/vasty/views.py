@@ -1,11 +1,8 @@
 """Output builders shared by the commands.
 
-Lease cost uses billing when today's charges hold the instance and the lease
-started today, since charges cover the UTC day only. Billed amounts run to
-`covered_through`, and price × time fills the gap to now. `cost_source` is
-`billing` when the gap is zero, `mixed` when billing and an estimate both
-count, and `estimated` when the cost is price × uptime alone. Uptime runs from
-the label's `created`.
+Lease cost is the sum of Vast's charge rows for the instance, or None before
+Vast posts a row. Uptime runs from the first `running` sample and is None
+before it.
 
 This module imports only the standard library and vasty modules that do.
 """
@@ -17,7 +14,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-from vasty import budget, labels
+from vasty import labels
 from vasty.errors import VastyError
 from vasty.ids import orphan_id
 from vasty.models import (
@@ -35,6 +32,7 @@ from vasty.remote import SshTarget
 from vasty.state import (
     GUARD_LAYERS,
     LIVE_JOB_STATES,
+    busy,
     effective_expiry,
     guard,
     lease_warnings,
@@ -52,26 +50,23 @@ def uptime_end(lease: CachedLease, now: int) -> int:
     return lease.history_since if lease.history_since is not None else now
 
 
-def uptime_s(lease: CachedLease, now: int) -> int:
-    """Return seconds from the label's `created` to `uptime_end`, floored at 0."""
-    return max(0, uptime_end(lease, now) - lease.label.created)
+def uptime_s(lease: CachedLease, now: int) -> int | None:
+    """Return seconds from `running_at` to `uptime_end`, floored at 0, or None before it."""
+    if lease.running_at is None:
+        return None
+    return max(0, uptime_end(lease, now) - lease.running_at)
 
 
-def lease_cost(
-    lease: CachedLease, now: int, charges: Charges | None
-) -> tuple[Decimal, str]:
-    """Return the lease's cost so far and its `cost_source`."""
-    end = uptime_end(lease, now)
-    created = lease.label.created
-    billed = None
-    if charges is not None and created >= budget.day_start(now):
-        billed = charges.per_instance.get(lease.instance_id)
-    if billed is None or charges is None or charges.covered_through is None:
-        return budget.cost(lease.price_per_hr, max(0, end - created)), "estimated"
-    gap = max(0, end - max(charges.covered_through, created))
-    if gap == 0:
-        return billed, "billing"
-    return billed + budget.cost(lease.price_per_hr, gap), "mixed"
+def lease_cost(instance_id: int, charges: Charges | None) -> Decimal | None:
+    """Return the sum of Vast's charge rows for the instance, or None when none exist."""
+    if charges is None:
+        return None
+    return charges.per_instance.get(instance_id)
+
+
+def burn_per_hr(live: Iterable[Instance]) -> Decimal:
+    """Return the sum of `dph_total` over live leases and orphans."""
+    return sum((inst.dph_total for inst in live), Decimal("0"))
 
 
 def show_jobs_unknown(state: str) -> bool:
@@ -135,7 +130,7 @@ def _full_label(lease: CachedLease) -> str | None:
 
 
 def lease_verbose(lease: CachedLease) -> dict[str, Any]:
-    """Return the `--verbose` extras: label, guard layers, instance id, image, ports, last error."""
+    """Return the `--verbose` extras: label, guard layers, instance id, image, ports, skew, last error."""
     _, missing = guard(lease)
     return {
         "label": _full_label(lease),
@@ -147,6 +142,8 @@ def lease_verbose(lease: CachedLease) -> dict[str, Any]:
         "ports": ports_view(lease.ports),
         "actual_status": lease.actual_status,
         "reachable_at": iso(lease.reachable_at),
+        "clock_skew_s": lease.clock_skew,
+        "running_at": iso(lease.running_at),
         "last_provider_error": lease.last_provider_error,
     }
 
@@ -159,8 +156,6 @@ def lease_view(
     log_tail: list[str] | None = None,
 ) -> LeaseView:
     """Build one `status.leases` entry for a managed lease."""
-    level, missing = guard(lease)
-    cost, source = lease_cost(lease, now, charges)
     expiry = effective_expiry(lease.label)
     return LeaseView(
         lease=lease.lease,
@@ -168,14 +163,15 @@ def lease_view(
         group=lease.label.group,
         owner=lease.label.owner,
         state=lease.state,
-        guard=level,
-        guard_missing=missing,
         gpu=lease.gpu,
+        gpus=lease.gpus,
+        vram_gb=lease.vram_gb,
         price_per_hr=lease.price_per_hr,
-        cost=cost,
-        cost_source=source,
+        cost=lease_cost(lease.instance_id, charges),
+        uptime_s=uptime_s(lease, now),
         expires_at=iso(expiry),
         ttl_remaining_s=max(0, expiry - now),
+        busy=busy(lease),
         jobs=[job_view(job, now, lease.state) for job in lease.jobs],
         log_tail=log_tail,
         destroy_pending=True if lease.destroy_pending else None,
@@ -188,9 +184,8 @@ def orphan_view(
 ) -> LeaseView:
     """Build a `status.leases` entry for an orphan or unreadable row.
 
-    Cost comes from today's billing when present, else null.
+    Cost is the instance's billed sum, else null.
     """
-    billed = charges.per_instance.get(inst.id) if charges is not None else None
     extras: dict[str, Any] | None = None
     if verbose:
         extras = {
@@ -206,14 +201,15 @@ def orphan_view(
         group=None,
         owner=None,
         state="orphan",
-        guard=None,
-        guard_missing=None,
         gpu=inst.gpu_name,
+        gpus=inst.num_gpus,
+        vram_gb=inst.gpu_ram_gb,
         price_per_hr=inst.dph_total,
-        cost=billed,
-        cost_source="billing" if billed is not None else None,
+        cost=lease_cost(inst.id, charges),
+        uptime_s=None,
         expires_at=None,
         ttl_remaining_s=None,
+        busy=None,
         jobs=[],
         verbose=extras,
     )
@@ -221,7 +217,6 @@ def orphan_view(
 
 def tag_entry(lease: CachedLease, now: int) -> TagEntry:
     """Build one `tag` result entry."""
-    level, missing = guard(lease)
     expiry = effective_expiry(lease.label)
     return TagEntry(
         lease=lease.lease,
@@ -230,8 +225,6 @@ def tag_entry(lease: CachedLease, now: int) -> TagEntry:
         owner=lease.label.owner,
         expires_at=iso(expiry),
         ttl_remaining_s=max(0, expiry - now),
-        guard=level,
-        guard_missing=missing,
     )
 
 

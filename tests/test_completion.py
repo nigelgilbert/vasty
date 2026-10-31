@@ -235,6 +235,7 @@ def _bash_complete(harness: Harness, tmp_path: Path,
         (["vasty", "sync", "ft", ""], ["push", "pull"]),
         (["vasty", "reserve", "--startup", ""], ["FILES"]),
         (["vasty", "extend", "--by", ""], []),
+        (["vasty", "sweep", "--follow", ""], ["eval-0", "ft", "l-00000001", "l-00000002", "l-00000004"]),
     ],
 )
 def test_zsh_completes_from_cache(

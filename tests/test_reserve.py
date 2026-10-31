@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import sys
 from dataclasses import replace
 from decimal import Decimal
 from typing import Any
@@ -12,14 +13,16 @@ import pytest
 from fakes import NOW, Harness, add_lease, make_offer, timeout_error
 from vasty import engine
 from vasty.commands import reserve
+from vasty.config import user_config_path
 from vasty.context import Context
 from vasty.errors import VastyError
 from vasty.labels import format_label, parse
 from vasty.models import CreateRequest, Instance, Label
 from vasty.onstart import decode_onstart
+from vasty.provider import build_offer_query
 
 RESULT_KEYS = {
-    "lease", "name", "owner", "group", "state", "guard", "guard_missing", "reused", "gpu",
+    "lease", "name", "owner", "group", "state", "reused", "gpu",
     "gpus", "vram_gb", "price_per_hr", "expires_at", "ttl_remaining_s", "ssh", "rsync_target",
     "ssh_port", "ports", "warnings", "swept",
 }
@@ -35,7 +38,6 @@ def boot(harness: Harness, inst: Instance, request: CreateRequest) -> None:
 
 @pytest.fixture
 def h(harness: Harness) -> Harness:
-    harness.provider.covered_through = NOW
     harness.provider.offers = [make_offer(1)]
     harness.provider.on_create = lambda inst, req: boot(harness, inst, req)
     return harness
@@ -75,7 +77,6 @@ def test_reserve_returns_running_lease(h: Harness) -> None:
     assert (data["name"], data["owner"], data["group"]) == ("trainer", "claude", "exp42")
     assert data["state"] == "running"
     assert data["reused"] is False
-    assert (data["guard"], data["guard_missing"]) == ("full", [])
     assert (data["gpu"], data["gpus"], data["vram_gb"], data["price_per_hr"]) == (
         "RTX 4090", 1, 24.0, 0.38)
     assert data["expires_at"] == "2026-10-29T01:30:00Z"
@@ -85,6 +86,21 @@ def test_reserve_returns_running_lease(h: Harness) -> None:
     assert data["ssh_port"] == 41022
     assert data["ports"] == {"22": 41022, "8000": 41000, "8080": 41080}
     assert data["warnings"] == [] and data["swept"] == []
+
+
+def test_reserve_spawns_a_follower(h: Harness) -> None:
+    code, data = run_json(h, "reserve")
+    assert code == 0, data
+    assert h.spawned == [[sys.executable, "-m", "vasty", "sweep", "--follow", "l-abababab"]]
+
+
+def test_reserve_with_a_failed_spawn_warns_and_succeeds(h: Harness) -> None:
+    h.spawn_error = OSError("no fork")
+    code, data = run_json(h, "reserve")
+    assert code == 0, data
+    assert [(w["code"], w["lease"], w["fix"]) for w in data["warnings"]] == [
+        ("sweep_not_spawned", "l-abababab", "vasty sweep --follow l-abababab"),
+    ]
 
 
 def test_reserve_writes_create_label_and_copies_clock(h: Harness) -> None:
@@ -97,7 +113,7 @@ def test_reserve_writes_create_label_and_copies_clock(h: Harness) -> None:
     assert (created.created, created.ttl, created.expires) == (NOW, 3600, None)
     assert request.runtype == "ssh_direct"
     assert request.ports == [22, 8000, 8080]
-    assert request.image == "vasty/base:cuda12.4"
+    assert request.image == "vastai/base-image:cuda-12.6.3-auto"
     assert request.disk_gb == 50
     (iid,) = h.provider.instances
     assert label_of(h, iid).expires == NOW + 3600
@@ -167,6 +183,53 @@ def test_no_offers_names_constraints_and_hint(h: Harness) -> None:
     assert calls(h, "create") == []
 
 
+def write_user(harness: Harness, text: str) -> None:
+    path = user_config_path(harness.home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def cuda_filter(harness: Harness) -> Any:
+    query = calls(harness, "search_offers")[0]
+    return build_offer_query(query).get("cuda_max_good")
+
+
+def test_cuda_flag_sends_filter(h: Harness) -> None:
+    code, _ = run_json(h, "reserve", "--image", "vllm/vllm-openai:v0.32.0", "--cuda", "13")
+    assert code == 0
+    assert cuda_filter(h) == {"gte": 13.0}
+
+
+def test_cuda_profile_sends_filter(h: Harness) -> None:
+    write_user(h, '[profiles.vllm]\nimage = "vllm/vllm-openai:v0.32.0"\nvram = 24\ncuda = 13\n')
+    h.provider.offers = [make_offer(1, gpu_ram_gb=24.0)]
+    code, _ = run_json(h, "reserve", "--profile", "vllm")
+    assert code == 0
+    assert cuda_filter(h) == {"gte": 13.0}
+
+
+def test_cuda_env_sends_filter(h: Harness) -> None:
+    h.env["VASTY_CUDA"] = "13"
+    code, _ = run_json(h, "reserve")
+    assert code == 0
+    assert cuda_filter(h) == {"gte": 13.0}
+
+
+def test_no_cuda_sends_no_filter(h: Harness) -> None:
+    code, _ = run_json(h, "reserve")
+    assert code == 0
+    assert "cuda_max_good" not in build_offer_query(calls(h, "search_offers")[0])
+
+
+def test_no_offers_names_cuda(h: Harness) -> None:
+    h.provider.offers = []
+    code, data = run_json(h, "reserve", "--cuda", "13")
+    assert code == 1
+    assert data["error"] == "no_offers"
+    assert "cuda>=13" in data["message"]
+    assert "--cuda" in data["hint"]
+
+
 def test_proxy_runtype_without_direct_ports(h: Harness) -> None:
     h.provider.offers = [make_offer(1, direct_port_count=0)]
     _, data = run_json(h, "reserve")
@@ -229,7 +292,7 @@ def test_startup_too_large_before_create(h: Harness) -> None:
     assert calls(h, "search_offers") == []
 
 
-def test_custom_image_onstart_carries_watchdog(h: Harness) -> None:
+def test_onstart_carries_watchdog_for_any_image(h: Harness) -> None:
     run_json(h, "reserve", "--image", "ubuntu:22.04")
     request = h.provider.created[0]
     assert request.image == "ubuntu:22.04"
@@ -237,12 +300,11 @@ def test_custom_image_onstart_carries_watchdog(h: Harness) -> None:
     assert request.onstart.startswith("command -v bash")
 
 
-def test_default_image_onstart_has_startup_script(h: Harness) -> None:
+def test_onstart_has_startup_script(h: Harness) -> None:
     script = h.home / "setup.sh"
     script.write_text("pip install -U peft\n")
     run_json(h, "reserve", "--startup", str(script))
     request = h.provider.created[0]
-    assert not request.onstart.startswith("command -v bash")
     assert "pip install -U peft" in decode_onstart(request.onstart)
 
 
@@ -364,8 +426,6 @@ def test_no_wait_returns_pending_with_nulls(h: Harness) -> None:
 
 def test_no_wait_lease_is_partial_with_every_layer_and_no_warning(h: Harness) -> None:
     _, data = run_json(h, "reserve", "--no-wait")
-    assert (data["guard"], data["guard_missing"]) == (
-        "partial", ["watchdog", "destroy_key", "clock_file"])
     assert "guard_partial" not in [w["code"] for w in data["warnings"]]
     cached = h.context().cache.load().leases[data["lease"]]
     assert cached.guard_missing == ["watchdog", "destroy_key", "clock_file"]
@@ -375,7 +435,7 @@ def test_no_wait_lease_turns_full_once_the_probe_answers(h: Harness) -> None:
     _, data = run_json(h, "reserve", "--no-wait")
     _, status = run_json(h, "status", data["lease"])
     (entry,) = status["leases"]
-    assert (entry["guard"], entry["guard_missing"]) == ("full", [])
+    assert "guard" not in entry
     assert status["warnings"] == []
 
 
@@ -598,7 +658,6 @@ def test_name_hit_returns_existing_lease(h: Harness) -> None:
 def test_name_hit_warns_on_flag_mismatch(h: Harness) -> None:
     add_lease(h, "l-0000a001", label={"name": "ft", "group": "a", "expires": NOW + 1200},
               gpu_name="RTX 3090", gpu_ram_gb=24.0)
-    h.env["VASTY_DAILY_BUDGET"] = "0.01"
     code, data = run_json(h, "reserve", "--name", "ft", "--gpu", "4090", "--vram", "48",
                           "--group", "b", "--ttl", "2h")
     assert code == 0
@@ -609,6 +668,66 @@ def test_name_hit_warns_on_flag_mismatch(h: Harness) -> None:
     for flag in ("--gpu", "--vram", "--group", "--ttl"):
         assert flag in warning["message"]
     assert calls(h, "create") == []
+
+
+def test_name_hit_warns_on_cuda_below_flag(h: Harness) -> None:
+    add_lease(h, label={"name": "ft"}, cuda_max_good=12.4)
+    _, data = run_json(h, "reserve", "--name", "ft", "--cuda", "13")
+    (warning,) = data["warnings"]
+    assert warning["message"] == "lease l-0000a001 differs from --cuda"
+
+
+def idle(data: dict[str, Any]) -> list[dict[str, Any]]:
+    return [w for w in data["warnings"] if w["code"] == "idle_box_available"]
+
+
+def test_reserve_warns_idle_box_available(h: Harness) -> None:
+    add_lease(h, label={"name": "ft"}, gpu_name="RTX 3060", gpu_ram_gb=12.0)
+    code, data = run_json(h, "reserve")
+    assert code == 0, data
+    assert data["reused"] is False
+    assert idle(data) == [{
+        "code": "idle_box_available", "lease": "l-0000a001",
+        "message": "lease l-0000a001 (ft) is idle: RTX 3060, 1x12 GB, 50m left",
+        "fix": "vasty status l-0000a001",
+    }]
+
+
+def test_name_miss_warns_idle_box_available(h: Harness) -> None:
+    add_lease(h, label={"name": "ft"})
+    _, data = run_json(h, "reserve", "--name", "other", "--ttl", "1h")
+    assert data["reused"] is False
+    [warning] = idle(data)
+    assert warning["message"] == (
+        "lease l-0000a001 (ft) is idle: RTX 3090, 1x24 GB, 50m left, 10m short; extend --to 1h"
+    )
+
+
+def test_name_miss_extend_to_keeps_seconds(h: Harness) -> None:
+    add_lease(h, label={"name": "ft"})
+    _, data = run_json(h, "reserve", "--name", "other", "--ttl", "5430s")
+    [warning] = idle(data)
+    assert warning["message"].endswith("short; extend --to 1h30m30s")
+
+
+def test_four_idle_boxes_yield_three_warnings(h: Harness) -> None:
+    for lease, left in (("l-0000a001", 600), ("l-0000a002", 2400), ("l-0000a003", 900),
+                        ("l-0000a004", 3600)):
+        add_lease(h, lease, label={"expires": NOW + left})
+    _, data = run_json(h, "reserve")
+    assert [(w["lease"], w["message"].split(": ")[1]) for w in idle(data)] == [
+        ("l-0000a004", "RTX 3090, 1x24 GB, 1h left"),
+        ("l-0000a002", "RTX 3090, 1x24 GB, 40m left"),
+        ("l-0000a003", "RTX 3090, 1x24 GB, 15m left, 15m short; extend --to 30m"),
+    ]
+
+
+def test_name_hit_emits_no_idle_box_available(h: Harness) -> None:
+    add_lease(h, "l-0000a001", label={"name": "ft"})
+    add_lease(h, "l-0000a002", label={"name": "other"})
+    _, data = run_json(h, "reserve", "--name", "ft")
+    assert data["reused"] is True
+    assert idle(data) == []
 
 
 def test_name_scoped_to_owner(h: Harness) -> None:
@@ -646,57 +765,6 @@ def test_ttl_accepts_chained_units(h: Harness) -> None:
     created = parse(request.label)
     assert isinstance(created, Label)
     assert created.ttl == 5400
-
-
-# Budget.
-
-
-def test_budget_refusal_details_and_exit(h: Harness) -> None:
-    h.env["VASTY_DAILY_BUDGET"] = "1.00"
-    h.provider.billed = {9: Decimal("0.20")}
-    code, data = run_json(h, "reserve", "--ttl", "3h")
-    assert code == 3
-    assert data["error"] == "budget_exceeded"
-    assert data["details"] == {"projected": 1.34, "remaining": 0.8, "daily_budget": 1.0}
-    assert "by $0.34" in data["message"]
-    assert calls(h, "create") == []
-
-
-def test_budget_low_warning_near_cap(h: Harness) -> None:
-    h.env["VASTY_DAILY_BUDGET"] = "0.40"
-    _, data = run_json(h, "reserve", "--ttl", "1h")
-    assert [w["code"] for w in data["warnings"]] == ["budget_low"]
-
-
-def test_budget_counts_local_reserve_between_refresh_and_lock(
-    h: Harness, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from vasty import engine
-
-    h.env["VASTY_DAILY_BUDGET"] = "0.60"
-    real = engine.refresh
-
-    def refresh_then_reserve(ctx: Any, probe: bool = True) -> engine.Snapshot:
-        snap = real(ctx, probe)
-        monkeypatch.setattr(engine, "refresh", real)
-        h.hex_values = ["0000b001"]
-        assert h.run("reserve", "--ttl", "1h", "--no-wait")[0] == 0
-        return snap
-
-    monkeypatch.setattr(engine, "refresh", refresh_then_reserve)
-    code, data = run_json(h, "reserve", "--ttl", "1h", "--no-wait")
-    assert code == 3
-    assert data["error"] == "budget_exceeded"
-    assert data["details"] == {"projected": 0.76, "remaining": 0.22, "daily_budget": 0.6}
-    assert len(calls(h, "create")) == 1
-
-
-def test_spend_unavailable_refuses(h: Harness) -> None:
-    h.provider.covered_through = None
-    code, data = run_json(h, "reserve")
-    assert code == 2
-    assert data["error"] == "spend_unavailable"
-    assert calls(h, "create") == []
 
 
 # SSH key.

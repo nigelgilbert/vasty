@@ -27,7 +27,8 @@ Endpoints and the fields read from each response:
   filtered to instance charges and paged by `next_token`. Reads top-level
   `results[]`: `source` (instance id, bare or `instance-<id>`), `metadata.instance_id`
   as a fallback, `amount`, `start` and `end`.
-- Balance: SDK `billing.show_user` (`GET /users/current`). Reads `balance`.
+- Balance: SDK `billing.show_user` (`GET /users/current`). Reads `balance`
+  and `credit`.
 - SSH keys: SDK `keys.show_ssh_keys` (`GET /ssh/`), `keys.create_ssh_key`
   (`POST /ssh/`) and `keys.attach_ssh` (`POST /instances/{id}/ssh/`).
 """
@@ -44,7 +45,7 @@ from typing import Any, Callable, Iterator, Protocol
 
 from vasty import timeutil
 from vasty.errors import VastyError
-from vasty.models import Charges, CreateRequest, Instance, Offer, OfferQuery, SshKey
+from vasty.models import Balance, Charges, CreateRequest, Instance, Offer, OfferQuery, SshKey
 
 
 class ProviderTimeout(VastyError):
@@ -80,7 +81,7 @@ class Provider(Protocol):
         """Return billed charges between two epoch seconds for every instance."""
         ...
 
-    def balance(self) -> Decimal: ...
+    def balance(self) -> Balance: ...
 
     def list_ssh_keys(self) -> list[SshKey]: ...
 
@@ -172,6 +173,8 @@ def build_offer_query(query: OfferQuery) -> dict[str, Any]:
         q["gpu_ram"] = {"gte": query.vram_min_gb * 1000}
     if query.region:
         q["geolocation"] = _region_filter(query.region)
+    if query.cuda is not None:
+        q["cuda_max_good"] = {"gte": query.cuda}
     return q
 
 
@@ -255,36 +258,35 @@ def normalize_instance(row: dict[str, Any]) -> Instance | None:
         ports=normalize_ports(row.get("ports")),
         image=_to_str(row.get("image_uuid")),
         runtype=_to_str(row.get("image_runtype")),
-        start_date=_to_int(row.get("start_date")),
+        cuda_max_good=_to_float(row.get("cuda_max_good")),
     )
 
 
-def parse_charges(rows: list[Any], start: int, end: int) -> Charges:
-    """Sum top-level instance charge rows per instance and read billing coverage.
+def parse_charges(rows: list[Any], end: int) -> Charges:
+    """Sum top-level instance charge rows per instance and for today.
 
-    Rows whose `type` is other than `instance` are skipped. `covered_through`
-    is the latest row `end` clipped to `[start, end]`. With no instance rows
-    it is `start`, so callers estimate every live instance from the range
-    start. Instance rows that carry no readable `end` give None.
+    Rows whose `type` is other than `instance` are skipped. `today` sums the
+    rows whose `start`, else `end`, falls on or after 00:00 UTC of the day
+    that holds `end`. A row with neither time counts toward today.
     """
-    kept = [r for r in rows if isinstance(r, dict) and r.get("type", "instance") == "instance"]
+    today_start = timeutil.day_start(int(end))
     per_instance: dict[int, Decimal] = {}
-    ends: list[int] = []
-    for row in kept:
-        instance_id = _charge_instance_id(row)
+    today = Decimal("0")
+    for row in rows:
+        if not isinstance(row, dict) or row.get("type", "instance") != "instance":
+            continue
         amount = _to_decimal(row.get("amount"))
-        if instance_id is not None and amount is not None:
+        if amount is None:
+            continue
+        instance_id = _charge_instance_id(row)
+        if instance_id is not None:
             per_instance[instance_id] = per_instance.get(instance_id, Decimal("0")) + amount
-        row_end = _to_int(row.get("end"))
-        if row_end is not None:
-            ends.append(row_end)
-    if not kept:
-        covered: int | None = start
-    elif not ends:
-        covered = None
-    else:
-        covered = max(start, min(max(ends), end))
-    return Charges(per_instance=per_instance, covered_through=covered)
+        at = _to_int(row.get("start"))
+        if at is None:
+            at = _to_int(row.get("end"))
+        if at is None or at >= today_start:
+            today += amount
+    return Charges(per_instance=per_instance, today=today)
 
 
 def _charge_instance_id(row: dict[str, Any]) -> int | None:
@@ -520,17 +522,22 @@ class VastProvider:
                     break
                 seen.add(str(token))
                 params["next_token"] = token
-            return parse_charges(rows, int(start), int(end))
+            return parse_charges(rows, int(end))
 
-    def balance(self) -> Decimal:
+    def balance(self) -> Balance:
         with _guard("balance"):
             from vastai.api import billing
 
             data = billing.show_user(self._client())
-            value = _to_decimal(data.get("balance")) if isinstance(data, dict) else None
-            if value is None:
+            if not isinstance(data, dict):
+                raise _unexpected("balance", "response is not an object")
+            balance = _to_decimal(data.get("balance"))
+            credit = _to_decimal(data.get("credit"))
+            if balance is None:
                 raise _unexpected("balance", "no balance field")
-            return value
+            if credit is None:
+                raise _unexpected("balance", "no credit field")
+            return Balance(balance=balance, credit=credit)
 
     def list_ssh_keys(self) -> list[SshKey]:
         with _guard("list ssh keys"):

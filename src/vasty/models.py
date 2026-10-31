@@ -27,6 +27,7 @@ class OfferQuery:
     disk_gb: int
     max_price: Decimal
     region: str | None
+    cuda: float | None = None
 
 
 @dataclass(frozen=True)
@@ -71,7 +72,8 @@ class Instance:
     ports: dict[int, int] = field(default_factory=dict)
     image: str | None = None
     runtype: str | None = None
-    start_date: int | None = None
+    cuda_max_good: float | None = None
+    """The highest CUDA version the host driver supports."""
 
 
 @dataclass(frozen=True)
@@ -82,19 +84,23 @@ class SshKey:
 
 @dataclass(frozen=True)
 class Charges:
-    """Billed charges for a UTC-day range.
+    """Billed instance charges from a range start to the read.
 
-    `per_instance` maps instance id to billed amount in the range, deleted
-    instances included. `covered_through` is the epoch second billing covers;
-    None when coverage cannot be read.
+    `per_instance` maps instance id to the billed amount in the range, deleted
+    instances included. `today` is the billed total of the rows that start on
+    the UTC day of the range end.
     """
 
     per_instance: dict[int, Decimal]
-    covered_through: int | None
+    today: Decimal = Decimal("0")
 
-    @property
-    def total(self) -> Decimal:
-        return sum(self.per_instance.values(), Decimal("0"))
+
+@dataclass(frozen=True)
+class Balance:
+    """The account's `balance` and `credit` from `GET /users/current`."""
+
+    balance: Decimal
+    credit: Decimal
 
 
 # Lease records.
@@ -148,9 +154,11 @@ class ProbeResult:
     startup_interrupted: bool = False
     """Set when the hook started, the container restarted, and no exit marker exists."""
     guard_file: bool = False
-    """Set when `onstart` or the adoption script has written the guard file."""
+    """Set when the watchdog has written the guard file."""
     adopted: bool = False
     """Set when the adoption script has written its `adopted` marker."""
+    box_now: int | None = None
+    """The box's `date +%s` when the probe ran, or None when it printed nothing numeric."""
 
 
 LeaseState = Literal[
@@ -178,6 +186,8 @@ class CachedLease:
     ssh_port: int | None = None
     ports: dict[int, int] = field(default_factory=dict)
     reachable_at: int | None = None
+    running_at: int | None = None
+    """When `engine.refresh` first saw `actual_status` read `running`."""
     guard_missing: list[str] = field(default_factory=list)
     startup_exit: int | None = None
     startup_started: bool = False
@@ -203,7 +213,11 @@ class CachedLease:
     adopt_at: int | None = None
     """When the last adoption rerun ran."""
     unsupported: list[str] = field(default_factory=list)
-    """What the last probe found missing from a custom image; non-empty maps to `image_unsupported`."""
+    """What the last probe found missing from the image; non-empty maps to `image_unsupported`."""
+    clock_skew: int | None = None
+    """Box clock minus provider clock in seconds, from the last probe under a verified clock."""
+    clock_skew_unknown: bool = False
+    """Set when the last probe returned no box time."""
 
 
 # Output shapes.
@@ -244,14 +258,15 @@ class LeaseView:
     group: str | None
     owner: str | None
     state: str
-    guard: str | None
-    guard_missing: list[str] | None
     gpu: str | None
+    gpus: int
+    vram_gb: float | None
     price_per_hr: Decimal
     cost: Decimal | None
-    cost_source: str | None
+    uptime_s: int | None
     expires_at: str | None
     ttl_remaining_s: int | None
+    busy: bool | None
     jobs: list[JobView]
     log_tail: list[str] | None = field(default=None, metadata=OMIT_NONE)
     destroy_pending: bool | None = field(default=None, metadata=OMIT_NONE)
@@ -260,14 +275,12 @@ class LeaseView:
 
 @dataclass
 class Totals:
-    spent_today: Decimal | None
-    daily_budget: Decimal
-    remaining_budget: Decimal | None
+    balance: Decimal | None
+    credit: Decimal | None
+    charges_today: Decimal | None
     burn_per_hr: Decimal
     live: int
     live_mine: int
-    spend_source: str | None
-    daily_budget_source: str
 
 
 @dataclass
@@ -286,8 +299,6 @@ class ReserveResult:
     owner: str
     group: str | None
     state: str
-    guard: str
-    guard_missing: list[str]
     reused: bool
     gpu: str | None
     gpus: int
@@ -358,8 +369,12 @@ class TagEntry:
     owner: str
     expires_at: str | None
     ttl_remaining_s: int | None
-    guard: str
-    guard_missing: list[str]
+
+
+@dataclass
+class SweepResult:
+    swept: list[SweptEntry]
+    warnings: list[WarningItem]
 
 
 @dataclass

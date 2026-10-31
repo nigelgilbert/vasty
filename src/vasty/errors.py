@@ -22,17 +22,14 @@ EXIT_CODES: dict[str, int] = {
     "lease_pending": 1,
     "name_conflict": 1,
     "confirmation_required": 1,
-    "model_unknown": 1,
     "image_unsupported": 1,
     "startup_too_large": 1,
     "vllm_missing": 1,
     "provider_error": 2,
     "box_unreachable": 2,
-    "spend_unavailable": 2,
     "sync_failed": 2,
     "serve_failed": 2,
     "port_mapping_missing": 2,
-    "budget_exceeded": 3,
 }
 
 

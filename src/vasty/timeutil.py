@@ -67,6 +67,23 @@ def format_duration(seconds: int, *, pad: bool = False) -> str:
     return f"{secs}s"
 
 
+def format_duration_exact(seconds: int) -> str:
+    """Format seconds with every nonzero unit, as `1h30m`, `2d` or `1d2h3m4s`.
+
+    The output parses back to the same value with `parse_duration`. Values
+    at or below zero print as `0s`.
+    """
+    seconds = int(seconds)
+    if seconds <= 0:
+        return "0s"
+    parts = []
+    for unit, size in UNITS.items():
+        count, seconds = divmod(seconds, size)
+        if count:
+            parts.append(f"{count}{unit}")
+    return "".join(parts)
+
+
 def _two(big: int, big_unit: str, small: int, small_unit: str, pad: bool) -> str:
     if pad:
         return f"{big}{big_unit}{small:02d}{small_unit}"
@@ -108,6 +125,11 @@ def iso(epoch: int | None) -> str | None:
     if epoch is None:
         return None
     return datetime.fromtimestamp(int(epoch), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def day_start(epoch: int) -> int:
+    """Return 00:00 UTC of the day that holds `epoch`."""
+    return epoch - epoch % UNITS["d"]
 
 
 def parse_http_date(value: str | None) -> float | None:

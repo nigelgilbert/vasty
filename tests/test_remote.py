@@ -73,7 +73,8 @@ class LocalRunner:
     """Run the remote command of an ssh argv with the local shell."""
 
     def __init__(self, path: str) -> None:
-        self.env = {**os.environ, "PATH": path, "VASTY_POLL": "1", "VASTY_MAX_LOOPS": "1"}
+        self.env = {**os.environ, "PATH": path, "VASTY_POLL": "1", "VASTY_MAX_LOOPS": "1",
+                    "VASTY_API": "http://127.0.0.1:9"}
 
     def __call__(
         self, argv: list[str], *, input: str | None = None, timeout: float | None = None,
@@ -348,7 +349,7 @@ def test_rsync_push_delete_runs_against_a_path_with_a_space(tmp_path: Path) -> N
 
 
 def probe_output(**kw: str) -> str:
-    values = {"now": "1000", "clock": "2000", "rewrite": "none", "guard_file": "1", "guard": "",
+    values = {"now": "1000", "clock": "2000", "target": "2000", "rewrite": "none", "guard_file": "1", "guard": "",
               "startup_started": "1", "startup_exit": "0", "alive": "990", "key": "1",
               "unsupported": ""}
     values.update(kw)
@@ -364,7 +365,7 @@ def test_probe_runs_one_ssh_command_with_timeout(tmp_path: Path) -> None:
     assert call.timeout == 5.0
     assert call.argv[-1] == "sh -s"
     assert "ConnectTimeout=5" in call.argv
-    assert call.input == probe_script(2000, "/workspace/.vasty")
+    assert call.input == probe_script(2000, "/workspace/.vasty", None)
     assert result.clock_expires == 2000
     assert result.guard_missing == []
     assert result.startup_exit == 0
@@ -386,11 +387,15 @@ def test_probe_non_answer_raises(tmp_path: Path, result: ExecResult | BaseExcept
     ({"alive": "821"}, []),
     ({"alive": ""}, ["watchdog"]),
     ({"alive": "", "guard_file": "<absent>", "startup_started": "<absent>"}, []),
-    ({"guard": "watchdog "}, []),
+    ({"guard": "watchdog "}, ["watchdog"]),
+    ({"guard": "destroy_key"}, ["destroy_key"]),
     ({"key": "0"}, ["destroy_key"]),
     ({"key": "0", "guard_file": "<absent>", "startup_started": "<absent>"}, []),
     ({"clock": ""}, ["clock_file"]),
     ({"clock": "1500"}, ["clock_file"]),
+    ({"clock": "2004"}, []),
+    ({"clock": "1994"}, ["clock_file"]),
+    ({"clock": "1500", "target": ""}, []),
     ({"guard": "future_layer"}, ["future_layer"]),
 ])
 def test_probe_guard_layers(tmp_path: Path, kw: dict[str, str], missing: list[str]) -> None:
@@ -428,6 +433,7 @@ def test_generated_scripts_parse() -> None:
     box = SshBox(None, "/tmp/kh")
     bash_n(probe_script(None, "/workspace/.vasty"))
     bash_n(probe_script(123, "/workspace/.vasty"))
+    bash_n(probe_script(123, "/workspace/.vasty", 456))
     bash_n(box.start_script(Job("j-1", "python train.py", None, None, "running"), "python 'x'"))
     bash_n(box.attach_script("j-1"))
 
@@ -542,6 +548,24 @@ def test_probe_reads_a_healthy_box(local: LocalBox) -> None:
     assert result.adopted is False
 
 
+def test_probe_translates_the_label_into_box_time(local: LocalBox) -> None:
+    local.healthy(4102444800)
+    sent = int(time.time()) - 300
+    result = local.box.probe(TARGET, 4102448400, sent)
+    written = int(local.read("clock"))
+    assert 0 <= written - (4102448400 + 300) <= 5
+    assert result.clock_expires == written
+    assert result.box_now is not None and abs(result.box_now - time.time()) < 60
+    assert result.guard_missing == []
+
+
+def test_probe_keeps_a_clock_within_tolerance(local: LocalBox) -> None:
+    local.healthy(4102444803)
+    result = local.box.probe(TARGET, 4102444800, int(time.time()))
+    assert local.read("clock") == "4102444803\n"
+    assert result.guard_missing == []
+
+
 def test_probe_rewrites_a_differing_clock(local: LocalBox) -> None:
     local.healthy(4102444800)
     result = local.box.probe(TARGET, 4102448400)
@@ -624,6 +648,12 @@ def test_write_clock_replaces_the_file(local: LocalBox) -> None:
     local.box.write_clock(TARGET, 4102444800)
     assert local.read("clock") == "4102444800\n"
     assert not any(p.name.startswith("clock.tmp") for p in local.root.iterdir())
+
+
+def test_write_clock_translates_into_box_time(local: LocalBox) -> None:
+    local.box.write_clock(TARGET, 4102444800, int(time.time()) + 120)
+    written = int(local.read("clock"))
+    assert -5 <= written - (4102444800 - 120) <= 0
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")
