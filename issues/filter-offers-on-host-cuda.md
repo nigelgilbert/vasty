@@ -39,19 +39,17 @@ Vast applies `cuda_max_good: {"gte": 13.0}` server-side. A verified RTX 3060 sea
 
 ## Fix
 
-1. Add `OfferQuery.cuda_min: float | None`. `build_offer_query` adds `"cuda_max_good": {"gte": cuda_min}` when set.
-2. Add `ModelEntry.cuda: float | None`. The builtin entry sets `13.0`. `serve` passes the entry's value into the query on the auto-reserve path.
-3. Add `--cuda FLOOR` to `reserve` and `serve`. It applies to a plain `--image` and overrides the entry's value. The README names `NVIDIA_REQUIRE_CUDA` in `docker inspect IMAGE` as where to read an image's floor.
-4. Add `Offer.cuda_max_good`, read from the `/bundles/` row, so `reserve --verbose` and the `no_offers` hint can show it.
-5. The `no_offers` hint lists `cuda` beside `max_price` and `region`.
-6. Add `CachedLease.cuda: float | None`, set from the offer at create. It stays None for leases cached before this change, tagged boxes and cache rebuilds, since the instance row carries `cuda_max_good` and `_apply_probe` can fill it on the next refresh. The box reuse hardware comparison treats None as a mismatch when the settings carry a `cuda` floor and as a match otherwise.
-7. `serve --on` refuses with `cuda_too_low` when the lease's `cuda` is below the floor, before the preflight. The hint names `--cuda` and `reserve` with the model. A None `cuda` is refreshed from the instance row first; still None, `serve` proceeds.
+1. Add `cuda` as a hardware key: `DEFAULT_KEYS`, `PROFILE_KEYS` and `FLAG_KEYS` in `src/vasty/config.py`, `Settings.cuda: float | None`, `VASTY_CUDA`, and `--cuda FLOOR` on `reserve`, `run` and `serve`. It is the minimum host `cuda_max_good`.
+2. Add `OfferQuery.cuda: float | None`. `build_offer_query` adds `"cuda_max_good": {"gte": cuda}` when set.
+3. The `no_offers` hint lists `cuda` beside `max_price` and `region`.
+4. The README names `NVIDIA_REQUIRE_CUDA` in `docker inspect IMAGE` as where to read an image's floor, and the sample `vllm` profile sets `cuda = 13`.
+
+Decided against: a cached lease CUDA field and a `cuda_too_low` refusal on `serve --on`. A host under the floor fails inside a minute and `serve_failed` carries the log tail with Error 804. `cuda_too_low` is deferred until a live run shows an agent cannot recover from that tail.
 
 ## Tests
 
-- `build_offer_query` with `cuda_min` 13.0 emits the `gte` filter; without it, the dict is unchanged.
-- `serve --model Qwen/Qwen3-32B-AWQ` without `--on` searches with `cuda_min` 13.0 on the fake provider.
-- `serve --cuda 12.8` with the same model searches with 12.8.
-- `reserve --image vllm/vllm-openai:v0.32.0 --cuda 13.0` sends the filter.
-- `reserve` with a plain image and no `--cuda` sends no `cuda_max_good` key.
-- `serve --on` against a lease with `cuda` 12.8 and a 13.0 floor raises `cuda_too_low` without starting a job; with `cuda` None and an instance row at 13.0 it proceeds.
+- `build_offer_query` with `cuda` 13.0 emits the `gte` filter; without it, the dict is unchanged.
+- `reserve --image vllm/vllm-openai:v0.32.0 --cuda 13` sends the filter.
+- `reserve --profile vllm` with `cuda = 13` in the profile sends the filter.
+- `reserve` with no `cuda` in any layer sends no `cuda_max_good` key.
+- `no_offers` with a floor set names `cuda` in the hint.

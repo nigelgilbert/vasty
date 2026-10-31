@@ -20,11 +20,11 @@ Why. Vast has no daily spending cap to defer to. The estimator guesses the spend
 
 What `status` reports. `balance` and `credit` from `GET /users/current`, and today's billed charges from `GET /charges/`, as Vast returns them. The live run showed credit tracking real spend within a cent.
 
-Guards that stay. `max_price` caps dollars per hour per box at `reserve`. An optional `min_credit` floor refuses `reserve` and `extend` when credit minus the remaining commitment of live leases would drop under it. With no `min_credit` set, nothing blocks.
+What stays. `max_price` filters offers by dollars per hour, and `ttl` ends the box. Per-box spend is the product. The account bound is the prepaid balance.
 
-What goes. `budget_exceeded` on projected spend, `budget_low`, `spend_source`, the `covered_through` arithmetic and most of `src/vasty/budget.py`. The README section on `daily_budget` is rewritten around `min_credit`.
+What goes. `budget_exceeded`, `budget_low`, `spend_source`, exit code 3 and `src/vasty/budget.py`. No account-level check replaces them. Revised 2026-10-30 in the second pass: the first draft kept an optional `min_credit` floor, which was a credit-minus-commitments projection on `reserve` and `extend`. It moved Vast's own $0 stop up by a configured amount and refused `extend` on a running job, so it was dropped.
 
-Known limit. On an account with auto top-up, credit never runs out, so `min_credit` never triggers and `max_price` is the only guard.
+The README section on `daily_budget` is rewritten around the per-box product and the pass-through fields.
 
 ## 3. Per-lease `cost` is Vast's billed amount or null
 
