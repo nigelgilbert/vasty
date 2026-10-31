@@ -643,6 +643,8 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
                 lease.history_since = None
                 lease.expired_at = None
             running = (inst.actual_status or "").strip().lower() == "running"
+            if running and lease.running_at is None:
+                lease.running_at = now
             if running and probe:
                 to_probe.append(lease)
             elif running:

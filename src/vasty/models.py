@@ -182,6 +182,8 @@ class CachedLease:
     ssh_port: int | None = None
     ports: dict[int, int] = field(default_factory=dict)
     reachable_at: int | None = None
+    running_at: int | None = None
+    """When `engine.refresh` first saw `actual_status` read `running`."""
     guard_missing: list[str] = field(default_factory=list)
     startup_exit: int | None = None
     startup_started: bool = False
@@ -253,6 +255,7 @@ class LeaseView:
     gpu: str | None
     price_per_hr: Decimal
     cost: Decimal | None
+    uptime_s: int | None
     expires_at: str | None
     ttl_remaining_s: int | None
     jobs: list[JobView]

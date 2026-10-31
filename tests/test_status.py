@@ -13,12 +13,13 @@ import pytest
 from fakes import NOW, START, Harness, add_lease
 from vasty.errors import VastyError
 from vasty.models import Job
+from vasty.timeutil import iso
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 LEASE_KEYS = {
     "lease", "name", "group", "owner", "state", "guard", "guard_missing", "gpu",
-    "price_per_hr", "cost", "expires_at", "ttl_remaining_s", "jobs",
+    "price_per_hr", "cost", "uptime_s", "expires_at", "ttl_remaining_s", "jobs",
 }
 TOTALS_KEYS = {"balance", "credit", "charges_today", "burn_per_hr", "live", "live_mine"}
 
@@ -88,7 +89,7 @@ def test_status_json_shape(account: Harness) -> None:
     assert row == {
         "lease": "l-8b12", "name": "eval-2", "group": "exp42", "owner": "claude",
         "state": "running", "guard": "full", "guard_missing": [], "gpu": "L40S",
-        "price_per_hr": 0.82, "cost": None,
+        "price_per_hr": 0.82, "cost": None, "uptime_s": 0,
         "expires_at": "2026-10-29T01:03:00Z", "ttl_remaining_s": 180, "jobs": [],
     }
 
@@ -96,7 +97,7 @@ def test_status_json_shape(account: Harness) -> None:
 def test_status_orphan_row(account: Harness) -> None:
     row = by_lease(status(account))["i-55120"]
     assert row["state"] == "orphan"
-    for key in ("owner", "expires_at", "ttl_remaining_s", "guard", "guard_missing"):
+    for key in ("owner", "expires_at", "ttl_remaining_s", "guard", "guard_missing", "uptime_s"):
         assert row[key] is None
     assert row["gpu"] == "RTX 3090"
     assert row["price_per_hr"] == 0.22
@@ -203,6 +204,24 @@ def test_status_verbose_fields(account: Harness) -> None:
     assert set(extra) >= {"instance_id", "image", "last_provider_error"}
 
 
+def test_uptime_counts_from_first_running_sample(harness: Harness) -> None:
+    add_lease(harness, label={"name": "ft", "created": NOW - 1200})
+    harness.run("status")
+    harness.time.advance(600)
+    row = by_lease(status(harness, "--verbose"))["l-0000a001"]
+    assert row["uptime_s"] == 600
+    assert row["verbose"]["running_at"] == iso(NOW)
+    _, out, _ = harness.run("status", "--plain")
+    assert "10m" in out.splitlines()[1].split()
+
+
+def test_uptime_null_before_running(harness: Harness) -> None:
+    add_lease(harness, label={"name": "ft", "created": NOW - 1200}, actual_status="loading")
+    assert by_lease(status(harness))["l-0000a001"]["uptime_s"] is None
+    _, out, _ = harness.run("status", "--plain")
+    assert out.splitlines()[1].split()[7] == "—"
+
+
 def test_history_only_when_named_or_verbose(harness: Harness) -> None:
     row = add_lease(harness, label={"name": "ft"})
     harness.run("status")
@@ -280,7 +299,7 @@ def test_status_human_table(account: Harness) -> None:
     assert code == 0
     lines = out.splitlines()
     assert lines[0].split() == ["LEASE", "NAME", "GROUP", "OWNER", "GPU", "STATE", "EXPIRES",
-                                "$/HR", "COST", "JOBS"]
+                                "UPTIME", "$/HR", "COST", "JOBS"]
     rows = {line.split()[0]: line for line in lines[1:7]}
     assert "2× A100 SXM4" in rows["l-7f3a"]
     assert "j-1 train.py (running 2h01m)" in rows["l-7f3a"]

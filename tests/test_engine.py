@@ -545,6 +545,16 @@ def test_probe_skipped_when_not_running(harness: Harness) -> None:
     assert refresh(harness).leases["l-0000a002"].state == "stopped"
 
 
+def test_running_at_set_on_first_running_sample(harness: Harness) -> None:
+    row = add_lease(harness, actual_status="loading")
+    assert refresh(harness).leases["l-0000a001"].running_at is None
+    harness.time.advance(60)
+    harness.provider.instances[row.id].actual_status = "running"
+    assert refresh(harness).leases["l-0000a001"].running_at == NOW + 60
+    harness.time.advance(60)
+    assert refresh(harness).leases["l-0000a001"].running_at == NOW + 60
+
+
 def test_probe_false_keeps_state(harness: Harness) -> None:
     row = add_lease(harness)
     refresh(harness)

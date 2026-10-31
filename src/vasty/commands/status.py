@@ -224,7 +224,8 @@ def _lease_gpu(view: LeaseView, lease: CachedLease | None) -> str:
 
 
 def lease_table(result: StatusResult, by_id: dict[str, CachedLease], expiring: set[str]) -> list[str]:
-    header = ["LEASE", "NAME", "GROUP", "OWNER", "GPU", "STATE", "EXPIRES", "$/HR", "COST", "JOBS"]
+    header = ["LEASE", "NAME", "GROUP", "OWNER", "GPU", "STATE", "EXPIRES", "UPTIME", "$/HR",
+              "COST", "JOBS"]
     rows = [header]
     for view in result.leases:
         lease = by_id.get(view.lease)
@@ -236,6 +237,7 @@ def lease_table(result: StatusResult, by_id: dict[str, CachedLease], expiring: s
             _lease_gpu(view, lease),
             view.state,
             expires_cell(view, expiring),
+            DASH if view.uptime_s is None else format_duration(view.uptime_s),
             _money(view.price_per_hr),
             _money(view.cost),
             jobs_cell(view, lease),

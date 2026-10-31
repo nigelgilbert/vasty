@@ -29,12 +29,15 @@ def test_release_returns_summary_and_marks_cache(harness: Harness) -> None:
                           state="exited", finished_at=NOW)
     box.jobs["j-2"] = Job(id="j-2", cmd="python eval.py", started_at=NOW - 60, exit=None,
                           state="running")
+    harness.time.wall_now = NOW - 5820 + 1200
+    harness.run("status")
+    harness.time.wall_now = NOW
     code, data, _ = release(harness, "trainer")
     assert code == 0
     assert harness.provider.destroyed == [row.id]
     assert data["lease"] == "l-0000a001"
     assert data["name"] == "trainer"
-    assert data["uptime_s"] == 5820
+    assert data["uptime_s"] == 4620
     assert data["cost"] is None
     assert data["destroy_pending"] is True
     assert "already_absent" not in data
@@ -45,6 +48,13 @@ def test_release_returns_summary_and_marks_cache(harness: Harness) -> None:
     assert data["warnings"] == [] and data["swept"] == []
     lease = cached(harness, "l-0000a001")
     assert (lease.state, lease.released_here, lease.destroy_pending) == ("released", True, True)
+
+
+def test_release_while_loading_reports_null_uptime(harness: Harness) -> None:
+    add_lease(harness, label={"created": NOW - 1200}, actual_status="loading")
+    code, data, _ = release(harness, "l-0000a001")
+    assert code == 0
+    assert data["uptime_s"] is None
 
 
 def test_release_cost_sums_charge_rows_across_two_days(harness: Harness) -> None:

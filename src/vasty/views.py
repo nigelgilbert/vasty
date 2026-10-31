@@ -1,7 +1,8 @@
 """Output builders shared by the commands.
 
 Lease cost is the sum of Vast's charge rows for the instance, or None before
-Vast posts a row. Uptime runs from the label's `created`.
+Vast posts a row. Uptime runs from the first `running` sample and is None
+before it.
 
 This module imports only the standard library and vasty modules that do.
 """
@@ -48,9 +49,11 @@ def uptime_end(lease: CachedLease, now: int) -> int:
     return lease.history_since if lease.history_since is not None else now
 
 
-def uptime_s(lease: CachedLease, now: int) -> int:
-    """Return seconds from the label's `created` to `uptime_end`, floored at 0."""
-    return max(0, uptime_end(lease, now) - lease.label.created)
+def uptime_s(lease: CachedLease, now: int) -> int | None:
+    """Return seconds from `running_at` to `uptime_end`, floored at 0, or None before it."""
+    if lease.running_at is None:
+        return None
+    return max(0, uptime_end(lease, now) - lease.running_at)
 
 
 def lease_cost(instance_id: int, charges: Charges | None) -> Decimal | None:
@@ -138,6 +141,7 @@ def lease_verbose(lease: CachedLease) -> dict[str, Any]:
         "ports": ports_view(lease.ports),
         "actual_status": lease.actual_status,
         "reachable_at": iso(lease.reachable_at),
+        "running_at": iso(lease.running_at),
         "last_provider_error": lease.last_provider_error,
     }
 
@@ -163,6 +167,7 @@ def lease_view(
         gpu=lease.gpu,
         price_per_hr=lease.price_per_hr,
         cost=lease_cost(lease.instance_id, charges),
+        uptime_s=uptime_s(lease, now),
         expires_at=iso(expiry),
         ttl_remaining_s=max(0, expiry - now),
         jobs=[job_view(job, now, lease.state) for job in lease.jobs],
@@ -199,6 +204,7 @@ def orphan_view(
         gpu=inst.gpu_name,
         price_per_hr=inst.dph_total,
         cost=lease_cost(inst.id, charges),
+        uptime_s=None,
         expires_at=None,
         ttl_remaining_s=None,
         jobs=[],

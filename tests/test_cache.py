@@ -33,6 +33,7 @@ def full_lease() -> CachedLease:
         ssh_port=41022,
         ports={22: 41022, 8000: 41080},
         reachable_at=1793236000,
+        running_at=1793235960,
         guard_missing=["watchdog"],
         startup_exit=0,
         startup_started=True,
