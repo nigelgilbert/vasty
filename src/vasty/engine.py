@@ -124,9 +124,10 @@ class Snapshot:
     """The account after one refresh.
 
     `leases` holds active and history leases keyed by lease id. `instances` is
-    the listing after the sweep. `charges` and `balance` hold the cached
-    billing until `read_charges` and `read_balance` refresh them. `cached_at`
-    is set when the snapshot comes from the cache file.
+    the listing after the sweep. `charges` holds the cached charges after
+    `refresh`, and `balance` is None. `read_charges` and `read_balance` set
+    them, and `cached_snapshot` sets both from the cache file. `cached_at` is
+    set when the snapshot comes from the cache file.
     """
 
     now: int
@@ -675,8 +676,8 @@ def cached_snapshot(ctx: Context) -> Snapshot:
     """Build a snapshot from `leases.json` with no network call.
 
     `now` comes from the local clock. Warnings cover `label_unreadable` and
-    `cache_rebuilt`. `charges` and `balance` hold the cached billing of any
-    age, and `charges` only when it was read today and covers every lease.
+    `cache_rebuilt`. `charges` and `balance` hold the cached figures only when
+    they were read today in UTC, and `charges` only when it covers every lease.
     """
     data = ctx.cache.load()
     now = ctx.clock.now()
@@ -696,16 +697,19 @@ def cached_snapshot(ctx: Context) -> Snapshot:
         unreadable=[inst for inst, _ in rows.unreadable],
         warnings=warnings,
         charges=_cached_charges(data, charges_start(data.leases.values(), now), now),
-        balance=_cached_balance(data),
+        balance=_cached_balance(data)
+        if data.balance_at is not None and day_start(data.balance_at) == day_start(now)
+        else None,
         cached_at=data.cached_at,
     )
 
 
 def charges_start(leases: Iterable[CachedLease], now: int) -> int:
-    """Return 00:00 UTC of the day that holds the earlier of `now` and the oldest lease's `created`.
+    """Return 00:00 UTC of the day that holds the earlier of `now` and the oldest
+    cached lease's `created`, history included.
 
-    Whole days keep every row of a lease that crossed midnight UTC, so its
-    `cost` is its lifetime billing.
+    Whole days keep every row of a lease that crossed midnight UTC, so a
+    lease `reserve` created reports its lifetime billing.
     """
     return day_start(min([now, *(lease.label.created for lease in leases)]))
 

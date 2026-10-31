@@ -217,18 +217,18 @@ The clock starts when the container starts, which is when Vast starts charging G
 
 ## Spend
 
-Per-box spend is `max_price` times `ttl`: `max_price` filters offers by dollars per hour, and the clock ends the box. Storage and bandwidth bill outside that product. The account bound is the prepaid balance. With no saved card, Vast stops instances at $0.
+Per-box spend is `max_price` times `ttl`: `max_price` filters offers by dollars per hour, and the clock ends the box. Storage and bandwidth bill outside that product. The account bound is the prepaid `credit`. With no saved card, Vast stops instances at $0.
 
 `status` reports Vast's own figures in `totals`:
 
 - `credit` is the prepaid money left on the account, which Vast draws charges from.
-- `balance` is what the account owes Vast beyond its credit, billed to a saved card.
+- `balance` is the `balance` field of Vast's `GET /users/current`, passed through unchanged.
 - `charges_today` is what Vast has billed since 00:00 UTC.
 - `burn_per_hr` sums `price_per_hr` over live leases and orphans.
 
-For runway, read `credit` over `burn_per_hr`. When the balance or charges read fails, those totals are null and `status` warns with `spend_unavailable`.
+For runway, read `credit` over `burn_per_hr`. When the balance or charges are unavailable, those totals are null and `status` warns with `spend_unavailable`.
 
-A lease's `cost` is the sum of Vast's charge rows for its instance since it started, and `release` reports the same figure. `cost: null` means Vast has posted no row yet. `price_per_hr` times `uptime_s` approximates it.
+A lease's `cost` sums Vast's charge rows for its instance since 00:00 UTC on the day the oldest cached lease was created. A box adopted with `tag`, or an orphan, reports only the rows from that day on. `release` reports the same figure. `cost: null` means Vast has posted no row yet. `price_per_hr` times `uptime_s` approximates it.
 
 ## State
 
@@ -247,7 +247,7 @@ Any machine with the API key sees the same leases, owners and groups. An instanc
 | `pending` | Reserved and not ready: booting, SSH not answering, or the startup script still running. |
 | `running` | Healthy and reachable. |
 | `unreachable` | The provider lists it, but the box stopped responding. The clock keeps running. |
-| `stopped` | The provider stopped the instance, for example at $0 balance. The sweep still destroys it past its clock. |
+| `stopped` | The provider stopped the instance, for example at $0 credit. The sweep still destroys it past its clock. |
 | `expired` | The clock ran out. Destroyed or being destroyed. Kept in history for 24h. |
 | `released` | Destroyed by `release`. Kept in history for 24h. |
 | `gone` | Vanished with time left on its clock. Kept in history for 24h. |

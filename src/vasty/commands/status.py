@@ -5,7 +5,7 @@ unreadable rows. `--verbose` also lists history leases; a named lease in
 history always shows. Warnings cover the shown leases, `expired_with_running_jobs`
 for every history lease when no target is given, the account warnings from
 the refresh, `orphan` per shown orphan, and `spend_unavailable` when the
-balance or charges read fails. `totals` covers the whole account with Vast's
+balance or charges are unavailable. `totals` covers the whole account with Vast's
 own `balance`, `credit` and today's billed charges.
 
 `--cached` reads `leases.json` only. It uses the local clock, returns

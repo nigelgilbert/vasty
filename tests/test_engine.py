@@ -867,6 +867,18 @@ def test_cached_snapshot_keeps_billing_read_today_only(harness: Harness) -> None
     harness.time.advance(86_400)
     cached = engine.cached_snapshot(ctx)
     assert cached.charges is None
+    assert cached.balance is None
+
+
+def test_cached_snapshot_keeps_balance_read_earlier_today(harness: Harness) -> None:
+    harness.provider.account_credit = Decimal("19.90")
+    ctx = harness.context()
+    snap = engine.refresh(ctx)
+    engine.read_balance(ctx, snap)
+    harness.time.advance(6 * 3600)
+    engine.refresh(ctx)
+    cached = engine.cached_snapshot(ctx)
+    assert cached.cached_at == NOW + 6 * 3600
     assert cached.balance == snap.balance
 
 
