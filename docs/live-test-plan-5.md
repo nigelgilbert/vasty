@@ -1,15 +1,15 @@
-# Live run 4: two agents and a long lease
+# Live run 5: two agents and a long lease
 
-Run 1 phase 4 tested owners and groups with one actor. Runs 1 and 2 kept every box under 20 minutes. This run puts two agents on one account at the same time, beside a box that stays up for three hours.
+Run 1 phase 4 tested owners and groups with one actor. Runs 1 to 4 kept every box under 30 minutes. This run puts two agents on one account at the same time, beside a box that stays up for three hours.
 
 ## Roles
 
 - **Manager**: sets up, starts the long lease, runs drivers A and B through the gates below, polls the long lease, writes the report. The manager runs unattended. It creates instances only where this plan says so and within the caps.
-- **Drivers A and B**: fresh agents with `VASTY_OWNER=agent-a` and `VASTY_OWNER=agent-b`. Each works in its own directory, `/private/tmp/vasty-live-4/a/` or `b/`, holding a copy of `vasty.toml` and `fx/`. Both share the default vasty state directory. Each receives its task lines one gate at a time, the README section "For agents", and the `--help` output for every verb. Neither knows the other exists. Driver rules from run 3 apply: expectations and surprises in `notes.md`, no questions answered, 40 minutes each.
+- **Drivers A and B**: fresh agents with `VASTY_OWNER=agent-a` and `VASTY_OWNER=agent-b`. Each works in its own directory, `/private/tmp/vasty-live-5/a/` or `b/`, holding a copy of `vasty.toml` and `fx/`. Both share the default vasty state directory. Each receives its task lines one gate at a time, the README section "For agents", and the `--help` output for every verb. Neither knows the other exists. Driver rules from run 4 apply: expectations and surprises in `notes.md`, no questions answered, 40 minutes each.
 
 ## Setup
 
-Run 3's setup steps 1 to 4 and 8, in `/private/tmp/vasty-live-4`. Config:
+Run 4's setup steps 1 to 4 and 8, in `/private/tmp/vasty-live-5`. Config:
 
 ```toml
 [defaults]
@@ -21,18 +21,18 @@ disk = 16
 image = "vastai/base-image:cuda-12.6.3-auto"
 ```
 
-Owner comes from each shell's `VASTY_OWNER`. The manager's shell sets `VASTY_OWNER=manager`. `vasty config show` reports `env` for owner and `project` for ttl, run_ttl, gpu, max_price, disk and image, with no `invalid_config`. Stop the run if it does not. Fixtures: `fx/hello.py` from run 3.
+Owner comes from each shell's `VASTY_OWNER`. The manager's shell sets `VASTY_OWNER=manager`. `vasty config show` reports `env` for owner and `project` for ttl, run_ttl, gpu, max_price, disk and image, with no `invalid_config`. Stop the run if it does not. Fixtures: `fx/hello.py` from run 4.
 
 ## Scenarios
 
 Cap for the run: $3.00. Clocks in this run run at most 20 minutes, except `long` and B's `ft`.
 
-### 4A. The long lease
+### 5A. The long lease
 
 Manager-driven. Starts first and ends last.
 
 1. `reserve --name long --ttl 3h --json`. Record `instance_id` from `status long --verbose`, `expires_at`, `price_per_hr` and the credit.
-2. Every 10 minutes: `status long --json` and `vastai show user --raw`. Append UTC, `cost`, `uptime_s`, `ttl_remaining_s`, `warnings` and the credit to `out/4A/poll.tsv`.
+2. Every 10 minutes: `status long --json` and `vastai show user --raw`. Append UTC, `cost`, `uptime_s`, `ttl_remaining_s`, `warnings` and the credit to `out/5A/poll.tsv`.
 3. At 1h: `extend long --by 1h`. At 2h: `extend long --to 1h30m`. Record both results and the next poll.
 4. At 3h20m from the start, or when `ttl_remaining_s` passes under 5 minutes: `release long`. Record `cost` and `uptime_s`.
 5. `vastai show invoices-v1 --charges -s START -e END --raw` with epoch seconds. Sum the rows for `long`'s instance id. Sum the rows for every instance this run created.
@@ -43,11 +43,11 @@ Pass:
 - `uptime_s` grows by the wall-clock interval between polls, within 30 s.
 - The credit drop over the run is within $0.05 of the summed charge rows for all instances, allowing for charges that land after the last reading.
 - No `clock_skew` warning without a cause the transcript shows.
-- `long` is listed in every manager `status` during 4B and is released by step 4 alone.
+- `long` is listed in every manager `status` during 5B and is released by step 4 alone.
 
-### 4B. Two agents, one account
+### 5B. Two agents, one account
 
-Starts 15 minutes into 4A. The manager advances both drivers gate by gate. A gate opens when the condition holds and the manager has saved its captures. The manager records `status --all --everyone --json` at every gate into `out/4B/manager/`.
+Starts 15 minutes into 5A. The manager advances both drivers gate by gate. A gate opens when the condition holds and the manager has saved its captures. The manager records `status --all --everyone --json` at every gate into `out/5B/manager/`.
 
 **Gate 1.** Both drivers, at the same time: "Reserve a box named `ft`, run `fx/hello.py` on it, keep the box up."
 
@@ -76,7 +76,7 @@ Pass: B's `swept` names `victim` with `ok: true`, `victim` is gone from `vastai 
 
 **Gate 4.** Driver B: "Release every box you own."
 
-Opens when B's `ft` is gone. Captures: manager `status --all --everyone`. Pass: `long` is the only lease listed. Then the manager runs `vasty sweep --follow long` detached, to replace the follower killed at gate 3, and 4A continues.
+Opens when B's `ft` is gone. Captures: manager `status --all --everyone`. Pass: `long` is the only lease listed. Then the manager runs `vasty sweep --follow long` detached, to replace the follower killed at gate 3, and 5A continues.
 
 Questions the transcripts answer, written up in the report:
 
@@ -90,10 +90,10 @@ Questions the transcripts answer, written up in the report:
 - `long` is exempt from the 20-minute clock limit. B's `ft` runs at most 40 minutes, to outlive the gate 3 wait. Every other clock runs at most 20 minutes.
 - Followers stay alive except at gate 3, where the plan kills them and gate 4 restores `long`'s.
 - Read the credit before each create and every 60 s while any instance besides `long` exists, into `out/ledger.md`.
-- Stop the run when: the cumulative drop passes $3.00; `long` leaves `vastai show instances --raw` before 4A step 4; an id in `vastai show instances --raw` matches no `instance_id` in `vasty status --all --everyone --verbose`, apart from `victim` between its expiry and gate 3; vasty prints a traceback; two consecutive `reserve` calls return `no_offers` or `provider_error`.
+- Stop the run when: the cumulative drop passes $3.00; `long` leaves `vastai show instances --raw` before 5A step 4; an id in `vastai show instances --raw` matches no `instance_id` in `vasty status --all --everyone --verbose`, apart from `victim` between its expiry and gate 3; vasty prints a traceback; two consecutive `reserve` calls return `no_offers` or `provider_error`.
 - On any stop: stop both drivers, create nothing more, release every lease under each owner, destroy any remaining instance by id, write the report.
 - Redact `CONTAINER_API_KEY` by value in every saved file.
 
 ## Report
 
-Append per gate and per 4A step to `out/report.md` as each ends. Mine the 4B transcripts with the four lists from run 3's report section. Copy the reviewed output to `docs/live/run4/` and the report to `docs/live-test-report-4.md`. File each defect under `issues/` with the command, the output and the rule it breaks.
+Append per gate and per 5A step to `out/report.md` as each ends. Mine the 5B transcripts with the four lists from run 4's report section. Copy the reviewed output to `docs/live/run5/` and the report to `docs/live-test-report-5.md`. File each defect under `issues/` with the command, the output and the rule it breaks.

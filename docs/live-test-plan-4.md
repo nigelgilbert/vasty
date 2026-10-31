@@ -1,6 +1,6 @@
-# Live run 3: agent-driven workflows
+# Live run 4: warnings, jobs and pending boxes
 
-Runs 1 and 2 checked each verb against a checklist. The findings behind PR #1 and #2 came from item 7 of run 2, where a fresh agent drove `serve` with the README alone. This run applies that pattern to the rest of the API. The record is the transcripts.
+Runs 1 and 2 checked each verb against a checklist. Run 3 puts a swarm of workers on shared boxes. This run provokes each `status` warning and runs its `fix`, checks job states on a real box, and hands a blind driver a `reserve --no-wait`. The record is the transcripts.
 
 ## Roles
 
@@ -9,7 +9,7 @@ Runs 1 and 2 checked each verb against a checklist. The findings behind PR #1 an
 
 ## Setup
 
-Local, no spend. Root `/private/tmp/vasty-live-3`, repo venv on PATH, `VAST_API_KEY` exported and never echoed.
+Local, no spend. Root `/private/tmp/vasty-live-4`, repo venv on PATH, `VAST_API_KEY` exported and never echoed.
 
 1. `vastai show instances --raw` returns `[]`. Destroy anything listed with `vastai destroy instance ID -y` and record the ids.
 2. Account 836500 has a card on file. Record the starting credit from `vastai show user --raw` in `out/ledger.md`.
@@ -18,7 +18,7 @@ Local, no spend. Root `/private/tmp/vasty-live-3`, repo venv on PATH, `VAST_API_
 5. Write `vasty.toml`:
 
 ```toml
-owner = "run3"
+owner = "run4"
 
 [defaults]
 ttl = "10m"
@@ -40,25 +40,13 @@ image = "vastai/base-image:cuda-12.6.3-auto"
 
 Stop the run if step 6 or 8 fails.
 
-Each driver works in `/private/tmp/vasty-live-3/<scenario>/`, which holds a copy of `vasty.toml` and `fx/`. Its shell has `VAST_API_KEY` and `VASTY_OWNER=run3-<scenario>`. Every vasty command runs with `--json` and its output is saved as `out/<scenario>/NN-<verb>.json`. Drivers run one at a time.
+Each driver works in `/private/tmp/vasty-live-4/<scenario>/`, which holds a copy of `vasty.toml` and `fx/`. Its shell has `VAST_API_KEY` and `VASTY_OWNER=run4-<scenario>`. Every vasty command runs with `--json` and its output is saved as `out/<scenario>/NN-<verb>.json`. Drivers run one at a time.
 
 ## Scenarios
 
 Each scenario starts and ends with `vastai show instances --raw` returning `[]`. Read the balance before each create and every 60 s while any instance exists. Cap per scenario: a balance drop of $0.75. Cap for the run: $3.00. Every clock in this run runs at most 20 minutes.
 
-### 3A. Post-training flow, blind
-
-Task line: "Train with `fx/train.py` on a GPU box, get every checkpoint back into `./out/`, and release the box. Report the cost."
-
-Pass, recorded as three separate lines:
-
-1. Result: `./out/` holds `ckpt-1.txt` through `ckpt-28.txt`, each containing its number, and the box is gone.
-2. Cost: the driver's reported cost equals `cost` in the release JSON.
-3. Warning exposure: whether the driver's clock was under 14 minutes at any time while the job ran, whether `expiring_with_running_job` appeared in any output the driver saw, and what the driver did next.
-
-A driver that picks a long TTL up front passes line 1 and shows no warning. That is a finding about defaults, recorded in line 3.
-
-### 3B. Warnings and their fixes
+### 4A. Warnings and their fixes
 
 Manager-driven. One fresh lease per warning, named after it. For each: provoke, run `status L --json`, copy the warning entry, run `fix` verbatim, run `status L --json` again. Record four facts per warning: the warning appeared, the fix exited 0, the warning afterwards matches the table, the lease is in the state the fix implies. A fix that exits 0 and leaves the lease in another state is a finding.
 
@@ -73,7 +61,7 @@ Observe only, with the command that showed it: `expired_with_running_jobs`, `clo
 
 If `unreach` is still listed 3 minutes after the fix, destroy it with `vastai destroy instance ID -y` and record that as a finding.
 
-### 3C. Job lifecycle on a real box
+### 4B. Job lifecycle on a real box
 
 Manager-driven on one box: `reserve --name jobs --ttl 20m`, box ready check, `sync jobs push fx/ /workspace/fx/`.
 
@@ -82,7 +70,7 @@ Manager-driven on one box: `reserve --name jobs --ttl 20m`, box ready check, `sy
 3. Pid reuse. `vasty ssh jobs -- 'pidof cron'`. Over `ssh`, write that pid into `/workspace/.vasty/jobs/j-1/pid` and remove `/workspace/.vasty/jobs/j-1/exit` if present. `status jobs --json`. Expect `j-1` `state: "unknown"`. This is the probe's `/proc/PID/cmdline` check, covered on fakes and first run on Linux by CI on 2026-10-31.
 4. `release jobs`. Record `jobs` in the release JSON against the states seen in steps 1 to 3.
 
-### 3D. Reserve without waiting, blind
+### 4C. Reserve without waiting, blind
 
 Task line: "Reserve a GPU box without waiting for it to boot. When it is ready, run `fx/hello.py` on it once, then release it."
 
@@ -105,4 +93,4 @@ Append per scenario to `out/report.md` as it ends: each pass line, the JSON that
 3. Fields that were null or missing at the moment the driver needed them.
 4. Commands the driver reached for that do not exist.
 
-Copy the reviewed output to `docs/live/run3/` and the report to `docs/live-test-report-3.md`. File each defect under `issues/` with the command, the output and the rule it breaks.
+Copy the reviewed output to `docs/live/run4/` and the report to `docs/live-test-report-4.md`. File each defect under `issues/` with the command, the output and the rule it breaks.
