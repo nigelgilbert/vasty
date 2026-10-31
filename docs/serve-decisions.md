@@ -79,6 +79,8 @@ Declined: refusing a bare `serve` before boot; cleanup outcome fields on the `se
 
 ## First Astra review, disposition
 
+The second review supersedes this section. It lists `--cuda` on `serve` and a `serve --on` CUDA check as accepted, and both were dropped.
+
 Accepted: `--cuda` on `serve` as well as `reserve`; the `serve --on` check against the lease's recorded CUDA, with a refresh before an unknown counts; no GPU-name exemption; Error 804 proves an attempted compat path and nothing about who installed it; cite the 535 and 570 table entries instead of a range; registry calls are cacheable and `NVIDIA_REQUIRE_CUDA` is an expression; drop the `created` fallback for `uptime_s` and report null; name `actual_status` as the sampled field; state that `uptime_s` is elapsed time including stopped intervals; `auto` is settled by source inspection and scoped to the pinned image; keep `quant` for other models; report the chosen context in the serve result; best-effort tail read, byte cap, tail before `TERM`; move the key off the command line with `VLLM_API_KEY`; decision 5 names the sweep.
 
 Declined: renaming `running_at` to `first_seen_running_at`. The field's definition says it is the first observed sample, and `docs/followups-plan.md` already uses the shorter name. Shared sanitisation for `status`: `status` never holds the key, and with `VLLM_API_KEY` the log no longer carries it on the command line.
