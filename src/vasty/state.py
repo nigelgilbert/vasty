@@ -190,10 +190,9 @@ def reuse_candidates(
 
     A candidate belongs to `settings.owner`, is `running` and reached, has no
     destroy pending, a startup hook that exited 0, no live tracked job, no
-    `hardware_mismatch` and time left. Every managed lease has a guard of
-    `full` or `partial`, so the guard needs no check. The shortfall is the
-    seconds the lease falls short of `ttl`, 0 when it outlasts it. Leases
-    with no shortfall come first, then most time left first.
+    `hardware_mismatch` and time left. The shortfall is the seconds the lease
+    falls short of `ttl`, 0 when it outlasts it. Leases with no shortfall
+    come first, then most time left first.
     """
     found: list[tuple[CachedLease, int, int]] = []
     for lease in snap.active():
