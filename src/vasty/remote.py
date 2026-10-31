@@ -165,6 +165,8 @@ _RSYNC_VERSION = re.compile(r"version\s+v?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?")
 WATCHDOG_STALE_S = 180
 JOB_CLAIM_TRIES = 10
 """How many job ids `SshBox.start_job` tries before it reports the id as taken."""
+LOG_LINES = 100
+"""How many job log lines `status` and `serve` read."""
 
 
 def _b64(text: str) -> str:

@@ -36,11 +36,11 @@ from vasty.models import (
     WarningItem,
 )
 from vasty.output import money
+from vasty.remote import LOG_LINES
 from vasty.state import LIVE_JOB_STATES, make_warning
 from vasty.targeting import has_target, resolve_target
 from vasty.timeutil import format_duration, iso
 
-LOG_LINES = 100
 DASH = "—"
 WARN_MARK = "⚠ "
 EXPIRING_CODES = frozenset({"expiring_soon", "expiring_with_running_job"})
