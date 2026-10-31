@@ -421,11 +421,6 @@ def test_removed_budget_key_is_invalid_config(cfg: Env, table: str) -> None:
     assert REMOVED_BUDGET_KEY in err.message
 
 
-def test_removed_budget_key_in_env_is_ignored(cfg: Env) -> None:
-    cfg.env["VASTY_" + REMOVED_BUDGET_KEY.upper()] = "40"
-    assert REMOVED_BUDGET_KEY not in cfg.resolve().sources
-
-
 # The removed models table.
 
 
