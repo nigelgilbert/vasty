@@ -68,6 +68,7 @@ vasty serve     [--on LEASE | reserve flags] --model MODEL [--bind-local] [-- VL
 vasty sync      LEASE (push [--delete] SRC DEST | pull SRC DEST)
 vasty ssh       LEASE [-- COMMAND...]
 vasty tag       TARGET [--set-name NAME] [--set-group G] [--set-owner O] [--ttl 30m]
+vasty sweep     [--follow LEASE]
 vasty config    (show | set KEY VALUE | profiles)
 vasty completion (bash | zsh | fish)
 ```
@@ -120,7 +121,7 @@ Exit codes: 0 success, 1 bad input or lookup, 2 provider or box failure. Once a 
 
 `status` returns a `warnings` array. Each entry has a code, the lease, a message and `fix`, one runnable `vasty` command. An agent can loop over the warnings and run the fixes. A `guard_partial` warning names the missing layer, so an agent knows how much to trust that box's clock. `status --verbose` lists each layer under `guard_layers`.
 
-Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `expired_with_running_jobs`, `startup_failed`, `flag_mismatch`, `idle_box_available`, `clock_skew`, `clock_skew_unknown`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
+Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `expired_with_running_jobs`, `startup_failed`, `flag_mismatch`, `idle_box_available`, `clock_skew`, `clock_skew_unknown`, `sweep_not_spawned`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
 
 When `reserve`, or `run` or `serve` without `--on`, creates a box, it warns `idle_box_available` for up to three idle leases that would have fit.
 
@@ -140,6 +141,7 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 | `run --detach` | `lease`, `job`, `log_path`, `expires_at` |
 | `serve` | `lease`, `job`, `url`, `api_key`, `expires_at` |
 | `sync` | `lease`, `direction`, `src`, `dest` |
+| `sweep` | `swept`, `warnings` |
 | `config` | `values`, `{key, value}` or `profiles` |
 
 A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fields null. `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at` and `ttl_remaining_s`.
@@ -218,7 +220,25 @@ Several boxes that belong together share a `--group`. `status --group exp42` sho
 Vast has no expiry field on an instance, so Vasty enforces the clock itself with two layers.
 
 1. **On the box.** `reserve` injects a watchdog through Vast's `onstart` hook. It reads the expiry from `/workspace/.vasty/clock`, sleeps until then, re-reads the file so a late `extend` is honored, and destroys the instance with the per-instance key Vast injects into the container. Cron restarts it if it dies. At start and hourly it reads its own instance row with that key; a 401 or 403 marks the key missing until a later read passes. A box without `curl` marks the watchdog layer. Either way the lease carries a `guard_partial` warning and the sweep is the enforcer.
-2. **Local sweep.** Every networked `vasty` command lists the account's instances, reads each lease label, and destroys anything past its clock. Whatever it destroys shows up in `swept`.
+2. **Local sweep.** Every networked `vasty` command lists the account's instances, reads each lease label, and destroys anything past its clock. Whatever it destroys shows up in `swept`. `reserve`, `extend` and `tag` on adopt also start a detached `vasty sweep --follow LEASE` on the laptop. It sleeps to the lease's expiry, runs the sweep, and repeats until the row is gone, so a failed destroy, a moved expiry and a later `extend` are each picked up on the next pass. A sweep that fails is retried five times a minute apart, then the follower exits with the error. A spawn that fails warns `sweep_not_spawned` and the command succeeds.
+
+`vasty sweep` alone runs one sweep with no probe, for a scheduler. A GitHub Actions cron every five minutes:
+
+```yaml
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pipx install git+https://github.com/nigelgilbert/vasty
+      - run: vasty sweep
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+```
+
+GitHub runs schedules best effort, so a sweep can land minutes late or skip a slot. The watchdog and the follower remain the first two enforcers.
 
 The clock starts when the container starts, which is when Vast starts charging GPU rent. Storage and bandwidth bill from creation. A box that never reaches SSH is destroyed by the waiting `reserve` or by the next sweep once `created + ttl` passes.
 
@@ -297,7 +317,7 @@ cuda = 13
 Done:
 
 - Every verb above, in `src/vasty/`.
-- 1179 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
+- 1246 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
 - One funded live run on Vast, 2026-10-29. Every phase passed except `serve`. See [docs/live-test-report.md](docs/live-test-report.md).
 
 Not done:

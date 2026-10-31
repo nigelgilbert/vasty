@@ -6,7 +6,7 @@ Run by a Claude Code agent with Nigel supervising. Spend ceiling: $20 on the acc
 
 The unit suite runs against fakes. Nothing in the repo has touched Vast. This run checks, in order of value:
 
-1. The clock holds. A box destroys itself when its clock runs out, with no vasty process on the laptop. The sweep destroys a box whose watchdog is dead.
+1. The clock holds. A box destroys itself when its clock runs out, with no vasty process on the laptop. The follower `reserve` starts destroys a box whose watchdog is dead. The sweep in the next command destroys a box with neither.
 2. `reserve`, `status`, `extend`, `release`, `run`, `sync`, `ssh`, `tag` work end to end on a real box, with the JSON shapes the README documents.
 3. The open questions below.
 4. `serve` brings up a small model behind the endpoint.
@@ -87,11 +87,11 @@ Stop here if step 9 fails. The charges endpoint is the base for every budget che
 
 ## 4. Phases
 
-Every phase ends with `vastai show instances --raw` returning `[]`. Boxes carry a 15m default TTL. Two windows have no working clock: 2b after the watchdog is killed, and the phase 4 orphan before `vasty tag`. Nigel watches both. If the agent stops, Nigel runs `vastai show instances --raw` and destroys each id.
+Every phase ends with `vastai show instances --raw` returning `[]`. Boxes carry a 15m default TTL. Two windows have no working clock: 2b' after the watchdog and the follower are killed, and the phase 4 orphan before `vasty tag`. Nigel watches both. If the agent stops, Nigel runs `vastai show instances --raw` and destroys each id.
 
 Read the balance before each create and every 60 seconds while any instance exists. After a phase's last box leaves `vastai show instances --raw`, read it twice 120 seconds apart and keep the second reading. Spend caps are per phase, measured as balance drop. Stop the phase at the cap and report.
 
-Box ready check, run after every `reserve` that precedes a guard check, phase 2b, or a `run`:
+Box ready check, run after every `reserve` that precedes a guard check, phase 2b or 2b', or a `run`:
 
 ```
 vasty ssh L -- 'cat /workspace/.vasty/startup.exit; ls /workspace/.vasty/alive /workspace/.vasty/guard; command -v tmux'
@@ -134,6 +134,7 @@ Pass:
 
 ```
 vasty reserve --name wd --ttl 8m
+pkill -f "vasty sweep --follow"        # the watchdog alone must do it
 # box ready check
 vastai show instances --raw            # every 60s past expires_at
 ```
@@ -142,18 +143,32 @@ Run no networked vasty command from `expires_at` until `vastai show instances --
 
 Rerun with `--ttl 6m` only if 2a passes, to find the floor where boot eats the TTL. Skip if boot in phase 1 took over 3 minutes.
 
-2b. Sweep alone.
+2b. Follower alone.
+
+```
+vasty reserve --name fo --ttl 8m
+pgrep -af "vasty sweep --follow"         # expect one follower naming the lease id
+# box ready check
+vasty ssh fo -- 'rm -f /etc/cron.d/vasty; pkill -f "[w]atchdog.sh"; sleep 2; rm -f /workspace/.vasty/alive; pgrep -f "[w]atchdog.sh" || echo watchdog_dead'
+vasty status fo                          # expect guard_partial, watchdog missing
+# after 70s
+vasty ssh fo -- 'pgrep -f "[w]atchdog.sh" || echo watchdog_dead; ls /workspace/.vasty/alive'
+vastai show instances --raw              # every 60s past expires_at
+```
+
+Continue only when both checks print `watchdog_dead` and `alive` is absent. Run no networked vasty command from `expires_at` until the box is gone. Pass: the instance is gone within 2 minutes after `expires_at` and the follower has exited. Then `vasty status fo`. Pass: `state: expired`, `swept: []`. If `fo` is still listed at `expires_at` + 3m, run `vasty release fo` and fail 2b.
+
+2b'. Sweep alone.
 
 ```
 vasty reserve --name sw --ttl 8m
+pkill -f "vasty sweep --follow"
 # box ready check
 vasty ssh sw -- 'rm -f /etc/cron.d/vasty; pkill -f "[w]atchdog.sh"; sleep 2; rm -f /workspace/.vasty/alive; pgrep -f "[w]atchdog.sh" || echo watchdog_dead'
-vasty status sw                          # expect guard_partial, watchdog missing
-# after 70s
-vasty ssh sw -- 'pgrep -f "[w]atchdog.sh" || echo watchdog_dead; ls /workspace/.vasty/alive'
+pgrep -af "vasty sweep --follow" || echo no_follower
 ```
 
-Continue only when both checks print `watchdog_dead` and `alive` is absent. Run no networked vasty command from `expires_at` until the next step. At `expires_at` + 1m, confirm `vastai show instances --raw` still lists the box, then run `vasty status sw`. Pass: `swept` names `sw` with `ok: true` and `error: null`, the instance is gone, and `vasty status sw` reports `expired`. If `sw` is still listed at `expires_at` + 3m, run `vasty release sw` and fail 2b.
+Continue only when the box checks from 2b pass and `no_follower` printed. Run no networked vasty command from `expires_at` until the next step. At `expires_at` + 1m, confirm `vastai show instances --raw` still lists the box, then run `vasty sweep`. Pass: `swept` names `sw` with `ok: true` and `error: null`, the instance is gone, and `vasty status sw` reports `expired`. If `sw` is still listed at `expires_at` + 3m, run `vasty release sw` and fail 2b'.
 
 2c. Extend both ways.
 
@@ -301,7 +316,7 @@ Bandwidth is host-priced at $3 to $14 per TB, with outliers to $27. 14 boxes pul
 ## 6. Guardrails for the agent
 
 - Every clock runs at most 20m from its start, except phase 5.
-- Watch an expiry with `vastai show instances --raw`. Run no networked vasty command from `expires_at` until the box is gone, or until the 2b sweep step.
+- Watch an expiry with `vastai show instances --raw`. Run no networked vasty command from `expires_at` until the box is gone, or until the 2b' sweep step. Kill the follower before any phase that expects a box to outlive its clock: `extend` and `reserve` start one.
 - Read the balance before each create and every 60 seconds while any instance exists, into `/private/tmp/vasty-live/out/ledger.md`.
 - Stop and report when: a phase passes its cap; the cumulative balance drop passes $5.50; an id in `vastai show instances --raw` matches no `instance_id` in `vasty status --verbose`, apart from the phase 4 orphan before `tag`; vasty prints a traceback; two consecutive `reserve` calls return `no_offers` or `provider_error`.
 - On any stop, create nothing more, run phase 6, then write the report.
