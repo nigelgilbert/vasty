@@ -11,7 +11,8 @@ from vasty.errors import VastyError
 from vasty.models import Job
 from vasty.remote import BoxUnreachableError, ExecResult, SshTarget
 
-QWEN = "Qwen/Qwen3-72B-Instruct"
+QWEN = "Qwen/Qwen3-14B-AWQ"
+VLLM_PROFILE = '[profiles.vllm]\nimage = "vllm/vllm-openai:v0.32.0"\nvram = 24\ncuda = 13\n'
 KEY = "vasty-" + "ab" * 32
 NO_VLLM = ExecResult(1, "", "")
 
@@ -19,6 +20,12 @@ NO_VLLM = ExecResult(1, "", "")
 def run_serve(harness: Harness, *argv: str) -> tuple[int, dict[str, Any], str]:
     code, out, err = harness.run("serve", *argv)
     return code, json.loads(out), err
+
+
+def write_user(harness: Harness, text: str) -> None:
+    path = harness.home / ".config" / "vasty" / "config.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
 
 
 @pytest.fixture
@@ -55,12 +62,9 @@ def test_serve_on_box(harness: Harness, box: int, started: list[tuple[Job, str]]
     assert harness.box.state(box).execs == ["command -v vllm"]
     job, command = started[0]
     assert (job.kind, job.port, job.state) == ("serve", 8000, "serving")
-    assert command == (
-        f"vllm serve {QWEN} --api-key {KEY} "
-        "--host 0.0.0.0 --port 8000 --quantization awq"
-    )
+    assert command == f"vllm serve {QWEN} --api-key {KEY} --host 0.0.0.0 --port 8000"
     assert KEY not in job.cmd
-    assert job.cmd == f"vllm serve {QWEN} --host 0.0.0.0 --port 8000 --quantization awq"
+    assert job.cmd == f"vllm serve {QWEN} --host 0.0.0.0 --port 8000"
     assert harness.http_calls == ["http://198.51.100.9:40080/v1/models"]
     assert harness.http_headers == [{"Authorization": f"Bearer {KEY}"}]
     lease = harness.context().cache.load().leases["l-0000a001"]
@@ -117,7 +121,7 @@ def test_serve_vllm_missing_on_box(
         "error": "vllm_missing",
         "message": "Lease l-0000a001 has no vllm on PATH.",
         "hint": f"Reserve with a vLLM image: vasty serve --model {QWEN} "
-                f'--image vllm/vllm-openai:v0.32.0, or add image to the [models."{QWEN}"] entry.',
+                "--image vllm/vllm-openai:v0.32.0.",
     }
     assert started == []
     assert box in harness.provider.instances
@@ -154,27 +158,66 @@ def test_serve_on_unknown_model_serves_path(
     assert code == 0
     assert data["model"] == "./out/checkpoint"
     assert started[0][1].startswith("vllm serve ./out/checkpoint ")
-    assert "--quantization" not in started[0][1]
 
 
-def test_serve_quant_flag_overrides_entry(
+# Passthrough after `--`.
+
+
+def test_serve_passes_flags_after_dashes(
     harness: Harness, box: int, started: list[tuple[Job, str]]
 ) -> None:
-    run_serve(harness, "--on", "ft", "--model", QWEN, "--quant", "fp8")
-    assert started[0][1].endswith("--quantization fp8")
-
-
-def test_serve_reads_user_model_entry(
-    harness: Harness, box: int, started: list[tuple[Job, str]]
-) -> None:
-    path = harness.home / ".config" / "vasty" / "config.toml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        '[models."org/small"]\nvram = 24\nquant = "fp8"\nimage = "vllm/vllm-openai:v0.32.0"\n'
+    code, _, _ = run_serve(
+        harness, "--on", "ft", "--model", QWEN, "--", "--max-model-len", "16384",
+        "--gpu-memory-utilization=0.85",
     )
-    code, _, _ = run_serve(harness, "--on", "ft", "--model", "org/small")
     assert code == 0
-    assert started[0][1].endswith("--quantization fp8")
+    job, command = started[0]
+    tail = " --max-model-len 16384 --gpu-memory-utilization=0.85"
+    assert command == f"vllm serve {QWEN} --api-key {KEY} --host 0.0.0.0 --port 8000" + tail
+    assert job.cmd == f"vllm serve {QWEN} --host 0.0.0.0 --port 8000" + tail
+    lease = harness.context().cache.load().leases["l-0000a001"]
+    assert lease.jobs[0].cmd == job.cmd
+
+
+def test_serve_auto_reserve_passes_flags_after_dashes(
+    harness: Harness, reserve: FakeReserve, started: list[tuple[Job, str]]
+) -> None:
+    code, _, _ = run_serve(harness, "--model", QWEN, "--", "--max-model-len", "16384")
+    assert code == 0
+    assert started[0][1].endswith("--max-model-len 16384")
+    assert started[0][0].cmd.endswith("--max-model-len 16384")
+
+
+def test_serve_quotes_passthrough_tokens(
+    harness: Harness, box: int, started: list[tuple[Job, str]]
+) -> None:
+    run_serve(harness, "--on", "ft", "--model", QWEN, "--", "--chat-template", "a b; rm -rf /")
+    assert started[0][1].endswith("--chat-template 'a b; rm -rf /'")
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--port", "9000"],
+        ["--host", "0.0.0.0"],
+        ["--api-key=k"],
+        ["--api-key", "k"],
+        ["--port=9000"],
+        ["--max-model-len", "16384", "--api_key", "k"],
+    ],
+)
+@pytest.mark.parametrize("on", [True, False])
+def test_serve_rejects_owned_flags_after_dashes(
+    harness: Harness, reserve: FakeReserve, started: list[tuple[Job, str]],
+    extra: list[str], on: bool,
+) -> None:
+    argv = ["--on", "ft"] if on else []
+    code, data, _ = run_serve(harness, *argv, "--model", QWEN, "--", *extra)
+    assert code == 1
+    assert data["error"] == "invalid_arguments"
+    assert harness.provider.calls == []
+    assert reserve.calls == []
+    assert started == []
 
 
 def test_serve_bind_local(harness: Harness, box: int, started: list[tuple[Job, str]]) -> None:
@@ -211,24 +254,37 @@ def test_serve_on_orphan(harness: Harness) -> None:
 # Auto-reserve.
 
 
-def test_serve_auto_reserves_with_entry_hardware(
+def test_serve_auto_reserves_with_profile_hardware(
     harness: Harness, reserve: FakeReserve
 ) -> None:
-    code, data, _ = run_serve(harness, "--model", QWEN)
+    write_user(harness, VLLM_PROFILE)
+    code, data, _ = run_serve(harness, "--profile", "vllm", "--model", QWEN)
     assert code == 0
     call = reserve.calls[0]
-    assert (call["ttl"], call["vram"], call["image"]) == (7200, 80.0, "vllm/vllm-openai:v0.32.0")
+    assert (call["ttl"], call["vram"], call["image"]) == (7200, 24.0, "vllm/vllm-openai:v0.32.0")
     assert data["lease"] == "l-0000b001"
     assert data["url"] == "http://198.51.100.7:41080/v1"
     assert harness.provider.destroyed == []
 
 
-def test_serve_user_flags_beat_entry(harness: Harness, reserve: FakeReserve) -> None:
-    run_serve(harness, "--model", QWEN, "--vram", "48", "--gpu", "L40S", "--ttl", "1h")
+def test_serve_flags_beat_profile(harness: Harness, reserve: FakeReserve) -> None:
+    write_user(harness, VLLM_PROFILE)
+    run_serve(harness, "--profile", "vllm", "--model", QWEN, "--vram", "48", "--gpu", "L40S",
+              "--ttl", "1h")
     call = reserve.calls[0]
     assert (call["vram"], call["gpu"], call["image"], call["ttl"]) == (
         48.0, "L40S", "vllm/vllm-openai:v0.32.0", 3600
     )
+
+
+def test_serve_reads_stdin_json_like_reserve(harness: Harness, reserve: FakeReserve) -> None:
+    code, out, _ = harness.run(
+        "serve", "--model", QWEN, "--config", "-",
+        stdin='{"vram": 24, "image": "vllm/vllm-openai:v0.32.0"}',
+    )
+    assert code == 0, out
+    call = reserve.calls[0]
+    assert (call["vram"], call["image"]) == (24.0, "vllm/vllm-openai:v0.32.0")
 
 
 def test_serve_name_reuse_checks_only_given_flags(harness: Harness, box: int) -> None:
@@ -243,16 +299,17 @@ def test_serve_name_reuse_checks_only_given_flags(harness: Harness, box: int) ->
     assert mismatch[0]["message"].endswith("differs from --vram")
 
 
-def test_serve_unknown_model_needs_vram_and_image(
-    harness: Harness, reserve: FakeReserve
+def test_bare_serve_reserves_default_image_and_releases_without_vllm(
+    harness: Harness, reserve: FakeReserve, started: list[tuple[Job, str]]
 ) -> None:
-    code, data, _ = run_serve(harness, "--model", "org/mystery", "--vram", "24")
-    assert code == 1 and data["error"] == "model_unknown"
-    assert reserve.calls == []
-    code, data, _ = run_serve(harness, "--model", "org/mystery", "--vram", "24",
-                              "--image", "vllm/vllm-openai:v0.32.0")
-    assert code == 0
-    assert reserve.calls[0]["vram"] == 24.0
+    harness.box.state(1001).exec_results["command -v vllm"] = NO_VLLM
+    code, data, _ = run_serve(harness, "--model", "org/mystery")
+    assert code == 1 and data["error"] == "vllm_missing"
+    assert "--image vllm/vllm-openai:v0.32.0" in data["hint"]
+    assert "profile" not in data["hint"]
+    assert reserve.calls[0]["image"] == "vasty/base:cuda12.4"
+    assert started == []
+    assert harness.provider.destroyed == [1001]
 
 
 def test_serve_vllm_missing_releases_reserved_box(

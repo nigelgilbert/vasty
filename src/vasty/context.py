@@ -45,8 +45,6 @@ def default_http_get(url: str, headers: Mapping[str, str], timeout: float) -> in
 class Context:
     flags: dict[str, Any] = field(default_factory=dict)
     profile: str | None = None
-    # Set the `[models]` entry that `settings` applies as the `model` layer before the first read.
-    model: str | None = None
     stdin_json: dict[str, Any] | None = None
     mode: str = "json"
     env: Mapping[str, str] = field(default_factory=lambda: dict(os.environ))
@@ -84,7 +82,7 @@ class Context:
 
             self._settings = resolve(
                 self.flags, self.stdin_json, self.profile, self.env, self.cwd, self.home,
-                stdin_text=self.stdin.read, model=self.model,
+                stdin_text=self.stdin.read,
             )
         return self._settings
 

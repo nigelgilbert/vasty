@@ -63,7 +63,7 @@ vasty extend    TARGET  (--by 30m | --to 2h | --until TIME)
 vasty release   TARGET [--yes]
 vasty status    [TARGET] [--cached]
 vasty run       [--on LEASE | reserve flags] [--detach] [--sync DIR] -- COMMAND...
-vasty serve     [--on LEASE | reserve flags] --model MODEL [--quant Q] [--bind-local]
+vasty serve     [--on LEASE | reserve flags] --model MODEL [--bind-local] [-- VLLM_ARGS...]
 vasty sync      LEASE (push [--delete] SRC DEST | pull SRC DEST)
 vasty ssh       LEASE [-- COMMAND...]
 vasty tag       TARGET [--set-name NAME] [--set-group G] [--set-owner O] [--ttl 30m]
@@ -155,7 +155,6 @@ A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fie
 | `lease_pending` | 1 | `extend`, `run --on`, `serve --on`, `sync` or `ssh` on a lease SSH cannot reach yet |
 | `name_conflict` | 1 | a new name matches another active lease of the same owner |
 | `confirmation_required` | 1 | orphan `release` without `--yes` in non-TTY mode |
-| `model_unknown` | 1 | `serve` model has no table entry and no `--vram` and `--image` |
 | `image_unsupported` | 1 | a custom image lacks bash, root or apt-get |
 | `startup_too_large` | 1 | the encoded `onstart` exceeds 4048 characters |
 | `vllm_missing` | 1 | `serve` finds no `vllm` on the box's PATH |
@@ -183,7 +182,8 @@ vasty release ft                 # cost and job exit codes for the report
 ### A model endpoint for sub-agents
 
 ```sh
-vasty serve --model Qwen/Qwen3-72B-Instruct --ttl 1h
+vasty serve --profile vllm --model Qwen/Qwen3-14B-AWQ --ttl 1h
+vasty serve --profile vllm --model Qwen/Qwen3-14B-AWQ --ttl 1h -- --max-model-len 16384
 ```
 
 Selected fields:
@@ -198,7 +198,9 @@ Selected fields:
 }
 ```
 
-The box's image supplies vLLM, and `serve` launches `vllm` from PATH. The builtin `Qwen/Qwen3-72B-Instruct` entry uses `vllm/vllm-openai:v0.32.0`. On a plain image, install vLLM in a `startup` hook first.
+The box's image supplies vLLM, and `serve` launches `vllm` from PATH. The `vllm` profile in the [sample config](#configuration) reserves on `vllm/vllm-openai:v0.32.0`. A box reserved with a `startup` hook that installs `vllm`, or one set up through `run --on`, can serve with `serve --on`.
+
+Tokens after `--` go to `vllm serve` after the model name. `serve` sets `--host`, `--port` and `--api-key` itself and rejects them there.
 
 Point an OpenAI-compatible client at `url` with `api_key`. The endpoint is public on a random port, protected by a fresh key per job. The key prints once. `--bind-local` keeps vLLM on `127.0.0.1` for use through `vasty ssh -L`. The endpoint dies with the lease.
 
@@ -255,7 +257,7 @@ Any machine with the API key sees the same leases, owners and groups. An instanc
 
 ## Configuration
 
-Resolution order, highest first: flags, the `[models]` entry for `serve`, `--config -` JSON on stdin, `--profile NAME`, `VASTY_*` environment variables, `./vasty.toml`, `~/.config/vasty/config.toml`, built-in defaults. `vasty config show` prints every effective value and its source.
+Resolution order, highest first: flags, `--config -` JSON on stdin, `--profile NAME`, `VASTY_*` environment variables, `./vasty.toml`, `~/.config/vasty/config.toml`, built-in defaults. `vasty config show` prints every effective value and its source.
 
 ```toml
 owner = "nigel"                 # overridden by VASTY_OWNER or --owner
@@ -266,7 +268,7 @@ run_ttl = "2h"
 max_price = 0.60
 image = "vastai/base-image:cuda-12.6.3-auto"
 
-[profiles.big]
+[profiles.train]
 gpu = "A100"
 vram = 80
 max_price = 2.50
@@ -274,13 +276,11 @@ startup = '''
 pip install -U transformers peft
 '''
 
-[models."Qwen/Qwen3-72B-Instruct"]
-vram = 80
-quant = "awq"
+[profiles.vllm]
 image = "vllm/vllm-openai:v0.32.0"
+vram = 24
+cuda = 13
 ```
-
-A `[models]` entry sets `vram`, `gpu` and `image` for `serve --model NAME` ahead of every layer below flags, so `serve` ignores `defaults.image` unless `--image` is passed.
 
 `startup` runs once on each box as root in `/workspace` after Vasty's own setup. The box reports `pending` until it exits 0. A failing hook leaves the box up with a `startup_failed` warning so you can `ssh` in and look.
 

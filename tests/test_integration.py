@@ -11,6 +11,7 @@ import pytest
 from fakes import Harness, make_offer
 from vasty.labels import parse
 from vasty.models import CreateRequest, Instance, Label
+from vasty.provider import build_offer_query
 
 
 def boot(harness: Harness, inst: Instance, request: CreateRequest) -> None:
@@ -65,7 +66,8 @@ def test_detached_run_leaves_the_box_alive(h: Harness) -> None:
 
 
 def test_auto_reserved_serve_returns_endpoint(h: Harness) -> None:
-    code, data = run_json(h, "serve", "--model", "Qwen/Qwen3-72B-Instruct", "--max-price", "2")
+    code, data = run_json(h, "serve", "--model", "Qwen/Qwen3-14B-AWQ",
+                          "--image", "vllm/vllm-openai:v0.32.0", "--max-price", "2")
     assert code == 0, data
     assert data["url"].startswith("http://198.51.100.7:")
     assert data["url"].endswith("/v1")
@@ -74,9 +76,21 @@ def test_auto_reserved_serve_returns_endpoint(h: Harness) -> None:
     assert len(h.provider.instances) == 1
 
 
+def test_serve_profile_sends_hardware_to_search(h: Harness) -> None:
+    path = h.home / ".config" / "vasty" / "config.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('[profiles.vllm]\nimage = "vllm/vllm-openai:v0.32.0"\nvram = 24\ncuda = 13\n')
+    code, data = run_json(h, "serve", "--profile", "vllm", "--model", "Qwen/Qwen3-14B-AWQ")
+    assert code == 0, data
+    query = next(arg for name, arg in h.provider.calls if name == "search_offers")
+    assert (query.vram_min_gb, query.cuda) == (24.0, 13.0)
+    assert build_offer_query(query)["cuda_max_good"] == {"gte": 13.0}
+    assert h.provider.created[0].image == "vllm/vllm-openai:v0.32.0"
+
+
 def test_serve_failure_releases_reserved_box(h: Harness) -> None:
     h.http_status = 500
-    code, data = run_json(h, "serve", "--model", "Qwen/Qwen3-72B-Instruct", "--max-price", "2")
+    code, data = run_json(h, "serve", "--model", "Qwen/Qwen3-14B-AWQ", "--max-price", "2")
     assert code == 2
     assert data["error"] == "serve_failed"
     assert h.provider.instances == {}

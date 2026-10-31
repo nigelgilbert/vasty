@@ -121,7 +121,6 @@ def build_parser() -> Parser:
     p = sub.add_parser("serve", parents=[out], help="serve a model behind an OpenAI endpoint")
     p.add_argument("--on")
     p.add_argument("--model", required=True)
-    p.add_argument("--quant")
     p.add_argument("--bind-local", action="store_true", dest="bind_local")
     _reserve_flags(p)
 
@@ -205,7 +204,7 @@ def check_combinations(ns: argparse.Namespace) -> None:
     verb = ns.verb
     if verb == "run" and not ns.command:
         raise invalid("run needs a command after --.", "vasty run -- COMMAND")
-    if verb not in ("run", "ssh") and ns.command is not None:
+    if verb not in ("run", "serve", "ssh") and ns.command is not None:
         raise invalid(f"{verb} takes no command after --.", f"Run vasty {verb} --help.")
     config_stdin = getattr(ns, "config_stdin", None)
     if config_stdin is not None and config_stdin != "-":

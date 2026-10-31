@@ -1,10 +1,12 @@
 """`vasty serve`.
 
-`serve` maps `--model` to hardware through the `[models."NAME"]` tables.
-Without `--on` it resolves settings with the entry's `vram`, `gpu` and
-`image` as the `model` layer, below flags the user gave, then reserves a box
-with `run_ttl` (or `--ttl`). A model with no entry needs `--vram` and
-`--image` to auto-reserve. With `--on` any model name or box path serves.
+Without `--on`, `serve` resolves settings the same way `reserve` does and
+reserves a box with `run_ttl` (or `--ttl`). With `--on` it serves on that box.
+`--model` is any name or box path `vllm serve` accepts.
+
+Tokens after `--` are appended to the `vllm serve` argv. `serve` owns the
+endpoint and the key, so `--host`, `--port` and `--api-key` among them raise
+`invalid_arguments` before any provider call.
 
 The box's image supplies vLLM. On the box, `serve` checks for `vllm` on PATH
 and raises `vllm_missing` when it is absent. It then starts `vllm serve` as a
@@ -33,9 +35,8 @@ from vasty.commands._common import (
     require_tools,
     save_lease,
 )
-from vasty.config import VLLM_IMAGE, ModelEntry, resolve
 from vasty.context import Context
-from vasty.errors import VastyError
+from vasty.errors import VastyError, invalid
 from vasty.models import SERVE_PORT, CachedLease, Job, ServeResult, WarningItem
 from vasty.remote import SshTarget
 from vasty.state import effective_expiry
@@ -46,28 +47,29 @@ POLL_INTERVAL_S = 5.0
 HTTP_TIMEOUT_S = 5.0
 PREFLIGHT_TIMEOUT_S = 30.0
 PREFLIGHT_COMMAND = "command -v vllm"
+VLLM_IMAGE = "vllm/vllm-openai:v0.32.0"
+# vLLM flags that `serve` sets itself.
+OWNED_FLAGS = ("--host", "--port", "--api-key")
 
 
-def model_entry(ctx: Context, model: str) -> ModelEntry | None:
-    """Return the model table entry without fixing `ctx.settings`.
+def check_extra(extra: list[str]) -> None:
+    """Raise `invalid_arguments` when `extra` sets a flag in `OWNED_FLAGS`."""
+    for token in extra:
+        flag = token.split("=", 1)[0].replace("_", "-")
+        if flag in OWNED_FLAGS:
+            raise invalid(
+                f"serve sets {flag} itself.",
+                "Drop --host, --port and --api-key after --.",
+            )
 
-    The lookup resolves config without the `startup` flag so `--startup -`
-    still reads stdin once, later.
-    """
-    flags = {k: v for k, v in ctx.flags.items() if k != "startup"}
-    settings = resolve(flags, ctx.stdin_json, ctx.profile, ctx.env, ctx.cwd, ctx.home)
-    return settings.models.get(model)
 
-
-def server_argv(model: str, quant: str | None, host: str, key: str | None) -> list[str]:
+def server_argv(model: str, host: str, key: str | None, extra: list[str]) -> list[str]:
     """Return the `vllm serve` argv; pass `key` None for the displayed form."""
     argv = ["vllm", "serve", model]
     if key is not None:
         argv += ["--api-key", key]
     argv += ["--host", host, "--port", str(SERVE_PORT)]
-    if quant:
-        argv += ["--quantization", quant]
-    return argv
+    return argv + extra
 
 
 def probe_command(key: str) -> str:
@@ -82,23 +84,15 @@ def probe_command(key: str) -> str:
 @dataclass
 class _Plan:
     model: str
-    quant: str | None
+    extra: list[str]
     bind_local: bool
 
 
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     auto = args.on is None
-    entry = model_entry(ctx, args.model)
-    if auto:
-        if entry is None and (ctx.flags.get("vram") is None or ctx.flags.get("image") is None):
-            raise VastyError(
-                "model_unknown",
-                f"Model {args.model!r} has no [models] entry.",
-                f'Pass --vram GB and --image IMAGE, or add [models."{args.model}"] to config.',
-            )
-        ctx.model = args.model
-    quant = args.quant if args.quant is not None else (entry.quant if entry else None)
-    plan = _Plan(args.model, quant, bool(args.bind_local))
+    extra = list(args.command or [])
+    check_extra(extra)
+    plan = _Plan(args.model, extra, bool(args.bind_local))
     require_tools(ctx, "ssh")
 
     snap = engine.refresh(ctx)
@@ -151,8 +145,8 @@ def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Pl
 
     key = "vasty-" + ctx.random_hex(32)
     host = "127.0.0.1" if plan.bind_local else "0.0.0.0"
-    command = shlex.join(server_argv(plan.model, plan.quant, host, key))
-    shown = shlex.join(server_argv(plan.model, plan.quant, host, None))
+    command = shlex.join(server_argv(plan.model, host, key, plan.extra))
+    shown = shlex.join(server_argv(plan.model, host, None, plan.extra))
     job = Job(
         id=next_job_id(lease), cmd=shown, started_at=None, exit=None, state="serving",
         kind="serve", port=SERVE_PORT,
@@ -179,8 +173,7 @@ def _preflight(ctx: Context, target: SshTarget, lease: CachedLease, model: str) 
         raise VastyError(
             "vllm_missing",
             f"Lease {lease.lease} has no vllm on PATH.",
-            f"Reserve with a vLLM image: vasty serve --model {model} --image {VLLM_IMAGE}, "
-            f'or add image to the [models."{model}"] entry.',
+            f"Reserve with a vLLM image: vasty serve --model {model} --image {VLLM_IMAGE}.",
         )
 
 

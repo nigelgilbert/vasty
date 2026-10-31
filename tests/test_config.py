@@ -10,7 +10,6 @@ import pytest
 
 from fakes import Harness
 from vasty.config import (
-    ModelEntry,
     Settings,
     emit_toml,
     format_duration,
@@ -49,11 +48,10 @@ class Env:
         stdin_json: dict[str, Any] | None = None,
         profile: str | None = None,
         stdin_text: str | None = None,
-        model: str | None = None,
     ) -> Settings:
         reader = (lambda: stdin_text) if stdin_text is not None else None
         return resolve(flags or {}, stdin_json, profile, self.env, self.cwd, self.home,
-                       stdin_text=reader, model=model)
+                       stdin_text=reader)
 
     def error(self, **kw: Any) -> VastyError:
         with pytest.raises(VastyError) as exc:
@@ -213,7 +211,6 @@ def test_empty_env_value_is_unset(cfg: Env) -> None:
         "bogus = 1\n",
         "[defaults]\nbogus = 1\n",
         "[profiles.p]\nbogus = 1\n",
-        '[models."m"]\nbogus = 1\n',
         "[other]\nx = 1\n",
     ],
 )
@@ -239,7 +236,6 @@ def test_unknown_keys_are_invalid_config(cfg: Env, text: str) -> None:
         "owner = \"bad owner\"\n",
         "defaults = 3\n",
         "[profiles]\np = 3\n",
-        '[models."m"]\nvram = "lots"\n',
     ],
 )
 def test_bad_types_are_invalid_config(cfg: Env, text: str) -> None:
@@ -259,8 +255,7 @@ def test_example_config_from_spec(cfg: Env) -> None:
         'warn_before_expiry = "5m"\nimage = "vasty/base:cuda12.4"\ndisk = 50\n\n'
         '[profiles.small]\ngpu = "4090"\nvram = 24\n\n'
         '[profiles.big]\ngpu = "A100"\nvram = 80\nmax_price = 2.50\n\n'
-        '[models."Qwen/Qwen3-72B-Instruct"]\nvram = 80\nquant = "awq"\n'
-        'image = "vllm/vllm-openai:v0.32.0"\n'
+        '[profiles.vllm]\nimage = "vllm/vllm-openai:v0.32.0"\nvram = 24\ncuda = 13\n'
     )
     s = cfg.resolve(profile="small")
     assert s.gpu == "4090" and s.vram == 24.0
@@ -431,54 +426,21 @@ def test_removed_budget_key_in_env_is_ignored(cfg: Env) -> None:
     assert REMOVED_BUDGET_KEY not in cfg.resolve().sources
 
 
-# Models.
+# The removed models table.
 
 
-def test_builtin_model_entry(cfg: Env) -> None:
-    entry = cfg.resolve().models["Qwen/Qwen3-72B-Instruct"]
-    assert entry == ModelEntry(vram=80.0, quant="awq", image="vllm/vllm-openai:v0.32.0")
-
-
-def test_config_models_add_and_override(cfg: Env) -> None:
-    cfg.user('[models."Qwen/Qwen3-72B-Instruct"]\nimage = "vllm/vllm-openai:v0.7.0"\n'
-             '[models."org/small"]\nvram = 24\nimage = "vllm/vllm-openai:v0.32.0"\n')
-    cfg.project('[models."org/small"]\ngpu = "4090"\n')
-    models = cfg.resolve().models
-    assert models["Qwen/Qwen3-72B-Instruct"] == ModelEntry(
-        vram=80.0, quant="awq", image="vllm/vllm-openai:v0.7.0")
-    assert models["org/small"] == ModelEntry(vram=24.0, image="vllm/vllm-openai:v0.32.0",
-                                             gpu="4090")
-
-
-def test_model_layer_sources(cfg: Env) -> None:
-    cfg.env["VASTY_VRAM"] = "24"
-    s = cfg.resolve(model="Qwen/Qwen3-72B-Instruct")
-    assert (s.vram, s.image) == (80.0, "vllm/vllm-openai:v0.32.0")
-    assert (s.sources["vram"], s.sources["image"]) == ("model", "model")
-    assert s.sources["gpu"] == "default"
-
-
-def test_flag_beats_model_layer(cfg: Env) -> None:
-    s = cfg.resolve(flags={"vram": "48", "image": "my/img"}, model="Qwen/Qwen3-72B-Instruct")
-    assert (s.vram, s.image) == (48.0, "my/img")
-    assert (s.sources["vram"], s.sources["image"]) == ("flag", "flag")
-
-
-def test_model_layer_beats_lower_layers(cfg: Env) -> None:
-    cfg.user('[defaults]\ngpu = "H100"\n[profiles.small]\nvram = 24\n'
-             '[models."org/small"]\nvram = 40\ngpu = "4090"\nquant = "awq"\n')
-    cfg.project('[defaults]\nimage = "proj/img"\n')
-    s = cfg.resolve(stdin_json={"gpu": "L40S"}, profile="small", model="org/small")
-    assert (s.vram, s.gpu, s.image) == (40.0, "4090", "proj/img")
-    assert (s.sources["vram"], s.sources["gpu"], s.sources["image"]) == (
-        "model", "model", "project")
-
-
-def test_model_layer_empty_for_unknown_or_absent_model(cfg: Env) -> None:
-    for model in (None, "org/mystery"):
-        s = cfg.resolve(model=model)
-        assert s.vram is None and s.image == "vasty/base:cuda12.4"
-        assert "model" not in s.sources.values()
+@pytest.mark.parametrize(
+    "text",
+    [
+        'models."Qwen/Qwen3-14B-AWQ".vram = 24\n',
+        'models = { "org/small" = { image = "a/b" } }\n',
+    ],
+)
+def test_models_table_is_invalid_config(cfg: Env, text: str) -> None:
+    path = cfg.user(text)
+    err = cfg.error()
+    assert err.code == "invalid_config"
+    assert err.message == f"models in {path} is not a known key."
 
 
 # SSH key.
@@ -538,15 +500,6 @@ def test_config_show_json(harness: Harness) -> None:
     assert values["max_price"] == {"value": 0.6, "source": "default"}
     assert values["owner"] == {"value": "claude", "source": "env"}
     assert values["gpu"] == {"value": None, "source": "default"}
-
-
-def test_config_show_never_reports_model_source(harness: Harness) -> None:
-    write(user_config_path(harness.home), '[models."org/small"]\nvram = 24\nimage = "a/b"\n')
-    code, out, _ = harness.run("config", "show")
-    assert code == 0
-    values = json.loads(out)["values"]
-    assert values["vram"] == {"value": None, "source": "default"}
-    assert "model" not in {v["source"] for v in values.values()}
 
 
 def test_config_show_profile(harness: Harness) -> None:
@@ -619,14 +572,12 @@ def test_config_set_writes_user_file(harness: Harness) -> None:
 
 def test_config_set_preserves_other_values(harness: Harness) -> None:
     write(user_config_path(harness.home),
-          'owner = "nick"\n[defaults]\ndisk = 50\n[profiles.big]\ngpu = "A100"\n'
-          '[models."Qwen/Qwen3-72B-Instruct"]\nquant = "awq"\n')
+          'owner = "nick"\n[defaults]\ndisk = 50\n[profiles.big]\ngpu = "A100"\n')
     assert harness.run("config", "set", "profiles.big.vram", "80")[0] == 0
     assert read_user(harness) == {
         "owner": "nick",
         "defaults": {"disk": 50},
         "profiles": {"big": {"gpu": "A100", "vram": 80}},
-        "models": {"Qwen/Qwen3-72B-Instruct": {"quant": "awq"}},
     }
 
 
@@ -647,8 +598,7 @@ def test_config_set_drops_comments(harness: Harness) -> None:
         ("owner", "agent", ["owner"], "agent"),
         ("defaults.ports", "[8888, 9000]", ["defaults", "ports"], [8888, 9000]),
         ("defaults.ports", "8888,9000", ["defaults", "ports"], [8888, 9000]),
-        ('models."Qwen/Qwen3-72B-Instruct".vram', "96",
-         ["models", "Qwen/Qwen3-72B-Instruct", "vram"], 96),
+        ('profiles."big-box".vram', "96", ["profiles", "big-box", "vram"], 96),
     ],
 )
 def test_config_set_parses_toml_scalar(
@@ -672,7 +622,8 @@ def test_config_set_parses_toml_scalar(
         ("defaults.disk", "lots"),
         ("defaults.ttl", "30"),
         ("defaults.max_price", "true"),
-        ("models.m.vram", '"big"'),
+        ("models.m.vram", "24"),
+        ('models."Qwen/Qwen3-14B-AWQ".image', "vllm/vllm-openai:v0.32.0"),
         ("defaults..ttl", "1m"),
     ],
 )
@@ -708,7 +659,6 @@ def test_emit_toml_round_trip() -> None:
             "ft": {"startup": 'pip install "x"\napt-get install -y ffmpeg\n\ttab \\ done\x7f'},
             "my profile": {"gpu": "A100"},
         },
-        "models": {"Qwen/Qwen3-72B-Instruct": {"vram": 80, "quant": "awq"}},
         "empty": {},
         "unicode": {"name": "café \U0001f600"},
     }
@@ -716,9 +666,9 @@ def test_emit_toml_round_trip() -> None:
 
 
 def test_parse_key() -> None:
-    assert parse_key('models."Qwen/Qwen3-72B-Instruct".vram') == [
-        "models", "Qwen/Qwen3-72B-Instruct", "vram"]
-    assert parse_key("models.'a.b'.image") == ["models", "a.b", "image"]
+    assert parse_key('profiles."Qwen/Qwen3-14B-AWQ".vram') == [
+        "profiles", "Qwen/Qwen3-14B-AWQ", "vram"]
+    assert parse_key("profiles.'a.b'.image") == ["profiles", "a.b", "image"]
     for bad in ("", "a.", ".a", 'a."b', "a b"):
         with pytest.raises(VastyError):
             parse_key(bad)
