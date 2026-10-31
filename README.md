@@ -1,6 +1,8 @@
 # Vasty
 
-Leased GPU compute for agents, on Vast.ai.
+Provisioning on Vast.ai comes with a TTL and cleans up after itself.
+
+The API doesn't suck.
 
 ```
 vasty reserve --gpu 4090 --ttl 30m
@@ -8,16 +10,15 @@ vasty reserve --gpu 4090 --ttl 30m
 
 That rents a GPU box with a 30-minute clock. When the clock runs out, a watchdog on the box is meant to destroy it, and a sweep on the next `vasty` command catches anything the watchdog missed. `extend` keeps a box. `run`, `serve`, `sync`, `ssh`, `tag`, `status` and `release` do the rest.
 
-**Status: work in progress.** Every verb is implemented and unit-tested against fakes, and one funded live run has confirmed unattended expiry. The default image is unpublished. See [Status](#status) before spending money.
+**Status: work in progress.** Every verb is implemented and unit-tested against fakes, and one funded live run has confirmed unattended expiry. See [Status](#status) before spending money.
 
 ## What it is
 
 A coding agent such as Claude Code reserves a box, pushes code, runs a job or serves a model, pulls results, and releases. If the agent crashes, loses its connection or forgets, the clock still runs out. A human can drive it the same way.
 
-Every box is a **lease**: a machine plus an expiry time. Vasty adds clocks, a daily budget, owners and groups on top of Vast's API.
+Every box is a **lease**: a machine plus an expiry time. Vasty adds clocks, owners and groups on top of Vast's API. `max_price` is an offer filter beside `--vram`, in dollars per hour.
 
 - **Expire by default.** `reserve` gives a box 30 minutes. Auto-reserved `run` and `serve` boxes get 2 hours. Keeping a box alive takes an explicit `extend`.
-- **Bounded spend.** `max_price` caps dollars per hour per box. `daily_budget` caps projected spend across the account.
 - **Light.** One Python package, one runtime dependency, no daemon, no database. The lease lives in the instance label on Vast, plus one local cache file.
 - **Agent-first I/O.** JSON on stdout when stdout is a pipe, tables when it is a terminal. `ssh` passes remote output through, and `completion` prints a shell script unless `--json` is passed. Every error carries a stable code, a message and a recovery hint.
 
@@ -30,11 +31,10 @@ git clone https://github.com/nigelgilbert/vasty.git && cd vasty
 uv tool install .                                    # or: uv sync && export PATH=$PWD/.venv/bin:$PATH
 export VAST_API_KEY=...                              # from console.vast.ai
 export VASTY_OWNER=claude-code                         # names the boxes you make; see below
-vasty config set defaults.image vastai/base-image:cuda-12.6.3-auto
 vasty config show
 ```
 
-Vasty's own image is unpublished, so the image line points at a Vast base image. Vasty installs what it needs at boot, which slows the first start. A custom image needs Linux, bash, root and apt-get.
+The default image is `vastai/base-image:cuda-12.6.3-auto`. Vasty installs what it needs at boot, which slows the first start. Any image works given Linux, bash, root and apt-get.
 
 Run one command on a fresh box:
 
@@ -64,21 +64,24 @@ vasty extend    TARGET  (--by 30m | --to 2h | --until TIME)
 vasty release   TARGET [--yes]
 vasty status    [TARGET] [--cached]
 vasty run       [--on LEASE | reserve flags] [--detach] [--sync DIR] -- COMMAND...
-vasty serve     [--on LEASE | reserve flags] --model MODEL [--quant Q] [--bind-local]
+vasty serve     [--on LEASE | reserve flags] --model MODEL [--bind-local] [-- VLLM_ARGS...]
 vasty sync      LEASE (push [--delete] SRC DEST | pull SRC DEST)
 vasty ssh       LEASE [-- COMMAND...]
 vasty tag       TARGET [--set-name NAME] [--set-group G] [--set-owner O] [--ttl 30m]
+vasty sweep     [--follow LEASE]
 vasty config    (show | set KEY VALUE | profiles)
 vasty completion (bash | zsh | fish)
 ```
 
-Hardware flags on `reserve`, `run` and `serve`: `--gpu NAME`, `--vram MIN_GB`, `--gpus N`, `--disk GB`, `--image IMAGE`, `--max-price $/HR`, `--region R`, `--ports N[,N...]`. A profile or config file supplies defaults for any of them. `run --on` and `serve --on` reuse a box and reject creation flags. Auto-reserved `run` and `serve` reject `--no-wait`.
+Hardware flags on `reserve`, `run` and `serve`: `--gpu NAME`, `--vram MIN_GB`, `--cuda FLOOR`, `--gpus N`, `--disk GB`, `--image IMAGE`, `--max-price $/HR`, `--region R`, `--ports N[,N...]`. A profile or config file supplies defaults for any of them. `--cuda` is the minimum CUDA version the host driver supports. Read an image's floor from `NVIDIA_REQUIRE_CUDA` in `docker inspect IMAGE`. `run --on` and `serve --on` reuse a box and reject creation flags. Auto-reserved `run` and `serve` reject `--no-wait`.
 
 Every verb takes `--json`, `--plain` and `--verbose`.
 
 A `TARGET` is a lease id or name, or a selector: `--group G`, `--owner O`, `--all`, or `--all --everyone` for every lease on the account. Bulk writes act on the current owner's leases. `--owner O` selects another owner's; `--everyone` selects all.
 
 ## For agents
+
+Run `vasty status` before reserving. Reuse a lease with `--on` when it is yours, `state` is `running`, `busy` is false, `gpu`, `vram_gb` and `gpus` cover the job, and `ttl_remaining_s` covers the job or `extend` can. `run --on` leaves the lease up after the job. Auto-reserved attached `run` releases it.
 
 Owner comes from `--owner`, then `VASTY_OWNER`, then config, then `$USER`. An agent running under the human's login shares their owner unless it sets `VASTY_OWNER`. With its own owner, `release --all` from the agent leaves the human's boxes alone.
 
@@ -93,7 +96,6 @@ vasty reserve --name ft --gpu A100 --ttl 3h --json
   "lease": "l-7f3a2b1c",
   "name": "ft",
   "state": "running",
-  "guard": "full",
   "gpu": "A100",
   "price_per_hr": 1.80,
   "expires_at": "2026-10-29T20:04:00Z",
@@ -115,11 +117,13 @@ Errors are one object:
 }
 ```
 
-Exit codes: 0 success, 1 bad input or lookup, 2 provider or box failure, 3 budget exceeded. Once a job has started, attached `run` exits with the remote command's code, 2 when the clock or a dropped connection kills the job, and 130 on SIGINT. `run --detach` exits 0 as soon as the job starts. `ssh -- COMMAND` passes through ssh's own exit status.
+Exit codes: 0 success, 1 bad input or lookup, 2 provider or box failure. Once a job has started, attached `run` exits with the remote command's code, 2 when the clock or a dropped connection kills the job, and 130 on SIGINT. `run --detach` exits 0 as soon as the job starts. `ssh -- COMMAND` passes through ssh's own exit status.
 
-`status` returns a `warnings` array. Each entry has a code, the lease, a message and `fix`, one runnable `vasty` command. An agent can loop over the warnings and run the fixes. `guard` on each lease is `full` or `partial`, with the missing layer named, so an agent knows how much to trust that box's clock.
+`status` returns a `warnings` array. Each entry has a code, the lease, a message and `fix`, one runnable `vasty` command. An agent can loop over the warnings and run the fixes. A `guard_partial` warning names the missing layer, so an agent knows how much to trust that box's clock. `status --verbose` lists each layer under `guard_layers`.
 
-Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `expired_with_running_jobs`, `budget_low`, `startup_failed`, `flag_mismatch`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
+Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `expired_with_running_jobs`, `startup_failed`, `flag_mismatch`, `idle_box_available`, `clock_skew`, `clock_skew_unknown`, `sweep_not_spawned`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
+
+When `reserve`, or `run` or `serve` without `--on`, creates a box, it warns `idle_box_available` for up to three idle leases that would have fit.
 
 ### Result shapes
 
@@ -127,18 +131,22 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 
 | Command | Returns |
 |---|---|
-| `reserve`, `tag` on one lease | the lease: `lease`, `name`, `owner`, `group`, `state`, `guard`, `guard_missing`, `reused`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `expires_at`, `ttl_remaining_s`, `ssh`, `rsync_target`, `ssh_port`, `ports` |
+| `reserve` | the lease: `lease`, `name`, `owner`, `group`, `state`, `reused`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `expires_at`, `ttl_remaining_s`, `ssh`, `rsync_target`, `ssh_port`, `ports` |
 | `extend` on one lease | `lease`, `expires_at`, `ttl_remaining_s` |
 | `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending` |
-| bulk `extend`, `release`, `tag` | `results`, each with `lease`, `ok` and a nullable `error` |
-| `status` | `leases`, `totals`, `cached_at`; a single-lease target adds `log_tail` |
+| bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error` |
+| `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s` |
+| `status` | `leases`, `totals`, `cached_at`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`; a single-lease target adds `log_tail` |
 | attached `run` | `lease`, `job`, `exit`, `duration_s`, `released` |
 | `run --detach` | `lease`, `job`, `log_path`, `expires_at` |
 | `serve` | `lease`, `job`, `url`, `api_key`, `expires_at` |
 | `sync` | `lease`, `direction`, `src`, `dest` |
+| `sweep` | `swept`, `warnings` |
 | `config` | `values`, `{key, value}` or `profiles` |
 
-A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fields null. `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at`, `ttl_remaining_s` and `guard`. `cost_source` and `spend_source` are `billing`, `estimated` or `mixed`.
+A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fields null. `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at` and `ttl_remaining_s`.
+
+`busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. `uptime_s` counts from vasty's first `running` sample and is null before it. `--verbose` shows that sample as `running_at`.
 
 ### Error codes
 
@@ -156,17 +164,14 @@ A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fie
 | `lease_pending` | 1 | `extend`, `run --on`, `serve --on`, `sync` or `ssh` on a lease SSH cannot reach yet |
 | `name_conflict` | 1 | a new name matches another active lease of the same owner |
 | `confirmation_required` | 1 | orphan `release` without `--yes` in non-TTY mode |
-| `model_unknown` | 1 | `serve` model has no table entry and no `--vram` and `--image` |
-| `image_unsupported` | 1 | a custom image lacks bash, root or apt-get |
+| `image_unsupported` | 1 | the image lacks bash, root or apt-get |
 | `startup_too_large` | 1 | the encoded `onstart` exceeds 4048 characters |
 | `vllm_missing` | 1 | `serve` finds no `vllm` on the box's PATH |
 | `provider_error` | 2 | a provider call fails |
 | `box_unreachable` | 2 | the box does not answer SSH |
-| `spend_unavailable` | 2 | billing coverage for today cannot be read |
 | `sync_failed` | 2 | rsync fails |
-| `serve_failed` | 2 | the inference server exits before `/v1/models` answers |
+| `serve_failed` | 2 | the inference server exits or times out before `/v1/models` answers; `details` carries `exit` and `lease`, plus `log_tail` when the read succeeds |
 | `port_mapping_missing` | 2 | a required port has no external mapping at the readiness deadline |
-| `budget_exceeded` | 3 | the projection passes `daily_budget` |
 
 A bulk command exits with the highest exit code among its failed entries. Parser errors use the same error object.
 
@@ -186,7 +191,8 @@ vasty release ft                 # cost and job exit codes for the report
 ### A model endpoint for sub-agents
 
 ```sh
-vasty serve --model Qwen/Qwen3-72B-Instruct --ttl 1h
+vasty serve --profile vllm --model Qwen/Qwen3-14B-AWQ --ttl 1h
+vasty serve --profile vllm --model Qwen/Qwen3-14B-AWQ --ttl 1h -- --max-model-len 16384
 ```
 
 Selected fields:
@@ -201,7 +207,9 @@ Selected fields:
 }
 ```
 
-The box's image supplies vLLM, and `serve` launches `vllm` from PATH. The builtin `Qwen/Qwen3-72B-Instruct` entry uses `vllm/vllm-openai:v0.32.0`. On a plain image, install vLLM in a `startup` hook first.
+The box's image supplies vLLM, and `serve` launches `vllm` from PATH. The `vllm` profile in the [sample config](#configuration) reserves on `vllm/vllm-openai:v0.32.0`. A box reserved with a `startup` hook that installs `vllm`, or one set up through `run --on`, can serve with `serve --on`.
+
+Tokens after `--` go to `vllm serve` after the model name. `serve` sets `--host` and `--port` itself, passes the key in `VLLM_API_KEY`, and rejects `--host`, `--port` and `--api-key` there.
 
 Point an OpenAI-compatible client at `url` with `api_key`. The endpoint is public on a random port, protected by a fresh key per job. The key prints once. `--bind-local` keeps vLLM on `127.0.0.1` for use through `vasty ssh -L`. The endpoint dies with the lease.
 
@@ -211,16 +219,45 @@ Several boxes that belong together share a `--group`. `status --group exp42` sho
 
 Vast has no expiry field on an instance, so Vasty enforces the clock itself with two layers.
 
-1. **On the box.** `reserve` injects a watchdog through Vast's `onstart` hook. It reads the expiry from `/workspace/.vasty/clock`, sleeps until then, re-reads the file so a late `extend` is honored, and destroys the instance with the per-instance key Vast injects into the container. Cron restarts it if it dies. When the key is absent, the lease reports `guard: partial` and the sweep is the enforcer.
-2. **Local sweep.** Every networked `vasty` command lists the account's instances, reads each lease label, and destroys anything past its clock. Whatever it destroys shows up in `swept`.
+1. **On the box.** `reserve` injects a watchdog through Vast's `onstart` hook. It reads the expiry from `/workspace/.vasty/clock`, sleeps until then, re-reads the file so a late `extend` is honored, and destroys the instance with the per-instance key Vast injects into the container. Cron restarts it if it dies. At start and hourly it reads its own instance row with that key; a 401 or 403 marks the key missing until a later read passes. A box without `curl` marks the watchdog layer. Either way the lease carries a `guard_partial` warning and the sweep is the enforcer.
+2. **Local sweep.** Every networked `vasty` command lists the account's instances, reads each lease label, and destroys anything past its clock. Whatever it destroys shows up in `swept`. `reserve`, `extend` and `tag` on adopt also start a detached `vasty sweep --follow LEASE` on the laptop. It sleeps to the lease's expiry, runs the sweep, and repeats until the row is gone, so a failed destroy, a moved expiry and a later `extend` are each picked up on the next pass. A sweep that fails is retried five times a minute apart, then the follower exits with the error. A spawn that fails warns `sweep_not_spawned` and the command succeeds.
+
+`vasty sweep` alone runs one sweep with no probe, for a scheduler. A GitHub Actions cron every five minutes:
+
+```yaml
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pipx install git+https://github.com/nigelgilbert/vasty
+      - run: vasty sweep
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+```
+
+GitHub runs schedules best effort, so a sweep can land minutes late or skip a slot. The watchdog and the follower remain the first two enforcers.
 
 The clock starts when the container starts, which is when Vast starts charging GPU rent. Storage and bandwidth bill from creation. A box that never reaches SSH is destroyed by the waiting `reserve` or by the next sweep once `created + ttl` passes.
 
-## Budget
+The label holds the expiry in provider time and the clock file holds it in the box's own time. Every write to the clock file carries the provider clock at send, and the box adds its own offset before writing. The probe measures the offset on each visit, copies a fresh box's clock file into the label with the offset removed, and warns `clock_skew` when the box clock sits more than two minutes from the provider. `status --verbose` shows the measured offset as `clock_skew_s`. While `clock_unverified` is set, values cross unchanged.
 
-`daily_budget` caps projected spend for the whole account on a UTC day. Before `reserve`, `extend`, `run` or `serve` spends, Vasty adds up today's charges, the remaining commitment of every live lease, and the new action. Today's charges are what Vast has billed plus an estimate since the last billing update. Past the cap it refuses with `budget_exceeded` and says how much room is left. At 90% it warns with `budget_low`. Adopting an orphan with `tag` only warns, since the box is already billing.
+## Spend
 
-The check is client-side. The Vast dashboard, a direct `vastai` call, or a second machine with its own config can go past it. Vast has no spend-cap setting. The account-level stop is a prepaid balance with no saved card.
+Per-box spend is `max_price` times `ttl`, since the clock ends the box. Storage and bandwidth bill outside that product. The account bound is the prepaid `credit`. With no saved card, Vast stops instances at $0.
+
+`status` reports Vast's own figures in `totals`:
+
+- `credit` is the prepaid money left on the account, which Vast draws charges from.
+- `balance` is the `balance` field of Vast's `GET /users/current`, passed through unchanged.
+- `charges_today` is what Vast has billed since 00:00 UTC.
+- `burn_per_hr` sums `price_per_hr` over live leases and orphans.
+
+For runway, read `credit` over `burn_per_hr`. When the balance or charges are unavailable, those totals are null and `status` warns with `spend_unavailable`.
+
+A lease's `cost` sums the Vast charge rows available for its instance. A box adopted with `tag`, or an orphan, can show partial history. `release` reports the same figure. `cost` is null when no charge row is available, and `status` warns `spend_unavailable` when the read failed. `price_per_hr` times `uptime_s` approximates it.
 
 ## State
 
@@ -239,17 +276,17 @@ Any machine with the API key sees the same leases, owners and groups. An instanc
 | `pending` | Reserved and not ready: booting, SSH not answering, or the startup script still running. |
 | `running` | Healthy and reachable. |
 | `unreachable` | The provider lists it, but the box stopped responding. The clock keeps running. |
-| `stopped` | The provider stopped the instance, for example at $0 balance. The sweep still destroys it past its clock. |
+| `stopped` | The provider stopped the instance, for example at $0 credit. The sweep still destroys it past its clock. |
 | `expired` | The clock ran out. Destroyed or being destroyed. Kept in history for 24h. |
 | `released` | Destroyed by `release`. Kept in history for 24h. |
 | `gone` | Vanished with time left on its clock. Kept in history for 24h. |
 | `orphan` | An instance vasty did not create. No clock until `tag` gives it one. |
 
-`status` with no target lists active leases and orphans. History states show when named directly. `guard` is `full` when the watchdog is running, its destroy key is present and the clock file matches the label. Otherwise it is `partial` and `guard_missing` names `watchdog`, `destroy_key` or `clock_file`.
+`status` with no target lists active leases and orphans. History states show when named directly. A lease with the watchdog running, its destroy key present and the clock file matching the label has no `guard_partial` warning. Otherwise the warning names `watchdog`, `destroy_key` or `clock_file`.
 
 ## Configuration
 
-Resolution order, highest first: flags, the `[models]` entry for `serve`, `--config -` JSON on stdin, `--profile NAME`, `VASTY_*` environment variables, `./vasty.toml`, `~/.config/vasty/config.toml`, built-in defaults. `vasty config show` prints every effective value and its source.
+Resolution order, highest first: flags, `--config -` JSON on stdin, `--profile NAME`, `VASTY_*` environment variables, `./vasty.toml`, `~/.config/vasty/config.toml`, built-in defaults. `vasty config show` prints every effective value and its source.
 
 ```toml
 owner = "nigel"                 # overridden by VASTY_OWNER or --owner
@@ -258,10 +295,8 @@ owner = "nigel"                 # overridden by VASTY_OWNER or --owner
 ttl = "30m"
 run_ttl = "2h"
 max_price = 0.60
-daily_budget = 10.00
-image = "vastai/base-image:cuda-12.6.3-auto"
 
-[profiles.big]
+[profiles.train]
 gpu = "A100"
 vram = 80
 max_price = 2.50
@@ -269,13 +304,11 @@ startup = '''
 pip install -U transformers peft
 '''
 
-[models."Qwen/Qwen3-72B-Instruct"]
-vram = 80
-quant = "awq"
+[profiles.vllm]
 image = "vllm/vllm-openai:v0.32.0"
+vram = 24
+cuda = 13
 ```
-
-A `[models]` entry sets `vram`, `gpu` and `image` for `serve --model NAME` ahead of every layer below flags, so `serve` ignores `defaults.image` unless `--image` is passed.
 
 `startup` runs once on each box as root in `/workspace` after Vasty's own setup. The box reports `pending` until it exits 0. A failing hook leaves the box up with a `startup_failed` warning so you can `ssh` in and look.
 
@@ -284,12 +317,11 @@ A `[models]` entry sets `vram`, `gpu` and `image` for `serve --model NAME` ahead
 Done:
 
 - Every verb above, in `src/vasty/`.
-- 1143 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
+- 1246 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
 - One funded live run on Vast, 2026-10-29. Every phase passed except `serve`. See [docs/live-test-report.md](docs/live-test-report.md).
 
 Not done:
 
-- The default image `vasty/base:cuda12.4` is unpublished. See the quick start for the workaround.
 - Not on PyPI. Install from the repo.
 
 ## Development
@@ -304,4 +336,4 @@ uv run mypy
 
 ## Non-goals
 
-Scheduling, queues, fleet management, multiple providers, a daemon, a web UI, spot instances, secrets management beyond reading the API key from an environment variable.
+Scheduling, queues, fleet management, account-level spend limits, multiple providers, a daemon, a web UI, spot instances, secrets management beyond reading the API key from an environment variable.

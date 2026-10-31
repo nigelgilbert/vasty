@@ -4,7 +4,15 @@ import pytest
 
 from fakes import START, FakeTime, Harness
 from vasty.errors import VastyError
-from vasty.timeutil import Clock, format_duration, iso, parse_duration, parse_http_date, parse_time
+from vasty.timeutil import (
+    Clock,
+    format_duration,
+    format_duration_exact,
+    iso,
+    parse_duration,
+    parse_http_date,
+    parse_time,
+)
 
 
 @pytest.mark.parametrize(
@@ -38,6 +46,17 @@ def test_parse_duration_rejects(text: str) -> None:
 )
 def test_format_duration(seconds: int, text: str) -> None:
     assert format_duration(seconds) == text
+
+
+@pytest.mark.parametrize(
+    ("seconds", "text"),
+    [(0, "0s"), (-10, "0s"), (45, "45s"), (1800, "30m"), (5400, "1h30m"), (5430, "1h30m30s"),
+     (172800, "2d"), (93784, "1d2h3m4s")],
+)
+def test_format_duration_exact(seconds: int, text: str) -> None:
+    assert format_duration_exact(seconds) == text
+    if seconds > 0:
+        assert parse_duration(text) == seconds
 
 
 @pytest.mark.parametrize(

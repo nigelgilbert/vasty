@@ -1,12 +1,18 @@
 #!/bin/bash
 # vasty watchdog: destroy this box when /workspace/.vasty/clock runs out.
 # cron starts a copy every minute; the lock directory keeps one running.
-# VASTY_ROOT, VASTY_API, VASTY_POLL, VASTY_REDESTROY and VASTY_MAX_LOOPS override the defaults for tests.
+# The watchdog is the only writer of the guard file. Each loop it publishes a full snapshot:
+# watchdog when curl is absent, destroy_key when the env lacks the key or the last conclusive key check was refused.
+# The key check is one authenticated GET of its own row at start and hourly; 401 or 403 marks the key bad,
+# a 2xx marks it good, any other result keeps the last answer. A new process seeds that answer from the file.
+# VASTY_ROOT, VASTY_API, VASTY_POLL, VASTY_REDESTROY, VASTY_KEYCHECK, VASTY_CURL and VASTY_MAX_LOOPS override the defaults for tests.
 R=${VASTY_ROOT:-/workspace/.vasty}
 API=${VASTY_API:-https://console.vast.ai/api/v0}
 POLL=${VASTY_POLL:-60}
 [ "$POLL" -gt 60 ] && POLL=60
 AGAIN=${VASTY_REDESTROY:-300}
+CHECK=${VASTY_KEYCHECK:-3600}
+CURL=${VASTY_CURL:-curl}
 MAX=${VASTY_MAX_LOOPS:-0}
 L=$R/watchdog.lock
 log() { echo "vasty-watchdog $(date +%s) $*"; }
@@ -17,9 +23,23 @@ held() {
   [ -r "/proc/$p/cmdline" ] || return 0
   tr '\0' ' ' <"/proc/$p/cmdline" | grep -q watchdog
 }
-guard_add() {
-  grep -qx "$1" "$R/guard" 2>/dev/null && return
-  { cat "$R/guard" 2>/dev/null; echo "$1"; } >"$R/guard.tmp.$$" && mv -f "$R/guard.tmp.$$" "$R/guard"
+publish() {
+  s=
+  [ "$curl_ok" = 1 ] || s="$s watchdog"
+  if [ -z "$id" ] || [ -z "$key" ] || [ "$key_state" = bad ]; then s="$s destroy_key"; fi
+  printf '%s\n' $s >"$R/guard.tmp.$$" && mv -f "$R/guard.tmp.$$" "$R/guard"
+}
+key_check() {
+  code=$("$CURL" -sS -m 30 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $key" "$API/instances/$id/" 2>/dev/null)
+  case $code in
+  401 | 403)
+    key_state=bad
+    log "key check: HTTP $code"
+    ;;
+  2[0-9][0-9])
+    key_state=ok
+    ;;
+  esac
 }
 mkdir -p "$R" || exit 1
 if ! mkdir "$L" 2>/dev/null; then
@@ -32,13 +52,23 @@ trap 'rm -rf "$L"' EXIT
 n=0
 back=0
 done_at=0
+checked=
+key_state=
+grep -qx destroy_key "$R/guard" 2>/dev/null && key_state=bad
 while :; do
-  touch "$R/alive"
+  curl_ok=0
+  command -v "$CURL" >/dev/null 2>&1 && curl_ok=1
   id=$(sed -n 's/^CONTAINER_ID=//p' "$R/env" 2>/dev/null | head -n 1)
   key=$(sed -n 's/^CONTAINER_API_KEY=//p' "$R/env" 2>/dev/null | head -n 1)
-  [ -n "$id" ] && [ -n "$key" ] || guard_add destroy_key
+  publish
+  touch "$R/alive"
   exp=$(cat "$R/clock" 2>/dev/null)
   now=$(date +%s)
+  if [ -n "$id" ] && [ -n "$key" ] && { [ -z "$checked" ] || [ $((now - checked)) -ge "$CHECK" ]; }; then
+    checked=$now
+    key_check
+    publish
+  fi
   s=$POLL
   case $exp in
   '' | *[!0-9]*)
@@ -52,7 +82,7 @@ while :; do
       log "clock expired at $exp; no destroy key"
     elif [ "$done_at" -gt 0 ] && [ $((now - done_at)) -lt "$AGAIN" ]; then
       :
-    elif curl -fsS -m 30 -X DELETE -H "Authorization: Bearer $key" "$API/instances/$id/" >/dev/null; then
+    elif "$CURL" -fsS -m 30 -X DELETE -H "Authorization: Bearer $key" "$API/instances/$id/" >/dev/null; then
       log "clock expired at $exp; destroy accepted"
       done_at=$now
       back=0

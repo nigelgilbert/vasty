@@ -10,19 +10,19 @@ from typing import Any
 
 import pytest
 
-from fakes import NOW, Harness, add_lease
+from fakes import NOW, START, Harness, add_lease
+from vasty.errors import VastyError
 from vasty.models import Job
+from vasty.timeutil import iso
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 LEASE_KEYS = {
-    "lease", "name", "group", "owner", "state", "guard", "guard_missing", "gpu",
-    "price_per_hr", "cost", "cost_source", "expires_at", "ttl_remaining_s", "jobs",
+    "lease", "name", "group", "owner", "state", "gpu", "gpus",
+    "vram_gb", "price_per_hr", "cost", "uptime_s", "expires_at", "ttl_remaining_s", "busy",
+    "jobs",
 }
-TOTALS_KEYS = {
-    "spent_today", "daily_budget", "remaining_budget", "burn_per_hr", "live", "live_mine",
-    "spend_source", "daily_budget_source",
-}
+TOTALS_KEYS = {"balance", "credit", "charges_today", "burn_per_hr", "live", "live_mine"}
 
 
 def status(harness: Harness, *argv: str) -> dict[str, Any]:
@@ -66,8 +66,8 @@ def account(harness: Harness) -> Harness:
                                         "expires": NOW + 1140},
               gpu_name="RTX 4090", dph_total=Decimal("0.38"))
     p.add_instance(id=55120, label=None, gpu_name="RTX 3090", dph_total=Decimal("0.22"))
-    p.billed = {1: Decimal("7.12")}
-    p.covered_through = NOW
+    p.billed = {1: Decimal("2.32"), trainer.id: Decimal("4.80")}
+    p.charge_rows = [(trainer.id, Decimal("1.20"), START - 3600)]
     harness.run("status")
     harness.box.state(dead.id).reachable = False
     return harness
@@ -89,34 +89,76 @@ def test_status_json_shape(account: Harness) -> None:
     row = by_lease(data)["l-8b12"]
     assert row == {
         "lease": "l-8b12", "name": "eval-2", "group": "exp42", "owner": "claude",
-        "state": "running", "guard": "full", "guard_missing": [], "gpu": "L40S",
-        "price_per_hr": 0.82, "cost": 0.14, "cost_source": "estimated",
-        "expires_at": "2026-10-29T01:03:00Z", "ttl_remaining_s": 180, "jobs": [],
+        "state": "running", "gpu": "L40S", "gpus": 1,
+        "vram_gb": 24.0, "price_per_hr": 0.82, "cost": None, "uptime_s": 0,
+        "expires_at": "2026-10-29T01:03:00Z", "ttl_remaining_s": 180, "busy": False, "jobs": [],
     }
 
 
 def test_status_orphan_row(account: Harness) -> None:
     row = by_lease(status(account))["i-55120"]
     assert row["state"] == "orphan"
-    for key in ("owner", "expires_at", "ttl_remaining_s", "guard", "guard_missing"):
+    for key in ("owner", "expires_at", "ttl_remaining_s", "uptime_s", "busy"):
         assert row[key] is None
     assert row["gpu"] == "RTX 3090"
     assert row["price_per_hr"] == 0.22
 
 
+def test_status_orphan_hardware_from_instance_row(harness: Harness) -> None:
+    harness.provider.add_instance(id=55120, label=None, num_gpus=2, gpu_ram_gb=12.288)
+    row = by_lease(status(harness))["i-55120"]
+    assert (row["gpus"], row["vram_gb"], row["busy"]) == (2, 12.288, None)
+    _, out, _ = harness.run("status", "--plain")
+    assert "2x12 3090" in out.splitlines()[1]
+
+
+def test_status_busy(account: Harness) -> None:
+    rows = by_lease(status(account))
+    busy = {lease: row["busy"] for lease, row in rows.items()}
+    assert busy == {"l-7f3a": True, "l-8b10": False, "l-8b11": None, "l-8b12": False,
+                    "l-a003": False, "i-55120": None}
+    assert (rows["l-7f3a"]["gpus"], rows["l-7f3a"]["vram_gb"]) == (2, 24.0)
+
+
+def test_status_busy_with_unknown_job(harness: Harness) -> None:
+    row = add_lease(harness)
+    harness.box.state(row.id).jobs["j-1"] = Job(
+        id="j-1", cmd="python train.py", started_at=NOW - 60, exit=None, state="unknown")
+    assert by_lease(status(harness))["l-0000a001"]["busy"] is True
+
+
+def test_status_busy_null_while_pending(harness: Harness) -> None:
+    add_lease(harness, actual_status="loading")
+    row = by_lease(status(harness))["l-0000a001"]
+    assert (row["state"], row["busy"]) == ("pending", None)
+    _, out, _ = harness.run("status", "--plain")
+    assert out.splitlines()[1].split()[-1] == "—"
+
+
+def test_status_busy_null_while_unreachable(harness: Harness) -> None:
+    lease = add_lease(harness)
+    harness.run("status")
+    harness.box.state(lease.id).reachable = False
+    row = by_lease(status(harness))["l-0000a001"]
+    assert (row["state"], row["busy"], row["jobs"]) == ("unreachable", None, [])
+    _, out, _ = harness.run("status", "--plain")
+    assert out.splitlines()[1].split()[-1] == "—"
+
+
 def test_status_totals(account: Harness) -> None:
     totals = status(account)["totals"]
     assert totals == {
-        "spent_today": 7.12, "daily_budget": 10.0, "remaining_budget": 2.88,
+        "balance": 0.0, "credit": 20.0, "charges_today": 7.12,
         "burn_per_hr": 5.46, "live": 5, "live_mine": 4,
-        "spend_source": "billing", "daily_budget_source": "default",
     }
 
 
-def test_status_daily_budget_source(account: Harness) -> None:
-    account.env["VASTY_DAILY_BUDGET"] = "20"
-    totals = status(account)["totals"]
-    assert (totals["daily_budget"], totals["daily_budget_source"]) == (20.0, "env")
+def test_status_cost_sums_charge_rows_across_two_days(account: Harness) -> None:
+    rows = by_lease(status(account))
+    assert rows["l-7f3a"]["cost"] == 6.0
+    assert rows["l-8b10"]["cost"] is None
+    starts = [arg[0] for call, arg in account.provider.calls if call == "charges"]
+    assert starts and set(starts) == {START - 86_400}
 
 
 def test_status_warnings(account: Harness) -> None:
@@ -125,11 +167,10 @@ def test_status_warnings(account: Harness) -> None:
     assert ("expiring_soon", "l-8b12") in found
     assert ("box_unreachable", "l-8b11") in found
     assert ("orphan", "i-55120") in found
-    assert ("budget_low", None) in found
+    assert ("spend_unavailable", None) not in found
     fixes = {w["code"]: w["fix"] for w in data["warnings"]}
     assert fixes["expiring_soon"] == "vasty extend l-8b12 --by 30m"
     assert fixes["orphan"] == "vasty tag i-55120 --ttl 30m"
-    assert fixes["budget_low"] == "vasty status"
 
 
 def test_status_unreachable_jobs_unknown(account: Harness) -> None:
@@ -139,12 +180,21 @@ def test_status_unreachable_jobs_unknown(account: Harness) -> None:
                             "duration_s": 60}]
 
 
-def test_status_spend_unavailable(harness: Harness) -> None:
-    add_lease(harness)
+@pytest.mark.parametrize(
+    ("failing", "nulls", "kept"),
+    [("charges", ["charges_today"], ["balance", "credit"]),
+     ("balance", ["balance", "credit"], ["charges_today"])],
+)
+def test_status_spend_unavailable(
+    harness: Harness, failing: str, nulls: list[str], kept: list[str]
+) -> None:
+    row = add_lease(harness)
+    harness.provider.billed = {row.id: Decimal("1.00")}
+    harness.provider.fail[failing] = VastyError("provider_error", "down", "Run vasty status.")
     data = status(harness)
-    assert data["totals"]["spent_today"] is None
-    assert data["totals"]["remaining_budget"] is None
-    assert data["totals"]["spend_source"] is None
+    assert all(data["totals"][key] is None for key in nulls)
+    assert all(data["totals"][key] is not None for key in kept)
+    assert data["leases"][0]["cost"] == (None if failing == "charges" else 1.0)
     assert ("spend_unavailable", None) in codes(data)
 
 
@@ -168,6 +218,9 @@ def test_status_unreachable_target_skips_log_tail(account: Harness) -> None:
 def test_status_group_and_owner_filters(account: Harness) -> None:
     data = status(account, "--group", "exp42")
     assert [row["lease"] for row in data["leases"]] == ["l-7f3a", "l-8b10", "l-8b11", "l-8b12"]
+    assert [(row["busy"], row["gpus"], row["vram_gb"]) for row in data["leases"]] == [
+        (True, 2, 24.0), (False, 1, 24.0), (None, 1, 24.0), (False, 1, 24.0)
+    ]
     data = status(account, "--owner", "nick")
     assert [row["lease"] for row in data["leases"]] == ["l-a003"]
 
@@ -193,7 +246,27 @@ def test_status_verbose_fields(account: Harness) -> None:
     assert extra["label"].startswith("vasty:v1;lease=l-8b12;name=eval-2")
     assert extra["guard_layers"] == {"watchdog": "ok", "destroy_key": "ok", "clock_file": "ok"}
     assert extra["ports"] == {"22": 40022, "8000": 40080, "8080": 40081}
+    assert extra["clock_skew_s"] == 0
     assert set(extra) >= {"instance_id", "image", "last_provider_error"}
+
+
+def test_uptime_counts_from_first_running_sample(harness: Harness) -> None:
+    add_lease(harness, label={"name": "ft", "created": NOW - 1200})
+    harness.run("status")
+    harness.time.advance(600)
+    row = by_lease(status(harness, "--verbose"))["l-0000a001"]
+    assert row["uptime_s"] == 600
+    assert row["verbose"]["running_at"] == iso(NOW)
+    _, out, _ = harness.run("status", "--plain")
+    assert "10m" in out.splitlines()[1].split()
+
+
+def test_uptime_null_before_running(harness: Harness) -> None:
+    add_lease(harness, label={"name": "ft", "created": NOW - 1200}, actual_status="loading")
+    assert by_lease(status(harness))["l-0000a001"]["uptime_s"] is None
+    _, out, _ = harness.run("status", "--plain")
+    header, line = out.splitlines()[:2]
+    assert line[header.index("UPTIME"):].split()[0] == "—"
 
 
 def test_history_only_when_named_or_verbose(harness: Harness) -> None:
@@ -202,7 +275,9 @@ def test_history_only_when_named_or_verbose(harness: Harness) -> None:
     del harness.provider.instances[row.id]
     assert status(harness)["leases"] == []
     assert [r["state"] for r in status(harness, "--verbose")["leases"]] == ["gone"]
-    assert [r["state"] for r in status(harness, "ft")["leases"]] == ["gone"]
+    named = status(harness, "ft")["leases"]
+    assert [r["state"] for r in named] == ["gone"]
+    assert (named[0]["busy"], named[0]["gpus"], named[0]["vram_gb"]) == (None, 1, 24.0)
 
 
 def test_swept_lease_in_status(harness: Harness) -> None:
@@ -233,7 +308,8 @@ def test_status_cached_makes_no_network_call(account: Harness) -> None:
     assert [row["lease"] for row in data["leases"]] == [
         "l-7f3a", "l-8b10", "l-8b11", "l-8b12", "l-a003", "i-55120"
     ]
-    assert data["totals"]["spent_today"] == 7.12
+    assert (data["totals"]["charges_today"], data["totals"]["credit"]) == (7.12, 20.0)
+    assert by_lease(data)["l-7f3a"]["cost"] == 6.0
     assert ("expiring_soon", "l-8b12") in codes(data)
     assert ("orphan", "i-55120") in codes(data)
     assert "log_tail" not in status(account, "--cached", "trainer")["leases"][0]
@@ -259,11 +335,11 @@ def test_status_cached_reads_legacy_unprobed_entry_as_partial(harness: Harness) 
     data = ctx.cache.load()
     data.leases["l-0000a001"].guard_missing = []
     ctx.cache.save(data)
-    cached = status(harness, "--cached")
+    cached = status(harness, "--cached", "--verbose")
     row = by_lease(cached)["l-0000a001"]
-    assert (row["guard"], row["guard_missing"]) == (
-        "partial", ["watchdog", "destroy_key", "clock_file"]
-    )
+    assert row["verbose"]["guard_layers"] == {
+        "watchdog": "missing", "destroy_key": "missing", "clock_file": "missing"
+    }
     assert ("guard_partial", "l-0000a001") not in codes(cached)
 
 
@@ -272,20 +348,21 @@ def test_status_human_table(account: Harness) -> None:
     assert code == 0
     lines = out.splitlines()
     assert lines[0].split() == ["LEASE", "NAME", "GROUP", "OWNER", "GPU", "STATE", "EXPIRES",
-                                "$/HR", "COST", "JOBS"]
+                                "UPTIME", "$/HR", "COST", "JOBS"]
     rows = {line.split()[0]: line for line in lines[1:7]}
-    assert "2× A100 SXM4" in rows["l-7f3a"]
+    assert "2x24 A100 SXM4" in rows["l-7f3a"]
+    assert rows["l-8b10"].endswith("idle")
     assert "j-1 train.py (running 2h01m)" in rows["l-7f3a"]
     assert "⚠ 3m" in rows["l-8b12"]
     assert "j-3 vllm (unknown)" in rows["l-8b11"]
     assert "4090" in rows["l-a003"] and "RTX" not in rows["l-a003"]
     orphan = rows["i-55120"].split()
-    assert orphan[1:5] == ["—", "—", "?", "3090"] and "none" in orphan and "?" in orphan[-3:]
+    assert orphan[1:6] == ["—", "—", "?", "1x24", "3090"] and "none" in orphan and "?" in orphan[-3:]
     assert "WARNINGS" in lines
     warn = next(line for line in lines if "expiring_soon" in line)
     assert warn.split()[0] == "l-8b12" and warn.endswith("fix: vasty extend l-8b12 --by 30m")
-    assert lines[-1] == ("TODAY  spent $7.12 of $10.00  ·  5 leases live (4 yours)  ·  "
-                         "burning $5.46/hr")
+    assert lines[-1] == ("TODAY  charged $7.12  ·  credit $20.00  ·  balance $0.00  ·  "
+                         "5 leases live (4 yours)  ·  burning $5.46/hr")
 
 
 def test_status_human_group_view(account: Harness) -> None:

@@ -1,17 +1,21 @@
 """`vasty serve`.
 
-`serve` maps `--model` to hardware through the `[models."NAME"]` tables.
-Without `--on` it resolves settings with the entry's `vram`, `gpu` and
-`image` as the `model` layer, below flags the user gave, then reserves a box
-with `run_ttl` (or `--ttl`). A model with no entry needs `--vram` and
-`--image` to auto-reserve. With `--on` any model name or box path serves.
+Without `--on`, `serve` resolves settings the same way `reserve` does and
+reserves a box with `run_ttl` (or `--ttl`). With `--on` it serves on that box.
+`--model` is any name or box path `vllm serve` accepts.
+
+Tokens after `--` are appended to the `vllm serve` argv. `serve` owns the
+endpoint and the key, so `--host`, `--port` and `--api-key` among them raise
+`invalid_arguments` before any provider call.
 
 The box's image supplies vLLM. On the box, `serve` checks for `vllm` on PATH
 and raises `vllm_missing` when it is absent. It then starts `vllm serve` as a
 `serve` job on port 8000 with a fresh `vasty-` key, and polls `/v1/models`
-with that key until it answers 200. With `--bind-local` vLLM listens on
-127.0.0.1 and the poll runs on the box with curl. Any failure after the
-reserve releases a box this call created.
+with that key until it answers 200. The job script exports the key as
+`VLLM_API_KEY`, so the `vllm serve` command line carries no secret. With
+`--bind-local` vLLM listens on 127.0.0.1 and the poll runs on the box with
+curl. `serve_failed` carries the job's last log lines with the key redacted.
+Any failure after the reserve releases a box this call created.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from __future__ import annotations
 import argparse
 import shlex
 from dataclasses import dataclass
+from typing import Any
 
 from vasty import engine
 from vasty.cli import Outcome
@@ -33,11 +38,10 @@ from vasty.commands._common import (
     require_tools,
     save_lease,
 )
-from vasty.config import VLLM_IMAGE, ModelEntry, resolve
 from vasty.context import Context
-from vasty.errors import VastyError
+from vasty.errors import VastyError, invalid
 from vasty.models import SERVE_PORT, CachedLease, Job, ServeResult, WarningItem
-from vasty.remote import SshTarget
+from vasty.remote import LOG_LINES, SshTarget
 from vasty.state import effective_expiry
 from vasty.timeutil import iso
 
@@ -46,28 +50,32 @@ POLL_INTERVAL_S = 5.0
 HTTP_TIMEOUT_S = 5.0
 PREFLIGHT_TIMEOUT_S = 30.0
 PREFLIGHT_COMMAND = "command -v vllm"
+VLLM_IMAGE = "vllm/vllm-openai:v0.32.0"
+LOG_TAIL_BYTES = 64 * 1024
+# vLLM flags that `serve` sets itself.
+OWNED_FLAGS = ("--host", "--port", "--api-key")
 
 
-def model_entry(ctx: Context, model: str) -> ModelEntry | None:
-    """Return the model table entry without fixing `ctx.settings`.
+def check_extra(extra: list[str]) -> None:
+    """Raise `invalid_arguments` when `extra` sets a flag in `OWNED_FLAGS`."""
+    for token in extra:
+        flag = token.split("=", 1)[0].replace("_", "-")
+        if flag in OWNED_FLAGS:
+            raise invalid(
+                f"serve sets {flag} itself.",
+                "Drop --host, --port and --api-key after --.",
+            )
 
-    The lookup resolves config without the `startup` flag so `--startup -`
-    still reads stdin once, later.
-    """
-    flags = {k: v for k, v in ctx.flags.items() if k != "startup"}
-    settings = resolve(flags, ctx.stdin_json, ctx.profile, ctx.env, ctx.cwd, ctx.home)
-    return settings.models.get(model)
+
+def server_argv(model: str, host: str, extra: list[str]) -> list[str]:
+    """Return the `vllm serve` argv; the key goes in `VLLM_API_KEY`."""
+    return ["vllm", "serve", model, "--host", host, "--port", str(SERVE_PORT), *extra]
 
 
-def server_argv(model: str, quant: str | None, host: str, key: str | None) -> list[str]:
-    """Return the `vllm serve` argv; pass `key` None for the displayed form."""
-    argv = ["vllm", "serve", model]
-    if key is not None:
-        argv += ["--api-key", key]
-    argv += ["--host", host, "--port", str(SERVE_PORT)]
-    if quant:
-        argv += ["--quantization", quant]
-    return argv
+def redact_tail(lines: list[str], key: str) -> list[str]:
+    """Replace `key` with `<redacted>` and keep the last `LOG_TAIL_BYTES` bytes of the lines."""
+    text = "\n".join(line.replace(key, "<redacted>") for line in lines)
+    return text.encode("utf-8")[-LOG_TAIL_BYTES:].decode("utf-8", errors="ignore").splitlines()
 
 
 def probe_command(key: str) -> str:
@@ -82,23 +90,16 @@ def probe_command(key: str) -> str:
 @dataclass
 class _Plan:
     model: str
-    quant: str | None
+    extra: list[str]
     bind_local: bool
+    auto: bool
 
 
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     auto = args.on is None
-    entry = model_entry(ctx, args.model)
-    if auto:
-        if entry is None and (ctx.flags.get("vram") is None or ctx.flags.get("image") is None):
-            raise VastyError(
-                "model_unknown",
-                f"Model {args.model!r} has no [models] entry.",
-                f'Pass --vram GB and --image IMAGE, or add [models."{args.model}"] to config.',
-            )
-        ctx.model = args.model
-    quant = args.quant if args.quant is not None else (entry.quant if entry else None)
-    plan = _Plan(args.model, quant, bool(args.bind_local))
+    extra = list(args.command or [])
+    check_extra(extra)
+    plan = _Plan(args.model, extra, bool(args.bind_local), auto)
     require_tools(ctx, "ssh")
 
     snap = engine.refresh(ctx)
@@ -147,12 +148,12 @@ def _public_url(ctx: Context, snap: engine.Snapshot, lease: CachedLease) -> str:
 def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Plan) -> ServeResult:
     target = engine.ssh_target(lease)
     url = f"http://127.0.0.1:{SERVE_PORT}/v1" if plan.bind_local else _public_url(ctx, snap, lease)
-    _preflight(ctx, target, lease, plan.model)
+    _preflight(ctx, target, lease, plan)
 
     key = "vasty-" + ctx.random_hex(32)
     host = "127.0.0.1" if plan.bind_local else "0.0.0.0"
-    command = shlex.join(server_argv(plan.model, plan.quant, host, key))
-    shown = shlex.join(server_argv(plan.model, plan.quant, host, None))
+    shown = shlex.join(server_argv(plan.model, host, plan.extra))
+    command = f"export VLLM_API_KEY={shlex.quote(key)}\n{shown}"
     job = Job(
         id=next_job_id(lease), cmd=shown, started_at=None, exit=None, state="serving",
         kind="serve", port=SERVE_PORT,
@@ -172,16 +173,22 @@ def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Pl
     )
 
 
-def _preflight(ctx: Context, target: SshTarget, lease: CachedLease, model: str) -> None:
-    """Raise `vllm_missing` when the box has no `vllm` on PATH."""
+def _preflight(ctx: Context, target: SshTarget, lease: CachedLease, plan: _Plan) -> None:
+    """Raise `vllm_missing` when the box has no `vllm` on PATH.
+
+    Under auto-reserve the hint names the vLLM image. Under `--on` it says to
+    install `vllm` on the lease.
+    """
     done = ctx.box.exec(target, PREFLIGHT_COMMAND, timeout=PREFLIGHT_TIMEOUT_S)
     if done.exit != 0:
-        raise VastyError(
-            "vllm_missing",
-            f"Lease {lease.lease} has no vllm on PATH.",
-            f"Reserve with a vLLM image: vasty serve --model {model} --image {VLLM_IMAGE}, "
-            f'or add image to the [models."{model}"] entry.',
-        )
+        if plan.auto:
+            hint = f"Reserve with a vLLM image: vasty serve --model {plan.model} --image {VLLM_IMAGE}."
+        else:
+            hint = (
+                f"Install vllm on {lease.lease}: vasty run --on {lease.lease} -- pip install vllm, "
+                f"or vasty ssh {lease.lease}."
+            )
+        raise VastyError("vllm_missing", f"Lease {lease.lease} has no vllm on PATH.", hint)
 
 
 def _ready(ctx: Context, target: SshTarget, url: str, key: str, bind_local: bool) -> bool:
@@ -210,23 +217,36 @@ def _wait_ready(
         if status.exit is not None or status.state == "exited":
             code = status.exit
             save_lease(ctx, lease, lambda record: finish_job(record, job_id, code, status.finished_at))
-            raise VastyError(
-                "serve_failed",
-                f"vLLM exited {code} before /v1/models answered.",
-                log_hint,
-                details={"exit": code},
-            )
+            message = f"vLLM exited {code} before /v1/models answered."
+            raise _serve_failed(ctx, target, lease, job_id, key, message, log_hint, code)
         if ctx.mono() >= deadline:
+            message = f"/v1/models did not answer within {int(READY_DEADLINE_S)}s."
+            error = _serve_failed(ctx, target, lease, job_id, key, message, log_hint, None)
             try:
                 ctx.box.signal_job(target, job_id, "TERM")
             except VastyError:
                 pass
-            raise VastyError(
-                "serve_failed",
-                f"/v1/models did not answer within {int(READY_DEADLINE_S)}s.",
-                log_hint,
-            )
+            raise error
         ctx.sleep(POLL_INTERVAL_S)
+
+
+def _serve_failed(
+    ctx: Context,
+    target: SshTarget,
+    lease: CachedLease,
+    job_id: str,
+    key: str,
+    message: str,
+    hint: str,
+    code: int | None,
+) -> VastyError:
+    """Return `serve_failed` with the job's redacted log tail; a failed read leaves it out."""
+    details: dict[str, Any] = {"exit": code, "lease": lease.lease}
+    try:
+        details["log_tail"] = redact_tail(ctx.box.log_tail(target, job_id, LOG_LINES), key)
+    except (VastyError, OSError):
+        pass
+    return VastyError("serve_failed", message, hint, details=details)
 
 
 def _human(result: ServeResult) -> str:

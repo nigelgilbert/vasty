@@ -2,10 +2,10 @@
 
 `reserve_lease` does the work for `reserve` and for auto-reserved `run` and
 `serve`. Under the `leases.json` lock it checks the name, searches offers,
-checks the budget, registers the SSH key and creates the instance. A create
+registers the SSH key and creates the instance. A create
 that times out is recovered by listing instances for the lease id. Outside
-the lock it waits for the lease to leave `pending` by refreshing every
-`WAIT_POLL_S` seconds.
+the lock it starts `vasty sweep --follow` for the lease and waits for the
+lease to leave `pending` by refreshing every `WAIT_POLL_S` seconds.
 
 The wait gives up at the lease's effective expiry with `box_unreachable`.
 Once SSH answers, every required port has `PORT_GRACE_S` seconds to show a
@@ -21,9 +21,10 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, TypeVar
 
-from vasty import budget, engine, ids, labels, onstart, views
+from vasty import engine, ids, labels, onstart, views
 from vasty.cli import Outcome
 from vasty.commands._common import merge_swept, taken_ids
+from vasty.commands.sweep import spawn_follow
 from vasty.context import Context
 from vasty.errors import VastyError, invalid
 from vasty.keys import public_key
@@ -39,20 +40,27 @@ from vasty.models import (
     SweptEntry,
     WarningItem,
 )
-from vasty.state import GUARD_LAYERS, effective_expiry, guard, lease_warnings, make_warning
-from vasty.timeutil import format_duration, iso
+from vasty.state import (
+    GUARD_LAYERS,
+    effective_expiry,
+    gpu_matches,
+    hardware_mismatch,
+    lease_warnings,
+    make_warning,
+    reuse_candidates,
+    ttl_remaining,
+)
+from vasty.timeutil import format_duration, format_duration_exact, iso
 
 if TYPE_CHECKING:
     from vasty.engine import Snapshot
 
-DEFAULT_IMAGE = "vasty/base:cuda12.4"
 DEFAULT_PORTS = (22, 8000, 8080)
 MAX_PORTS = 64
 WAIT_POLL_S = 10.0
 PORT_GRACE_S = 60
 RECOVER_POLL_S = 5.0
 RECOVER_WINDOW_S = 60
-RESERVE_BUDGET_HINT = "Shorten --ttl, lower --max-price, or release a lease. Run vasty status."
 
 
 @dataclass
@@ -64,14 +72,22 @@ class Reserved:
 
 
 def reserve_lease(
-    ctx: Context, args: argparse.Namespace, snap: Snapshot, *, ttl: int, wait: bool
+    ctx: Context,
+    args: argparse.Namespace,
+    snap: Snapshot,
+    *,
+    ttl: int,
+    wait: bool,
 ) -> Reserved:
     """Reserve a box from the creation flags in `args` and `ctx.settings`.
 
-    Apply name idempotency, the budget check with `ttl`, offer search, create
-    with recovery and the readiness wait. `run` and `serve` call this for
-    auto-reserve. Raise `VastyError` on failure; a box this call created and
-    then gave up on is destroyed before the error propagates.
+    Apply name idempotency, offer search, create with recovery and the
+    readiness wait. `run` and `serve` call this for auto-reserve. Raise
+    `VastyError` on failure; a box this call created and then gave up on is
+    destroyed before the error propagates.
+
+    A creation adds one `idle_box_available` warning per reuse candidate. A
+    candidate maps every requested port.
     """
     settings = ctx.settings
     name = getattr(args, "name", None)
@@ -90,24 +106,19 @@ def reserve_lease(
     with ctx.cache.lock():
         hit = _name_hit(ctx, snap, name, owner) if name is not None else None
         if hit is not None:
-            mismatch = flag_mismatch(ctx, args, hit, ttl, ports)
+            mismatch = flag_mismatch(ctx, args, hit, snap.instance(hit.instance_id), ttl, ports)
             if mismatch is not None:
                 warnings.append(mismatch)
         else:
-            custom = settings.image != DEFAULT_IMAGE
-            onstart_cmd = onstart.build_onstart(ttl, settings.startup, custom)
+            for idle, shortfall in reuse_candidates(snap, settings, ttl, snap.now, ports):
+                warnings.append(idle_warning(idle, shortfall, ttl, snap.now))
+            onstart_cmd = onstart.build_onstart(ttl, settings.startup)
             query = OfferQuery(
                 gpu=settings.gpu, vram_min_gb=settings.vram, gpus=settings.gpus,
                 disk_gb=settings.disk, max_price=settings.max_price, region=settings.region,
+                cuda=settings.cuda,
             )
             offer = choose_offer(ctx, query)
-            projected, daily = engine.budget_check(
-                ctx, snap, budget.cost(offer.dph_total, ttl), RESERVE_BUDGET_HINT,
-                leases=engine.locked_active(ctx, snap),
-            )
-            low = budget.budget_low_warning(projected, daily)
-            if low is not None:
-                warnings.append(low)
             register_key(ctx)
             taken = taken_ids(snap)
             lease_id = ids.new_lease_id(ctx.random_hex, taken)
@@ -129,6 +140,7 @@ def reserve_lease(
             required = ports if request.runtype == "ssh_direct" else []
     lease = hit
     reused = not created
+    not_spawned = spawn_follow(ctx, lease.lease)
 
     if wait and lease.state == "pending":
         lease, more_swept, account = wait_ready(ctx, lease, required, created)
@@ -137,6 +149,8 @@ def reserve_lease(
     else:
         warnings = list(snap.warnings) + warnings
     warnings += lease_warnings(lease, ctx.clock.now(), settings.warn_before_expiry)
+    if not_spawned is not None:
+        warnings.append(not_spawned)
     result = reserve_result(lease, ctx.clock.now(), reused, warnings, swept)
     return Reserved(result=result, lease=lease)
 
@@ -181,20 +195,19 @@ def _name_hit(ctx: Context, snap: Snapshot, name: str, owner: str) -> CachedLeas
     return hits[0] if hits else None
 
 
-def _gpu_matches(wanted: str, actual: str | None) -> bool:
-    from vasty.provider import gpu_name_filter
-
-    if actual is None:
-        return False
-    rule = gpu_name_filter(wanted)
-    names = [rule["eq"]] if "eq" in rule else list(rule.get("in", []))
-    return actual.lower() in {str(n).lower() for n in names}
-
-
 def flag_mismatch(
-    ctx: Context, args: argparse.Namespace, lease: CachedLease, ttl: int, ports: list[int]
+    ctx: Context,
+    args: argparse.Namespace,
+    lease: CachedLease,
+    inst: Instance | None,
+    ttl: int,
+    ports: list[int],
 ) -> WarningItem | None:
-    """Return the `flag_mismatch` warning listing flags the reused lease does not match."""
+    """Return the `flag_mismatch` warning listing flags the reused lease does not match.
+
+    Hardware keys come from `hardware_mismatch` on the instance row `inst`,
+    kept when a flag set them. Ports are checked when the lease has a mapping.
+    """
     settings = ctx.settings
     given = {key for key, source in settings.sources.items() if source == "flag"}
     differ: list[str] = []
@@ -203,24 +216,27 @@ def flag_mismatch(
         differ.append("--group")
     if "ttl" in given and ttl != lease.label.ttl:
         differ.append("--ttl")
-    if "gpu" in given and settings.gpu and not _gpu_matches(settings.gpu, lease.gpu):
-        differ.append("--gpu")
-    if "vram" in given and settings.vram is not None and (
-        lease.vram_gb is None or lease.vram_gb < settings.vram
-    ):
-        differ.append("--vram")
-    if "gpus" in given and settings.gpus != lease.gpus:
-        differ.append("--gpus")
-    if "max_price" in given and lease.price_per_hr > settings.max_price:
-        differ.append("--max-price")
-    if "image" in given and lease.image is not None and settings.image != lease.image:
-        differ.append("--image")
-    if "ports" in given and lease.ports and any(p not in lease.ports for p in ports):
-        differ.append("--ports")
+    hardware = hardware_mismatch(lease, inst, settings, ports if lease.ports else None)
+    differ += ["--" + key.replace("_", "-") for key in hardware if key in given]
     if not differ:
         return None
     message = f"lease {lease.lease} differs from {', '.join(differ)}"
     return make_warning("flag_mismatch", lease.lease, message)
+
+
+def idle_warning(lease: CachedLease, shortfall: int, ttl: int, now: int) -> WarningItem:
+    """Return the `idle_box_available` warning for a reuse candidate.
+
+    A candidate short of `ttl` names the shortfall and the `extend --to` that
+    covers it.
+    """
+    named = f"{lease.lease} ({lease.label.name})" if lease.label.name else lease.lease
+    vram = "?" if lease.vram_gb is None else str(int(lease.vram_gb))
+    left = format_duration(ttl_remaining(lease.label, now))
+    message = f"lease {named} is idle: {lease.gpu or '?'}, {lease.gpus}x{vram} GB, {left} left"
+    if shortfall:
+        message += f", {format_duration(shortfall)} short; extend --to {format_duration_exact(ttl)}"
+    return make_warning("idle_box_available", lease.lease, message)
 
 
 def _offer_ok(offer: Offer, query: OfferQuery) -> bool:
@@ -228,7 +244,7 @@ def _offer_ok(offer: Offer, query: OfferQuery) -> bool:
         return False
     if query.vram_min_gb is not None and offer.gpu_ram_gb < query.vram_min_gb:
         return False
-    return not query.gpu or _gpu_matches(query.gpu, offer.gpu_name)
+    return not query.gpu or gpu_matches(query.gpu, offer.gpu_name)
 
 
 def rank_offers(offers: list[Offer], query: OfferQuery) -> list[Offer]:
@@ -247,6 +263,8 @@ def _no_offers(query: OfferQuery) -> VastyError:
         parts.append(f"gpus={query.gpus}")
     if query.region:
         parts.append(f"region={query.region}")
+    if query.cuda is not None:
+        parts.append(f"cuda>={query.cuda:g}")
     what = " ".join(parts) or "the request"
     higher = (query.max_price * Decimal("1.5")).quantize(Decimal("0.01"))
     tips = [f"--max-price {higher}"]
@@ -256,6 +274,8 @@ def _no_offers(query: OfferQuery) -> VastyError:
         tips.append("a lower --vram")
     if query.region:
         tips.append("relax --region")
+    if query.cuda is not None:
+        tips.append("a lower --cuda")
     hint = "Try " + (", ".join(tips[:-1]) + ", or " + tips[-1] if len(tips) > 1 else tips[0]) + "."
     return VastyError(
         "no_offers", f"No offers match {what} under ${query.max_price}/hr.", hint,
@@ -461,7 +481,6 @@ def reserve_result(
     swept: list[SweptEntry],
 ) -> ReserveResult:
     """Build the `reserve` output. A `pending` lease has null clock and endpoint fields."""
-    level, missing = guard(lease)
     pending = lease.state == "pending"
     expiry = effective_expiry(lease.label)
     endpoint = views.endpoint_fields(lease)
@@ -471,8 +490,6 @@ def reserve_result(
         owner=lease.label.owner,
         group=lease.label.group,
         state=lease.state,
-        guard=level,
-        guard_missing=missing,
         reused=reused,
         gpu=lease.gpu,
         gpus=lease.gpus,

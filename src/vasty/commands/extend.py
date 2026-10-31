@@ -1,21 +1,21 @@
 """`vasty extend`.
 
-`extend` takes one `now` for every target and checks the budget once for the
-whole target, replacing each lease's commitment with its new expiry. Each
-lease then gets two writes, ordered so the earlier-firing enforcer stays behind the reported value: clock file then label when
-lengthening, label then clock file when shortening. A failed second write
-restores the first and returns `provider_error`; the lease shows
-`guard: partial` with `clock_file` missing until the next probe.
+`extend` takes one `now` for every target. Each lease gets two writes,
+ordered so the earlier-firing enforcer stays behind the reported value: clock
+file then label when lengthening, label then clock file when shortening. A failed second write
+restores the first and returns `provider_error`; the lease carries a
+`guard_partial` warning naming the clock file until the next probe.
 
 Under the `leases.json` lock, `extend` reloads each target from the file and
-computes the new expiry and the budget from that copy. A target another local
-process released since `refresh` returns `lease_expired` and keeps its cache
-entry.
+computes the new expiry from that copy. A target another local process
+released since `refresh` returns `lease_expired` and keeps its cache entry.
 
 A lease is writable when the refresh's probe reached it. `extend` checks the
 snapshot copy and again the copy reloaded under the lock. A `pending` lease
 that SSH has never answered returns `lease_pending`. An `unreachable` or
 `stopped` lease returns `box_unreachable` and changes nothing.
+
+Each extended lease gets a detached `vasty sweep --follow` for its new expiry.
 """
 
 from __future__ import annotations
@@ -25,8 +25,9 @@ import dataclasses
 import shlex
 from collections.abc import Mapping
 
-from vasty import budget, engine, labels, views
+from vasty import engine, labels, views
 from vasty.cli import Outcome
+from vasty.commands.sweep import spawn_follow
 from vasty.context import Context
 from vasty.errors import EXIT_CODES, VastyError, invalid
 from vasty.ids import orphan_id
@@ -42,8 +43,6 @@ from vasty.models import (
 from vasty.state import effective_expiry
 from vasty.targeting import resolve_target
 from vasty.timeutil import format_duration, iso, parse_duration, parse_time
-
-EXTEND_BUDGET_HINT = "Extend by less, or release a lease. Run vasty status."
 
 
 @dataclasses.dataclass(frozen=True)
@@ -150,7 +149,7 @@ def _mark_partial(lease: CachedLease) -> None:
 
 def _write_clock(ctx: Context, lease: CachedLease, expires: int) -> None:
     try:
-        ctx.box.write_clock(engine.ssh_target(lease), expires)
+        ctx.box.write_clock(engine.ssh_target(lease), expires, engine.provider_now(ctx))
     except OSError as exc:
         raise VastyError("box_unreachable", f"Clock write failed: {exc}.", "Run vasty status.") from exc
 
@@ -244,6 +243,14 @@ def _both_failed(
     )
 
 
+def _spawn(ctx: Context, leases: list[CachedLease], warnings: list[WarningItem]) -> None:
+    """Start a follower for each extended lease. Add a warning for each spawn that fails."""
+    for lease in leases:
+        not_spawned = spawn_follow(ctx, lease.lease)
+        if not_spawned is not None:
+            warnings.append(not_spawned)
+
+
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     requested = parse_change(args)
     snap = engine.refresh(ctx)
@@ -275,16 +282,10 @@ def _single(
         expires = new_expiry(lease, change)
         if expires <= now:
             raise invalid("The new expiry is at or before now.", _release_hint(None, lease.lease))
-        projected, daily = engine.budget_check(
-            ctx, snap, hint=EXTEND_BUDGET_HINT, replace={lease.lease: expires},
-            leases=engine.locked_active(ctx, snap),
-        )
         apply(ctx, lease, expires)
     warnings = views.warnings_for([lease], now, ctx.settings.warn_before_expiry)
     warnings += snap.warnings
-    low = budget.budget_low_warning(projected, daily)
-    if low is not None:
-        warnings.append(low)
+    _spawn(ctx, [lease], warnings)
     final = effective_expiry(lease.label)
     result = ExtendResult(
         lease=lease.lease,
@@ -315,7 +316,6 @@ def _bulk(
             check_writable(lease)
         except VastyError as err:
             errors[lease.lease] = err
-    warnings: list[WarningItem] = []
     entries: list[BulkEntry] = []
     with ctx.cache.lock():
         cached = ctx.cache.load().leases
@@ -332,14 +332,6 @@ def _bulk(
                 targets[lease.lease] = expires
             except VastyError as err:
                 errors[lease.lease] = err
-        if targets:
-            projected, daily = engine.budget_check(
-                ctx, snap, hint=EXTEND_BUDGET_HINT, replace=targets,
-                leases=engine.locked_active(ctx, snap),
-            )
-            low = budget.budget_low_warning(projected, daily)
-            if low is not None:
-                warnings.append(low)
         for lease in leases:
             if lease.lease in targets:
                 try:
@@ -353,8 +345,9 @@ def _bulk(
                 error=found.code if found is not None else None,
                 data={"expires_at": iso(effective_expiry(lease.label))},
             ))
-    warnings = views.warnings_for(leases, now, ctx.settings.warn_before_expiry) + warnings
-    warnings = warnings + list(snap.warnings)
+    warnings = views.warnings_for(leases, now, ctx.settings.warn_before_expiry)
+    warnings += snap.warnings
+    _spawn(ctx, [lease for lease in leases if lease.lease not in errors], warnings)
     exit_code = max((EXIT_CODES[err.code] for err in errors.values()), default=0)
     result = BulkResult(results=entries, warnings=warnings, swept=snap.swept)
     human = None

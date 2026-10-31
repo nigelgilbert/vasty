@@ -1,8 +1,8 @@
 """The networked-command prelude: list, sweep, reconcile and probe.
 
 Every networked command calls `refresh` before it resolves its target. The
-spend helpers back `status` totals and the budget check in the spending
-commands. `cached_snapshot` answers `status --cached` from the
+billing helpers read Vast's charges and balance for `status` and `release`.
+`cached_snapshot` answers `status --cached` from the
 local file and imports only the standard library.
 
 Reconciliation keeps history leases in `Snapshot.leases` for 24h from the
@@ -64,10 +64,10 @@ it adopts an orphan. A lease whose label `miss` lists `watchdog` or
   the script writes first, or the box lacks both the guard file and
   `startup.started`. A probe that finds the marker sets `adopted` in the
   cache, so a lost cache entry still gets reruns after a container restart.
-  Boxes adopted before the marker existed rely on the cache flag. `onstart`
-  writes the guard file and then `startup.started` on every box `reserve`
-  makes, so the script skips `reserve` boxes. A probe between the two writes
-  sees the guard file.
+  Boxes adopted before the marker existed rely on the cache flag. On every
+  box `reserve` makes, the watchdog writes the guard file on its first loop
+  and `onstart` then writes `startup.started`, so the script skips `reserve`
+  boxes. A probe between the two writes sees the guard file.
 - The rerun runs over SSH inside the probe pool. The wait between reruns
   follows `retry_delay`, counted by `adopt_attempts` from `adopt_at`. The
   count resets once the probe finds `watchdog` and `destroy_key` in place.
@@ -80,18 +80,18 @@ it adopts an orphan. A lease whose label `miss` lists `watchdog` or
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from vasty import budget, labels
+from vasty import labels
 from vasty.errors import VastyError
 from vasty.ids import orphan_id
 from vasty.keys import public_key
 from vasty.models import (
     HISTORY_STATES,
+    Balance,
     CachedLease,
     Charges,
     Instance,
@@ -103,7 +103,7 @@ from vasty.models import (
 )
 from vasty.onstart import STARTUP_INTERRUPTED
 from vasty.state import GUARD_LAYERS, derive_state, effective_expiry, make_warning, resolve_state
-from vasty.timeutil import iso
+from vasty.timeutil import day_start, iso
 
 if TYPE_CHECKING:
     from vasty.cache import CacheData
@@ -116,6 +116,7 @@ MAX_PROBE_THREADS = 16
 DESTROY_RETRY_BASE_S = 5
 DESTROY_RETRY_CAP_S = 60
 ADOPT_LAYERS = ("watchdog", "destroy_key")
+BILLING_FRESH_S = 60
 
 
 @dataclass
@@ -123,8 +124,10 @@ class Snapshot:
     """The account after one refresh.
 
     `leases` holds active and history leases keyed by lease id. `instances` is
-    the listing after the sweep. `charges` holds today's billing once `spend`
-    has read it. `cached_at` is set when the snapshot comes from the cache file.
+    the listing after the sweep. `charges` holds the cached charges after
+    `refresh`, and `balance` is None. `read_charges` and `read_balance` set
+    them, and `cached_snapshot` sets both from the cache file. `cached_at` is
+    set when the snapshot comes from the cache file.
     """
 
     now: int
@@ -135,6 +138,7 @@ class Snapshot:
     swept: list[SweptEntry] = field(default_factory=list)
     warnings: list[WarningItem] = field(default_factory=list)
     charges: Charges | None = None
+    balance: Balance | None = None
     cached_at: int | None = None
 
     def active(self) -> list[CachedLease]:
@@ -441,6 +445,13 @@ class _Probed:
     result: ProbeResult | None
     adopt_ran: bool = False
     adopt_missing: list[str] | None = None
+    skew: int | None = None
+    """Box clock minus provider clock when the probe returned, under a verified clock."""
+
+
+def provider_now(ctx: Context) -> int | None:
+    """Return the provider clock for a box write, or None while the clock is unverified."""
+    return ctx.clock.now() if ctx.clock.verified else None
 
 
 def _adoption_listed(names: list[str]) -> bool:
@@ -469,16 +480,21 @@ def _reruns_adoption(lease: CachedLease, result: ProbeResult, now: int) -> bool:
 def _probe_one(ctx: Context, lease: CachedLease, now: int) -> _Probed:
     try:
         target = ssh_target(lease)
-        result = ctx.box.probe(target, lease.label.expires, timeout=PROBE_TIMEOUT_S)
+        sent = provider_now(ctx)
+        result = ctx.box.probe(target, lease.label.expires, sent, timeout=PROBE_TIMEOUT_S)
     except (VastyError, OSError):
         return _Probed(None)
+    returned = provider_now(ctx)
     if result.startup_exit == STARTUP_INTERRUPTED:
         result = dataclasses.replace(result, startup_interrupted=True)
     probed = _Probed(result)
+    if returned is not None and result.box_now is not None:
+        probed.skew = result.box_now - returned
     if _reruns_adoption(lease, result, now):
         probed.adopt_ran = True
         try:
-            probed.adopt_missing = _layers(ctx.box.adopt(target, effective_expiry(lease.label)))
+            missing = ctx.box.adopt(target, effective_expiry(lease.label), provider_now(ctx))
+            probed.adopt_missing = _layers(missing)
         except (VastyError, OSError):
             pass
     return probed
@@ -549,6 +565,9 @@ def _apply_probe(ctx: Context, lease: CachedLease, probed: _Probed, now: int) ->
     lease.startup_interrupted = result.startup_interrupted
     lease.startup_exit = None if result.startup_exit == STARTUP_INTERRUPTED else result.startup_exit
     lease.jobs = _merge_jobs(lease.jobs, result.jobs)
+    lease.clock_skew_unknown = result.box_now is None
+    if probed.skew is not None:
+        lease.clock_skew = probed.skew
     label = lease.label
     if probed.adopt_missing is not None:
         missing = probed.adopt_missing
@@ -567,7 +586,7 @@ def _apply_probe(ctx: Context, lease: CachedLease, probed: _Probed, now: int) ->
     lease.guard_missing = missing
     wanted = dataclasses.replace(label, miss=list(missing))
     if label.expires is None and result.clock_expires is not None:
-        wanted.expires = result.clock_expires
+        wanted.expires = result.clock_expires - (probed.skew or 0)
     if wanted.expires == label.expires and wanted.miss == label.miss:
         return
     try:
@@ -639,6 +658,8 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
                 lease.history_since = None
                 lease.expired_at = None
             running = (inst.actual_status or "").strip().lower() == "running"
+            if running and lease.running_at is None:
+                lease.running_at = now
             if running and probe:
                 to_probe.append(lease)
             elif running:
@@ -664,7 +685,7 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
             unreadable=[inst for inst, _ in rows.unreadable],
             swept=swept,
             warnings=warnings,
-            charges=_today_charges(data, now),
+            charges=_cached_charges(data, charges_start(leases.values(), now), now),
         )
 
 
@@ -672,7 +693,8 @@ def cached_snapshot(ctx: Context) -> Snapshot:
     """Build a snapshot from `leases.json` with no network call.
 
     `now` comes from the local clock. Warnings cover `label_unreadable` and
-    `cache_rebuilt`. `charges` holds the cached billing for today of any age.
+    `cache_rebuilt`. `charges` and `balance` hold the cached figures only when
+    they were read today in UTC, and `charges` only when it covers every lease.
     """
     data = ctx.cache.load()
     now = ctx.clock.now()
@@ -691,119 +713,78 @@ def cached_snapshot(ctx: Context) -> Snapshot:
         orphans=rows.orphans,
         unreadable=[inst for inst, _ in rows.unreadable],
         warnings=warnings,
-        charges=_today_charges(data, now),
+        charges=_cached_charges(data, charges_start(data.leases.values(), now), now),
+        balance=_cached_balance(data)
+        if data.balance_at is not None and day_start(data.balance_at) == day_start(now)
+        else None,
         cached_at=data.cached_at,
     )
 
 
-def _today_charges(data: CacheData, now: int) -> Charges | None:
-    if data.charges is None or data.charges_start != budget.day_start(now):
+def charges_start(leases: Iterable[CachedLease], now: int) -> int:
+    """Return 00:00 UTC of the earlier of `now` and the oldest cached lease's `created`."""
+    return day_start(min([now, *(lease.label.created for lease in leases)]))
+
+
+def _fresh(fetched_at: int | None, now: int) -> bool:
+    return fetched_at is not None and 0 <= now - fetched_at < BILLING_FRESH_S
+
+
+def _cached_charges(data: CacheData, start: int, now: int) -> Charges | None:
+    """Return the cached charges when they were read today and their range begins by `start`."""
+    if data.charges is None or data.charges_start is None or data.charges_at is None:
+        return None
+    if data.charges_start > start or day_start(data.charges_at) != day_start(now):
         return None
     return data.charges
 
 
-def _read_charges(ctx: Context, now: int) -> Charges | None:
-    start = budget.day_start(now)
-    with ctx.cache.lock():
-        data = ctx.cache.load()
-        if data.charges_start == start and budget.billing_fresh(data.charges_at, now):
-            return data.charges
-        try:
-            charges = ctx.provider.charges(start, now)
-        except VastyError:
-            return None
-        data.charges, data.charges_at, data.charges_start = charges, now, start
-        ctx.cache.save(data)
-        return charges
+def _cached_balance(data: CacheData) -> Balance | None:
+    if data.balance is None or data.credit is None:
+        return None
+    return Balance(balance=data.balance, credit=data.credit)
 
 
-def spend_from(charges: Charges | None, snap: Snapshot) -> tuple[Decimal | None, str | None]:
-    """Return `spent_today` and its `spend_source` from charges already read.
-
-    `spend_source` is `billing` when billed charges cover the whole figure,
-    `estimated` when nothing is billed yet and price × time fills it, and
-    `mixed` when both parts are non-zero. Both are None when coverage is unknown.
-    """
-    if charges is None:
-        return None, None
-    start = budget.day_start(snap.now)
-    spent = budget.spent_today(charges, snap.instances, snap.now, start)
-    if spent is None:
-        return None, None
-    estimate = spent - charges.total
-    if estimate == budget.ZERO:
-        return spent, "billing"
-    if charges.total == budget.ZERO:
-        return spent, "estimated"
-    return spent, "mixed"
-
-
-def spend(ctx: Context, snap: Snapshot) -> tuple[Decimal | None, str | None]:
-    """Return `spent_today` and its `spend_source` (see `spend_from`).
+def read_charges(ctx: Context, snap: Snapshot) -> None:
+    """Set `snap.charges` to Vast's charges from `charges_start` to now.
 
     Charges are read once per 60s and cached in `leases.json`. A failed
-    charges call counts as unknown coverage. Sets `snap.charges`.
+    charges call sets None.
     """
-    snap.charges = _read_charges(ctx, snap.now)
-    return spend_from(snap.charges, snap)
+    start = charges_start(snap.leases.values(), snap.now)
+    with ctx.cache.lock():
+        data = ctx.cache.load()
+        cached = _cached_charges(data, start, snap.now)
+        if cached is not None and _fresh(data.charges_at, snap.now):
+            snap.charges = cached
+            return
+        try:
+            charges = ctx.provider.charges(start, snap.now)
+        except VastyError:
+            snap.charges = None
+            return
+        data.charges, data.charges_at, data.charges_start = charges, snap.now, start
+        ctx.cache.save(data)
+    snap.charges = charges
 
 
-def locked_active(ctx: Context, snap: Snapshot) -> list[CachedLease]:
-    """Return the active leases from `leases.json` merged with the snapshot's, sorted by id.
+def read_balance(ctx: Context, snap: Snapshot) -> None:
+    """Set `snap.balance` to Vast's balance and credit.
 
-    The caller holds the `leases.json` lock so a reserve, release or extend by
-    another local process since `refresh` counts. The cache copy replaces the
-    snapshot copy of the same lease. A snapshot lease the cache lacks, for
-    example after a corrupt file, stays in.
+    The pair is read once per 60s and cached in `leases.json`. A failed
+    balance call sets None.
     """
-    cached = ctx.cache.load().leases
-    merged = {lease.lease: lease for lease in snap.active()}
-    merged.update(cached)
-    return sorted(
-        (lease for lease in merged.values() if lease.state not in HISTORY_STATES),
-        key=lambda lease: lease.lease,
-    )
-
-
-def projection_for(
-    ctx: Context,
-    snap: Snapshot,
-    extra: Decimal = budget.ZERO,
-    replace: Mapping[str, int] | None = None,
-    leases: Iterable[CachedLease] | None = None,
-) -> tuple[Decimal, Decimal]:
-    """Return `(projected, without_action)` for the account.
-
-    `without_action` is spend plus every active lease's commitment to its
-    effective expiry. `projected` swaps in the expiry from `replace` (lease id
-    to new expiry) for those leases and adds `extra`. `leases` is the active
-    pool, `snap.active()` when None; spend reads `snap.instances`. Raise
-    `spend_unavailable` when spend is unknown.
-    """
-    spent = budget.require_spent(spend(ctx, snap)[0])
-    pool = snap.active() if leases is None else list(leases)
-    base = budget.lease_commitments(pool)
-    changed = budget.lease_commitments(pool, replace)
-    without = budget.projection(spent, base, snap.now, budget.ZERO)
-    projected = budget.projection(spent, changed, snap.now, extra)
-    return projected, without
-
-
-def budget_check(
-    ctx: Context,
-    snap: Snapshot,
-    extra: Decimal = budget.ZERO,
-    hint: str = budget.BUDGET_HINT,
-    replace: Mapping[str, int] | None = None,
-    leases: Iterable[CachedLease] | None = None,
-) -> tuple[Decimal, Decimal]:
-    """Refuse an action whose projection passes `daily_budget`.
-
-    Spending commands pass `leases` from `locked_active` under the lock.
-    Return `(projected, daily_budget)` so callers can add `budget_low` with
-    `budget.budget_low_warning`. Raise `spend_unavailable` or `budget_exceeded`.
-    """
-    projected, without = projection_for(ctx, snap, extra, replace, leases)
-    daily = ctx.settings.daily_budget
-    budget.check(projected, without, daily, hint)
-    return projected, daily
+    with ctx.cache.lock():
+        data = ctx.cache.load()
+        cached = _cached_balance(data)
+        if cached is not None and _fresh(data.balance_at, snap.now):
+            snap.balance = cached
+            return
+        try:
+            found = ctx.provider.balance()
+        except VastyError:
+            snap.balance = None
+            return
+        data.balance, data.credit, data.balance_at = found.balance, found.credit, snap.now
+        ctx.cache.save(data)
+    snap.balance = found

@@ -36,30 +36,28 @@ DEFAULT_KEYS: dict[str, str] = {
     "ttl": "duration",
     "run_ttl": "duration",
     "max_price": "money",
-    "daily_budget": "money",
     "warn_before_expiry": "duration",
     "image": "str",
     "disk": "int",
     "gpus": "int",
     "gpu": "str",
     "vram": "number",
+    "cuda": "number",
     "region": "str",
     "ports": "ports",
     "startup": "text",
     "startup_file": "path",
 }
-PROFILE_KEYS: dict[str, str] = {k: v for k, v in DEFAULT_KEYS.items() if k != "daily_budget"}
+PROFILE_KEYS: dict[str, str] = dict(DEFAULT_KEYS)
 TOP_KEYS: dict[str, str] = {"api_key_env": "str", "owner": "owner", "ssh_key": "path"}
-MODEL_KEYS: dict[str, str] = {"vram": "number", "quant": "str", "image": "str", "gpu": "str"}
-# Model-entry keys `serve` applies as reservation settings.
-MODEL_LAYER_KEYS: dict[str, str] = {k: MODEL_KEYS[k] for k in ("vram", "gpu", "image")}
-TABLE_KEYS = ("defaults", "profiles", "models")
+TABLE_KEYS = ("defaults", "profiles")
 FLAG_KEYS: dict[str, str] = {**PROFILE_KEYS, "owner": "owner"}
 
 # Keys `config show` reports, in display order.
 SHOWN = (
-    "owner", "api_key_env", "ssh_key", "ttl", "run_ttl", "max_price", "daily_budget",
-    "warn_before_expiry", "disk", "gpus", "image", "gpu", "vram", "region", "ports", "startup",
+    "owner", "api_key_env", "ssh_key", "ttl", "run_ttl", "max_price",
+    "warn_before_expiry", "disk", "gpus", "image", "gpu", "vram", "cuda", "region", "ports",
+    "startup",
 )
 
 BUILTIN: dict[str, Any] = {
@@ -67,30 +65,13 @@ BUILTIN: dict[str, Any] = {
     "ttl": 30 * 60,
     "run_ttl": 2 * 3600,
     "max_price": Decimal("0.60"),
-    "daily_budget": Decimal("10.00"),
     "warn_before_expiry": 5 * 60,
     "disk": 50,
     "gpus": 1,
-    "image": "vasty/base:cuda12.4",
-}
-VLLM_IMAGE = "vllm/vllm-openai:v0.32.0"
-BUILTIN_MODELS: dict[str, dict[str, Any]] = {
-    "Qwen/Qwen3-72B-Instruct": {
-        "vram": 80.0, "quant": "awq", "image": VLLM_IMAGE,
-    },
+    "image": "vastai/base-image:cuda-12.6.3-auto",
 }
 
 _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
-
-
-@dataclass(frozen=True)
-class ModelEntry:
-    """One `[models."NAME"]` table."""
-
-    vram: float | None = None
-    quant: str | None = None
-    image: str | None = None
-    gpu: str | None = None
 
 
 @dataclass
@@ -103,18 +84,17 @@ class Settings:
     ttl: int
     run_ttl: int
     max_price: Decimal
-    daily_budget: Decimal
     warn_before_expiry: int
     disk: int
     gpus: int
     image: str
     gpu: str | None = None
     vram: float | None = None
+    cuda: float | None = None
     region: str | None = None
     ports: list[int] = field(default_factory=list)
     startup: str | None = None
     startup_path: str | None = None
-    models: dict[str, ModelEntry] = field(default_factory=dict)
     profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
     sources: dict[str, str] = field(default_factory=dict)
 
@@ -164,18 +144,6 @@ def parse_duration(text: str) -> int | None:
         return timeutil.parse_duration(text)
     except VastyError:
         return None
-
-
-def format_duration(seconds: int) -> str:
-    """Format seconds as `1h30m`, `2d` or `45s`."""
-    if seconds <= 0:
-        return "0s"
-    parts = []
-    for unit, size in timeutil.UNITS.items():
-        count, seconds = divmod(seconds, size)
-        if count:
-            parts.append(f"{count}{unit}")
-    return "".join(parts)
 
 
 def _decimal(value: Any, text: bool) -> Decimal | None:
@@ -304,8 +272,6 @@ def _convert_table(
         full = prefix + key
         kind = allowed.get(key)
         if kind is None:
-            if key == "daily_budget":
-                raise origin.fail(full, "has no profile, flag or stdin form; set it in [defaults]")
             raise origin.fail(full, "is not a known key")
         if key == "startup_file" and origin.source == "flag" and value == "-":
             out["startup"] = StartupSpec("stdin")
@@ -338,7 +304,6 @@ class ConfigFile:
     values: dict[str, Any]
     profiles: dict[str, dict[str, Any]]
     raw_profiles: dict[str, dict[str, Any]]
-    models: dict[str, dict[str, Any]]
 
 
 def _subtables(doc: Mapping[str, Any], key: str, origin: _Origin) -> dict[str, dict[str, Any]]:
@@ -370,11 +335,7 @@ def check_document(doc: Mapping[str, Any], path: Path, source: str, home: Path) 
         name: _convert_table(table, PROFILE_KEYS, origin, f"profiles.{name}.", home)
         for name, table in raw_profiles.items()
     }
-    models = {
-        name: _convert_table(table, MODEL_KEYS, origin, f"models.{name}.", home)
-        for name, table in _subtables(doc, "models", origin).items()
-    }
-    return ConfigFile(path, values, profiles, raw_profiles, models)
+    return ConfigFile(path, values, profiles, raw_profiles)
 
 
 def read_toml(path: Path) -> dict[str, Any] | None:
@@ -446,13 +407,10 @@ def resolve(
     cwd: Path,
     home: Path,
     stdin_text: Callable[[], str] | None = None,
-    model: str | None = None,
 ) -> Settings:
     """Merge every layer into `Settings`. Raise `invalid_config` on unknown keys or bad types.
 
-    `stdin_text` returns stdin for `--startup -`. `model` names a `[models]`
-    entry whose `vram`, `gpu` and `image` form the `model` layer. That layer
-    sits below flags and above stdin, so `serve --vram` beats the entry.
+    `stdin_text` returns stdin for `--startup -`.
     """
     user = _load(user_config_path(home), "user", home)
     project_files = [_load(p, "project", home) for p in project_config_paths(cwd)]
@@ -464,14 +422,11 @@ def resolve(
 
     profiles: dict[str, dict[str, Any]] = {}
     raw_profiles: dict[str, dict[str, Any]] = {}
-    models: dict[str, dict[str, Any]] = {k: dict(v) for k, v in BUILTIN_MODELS.items()}
     for f in files:
         for name, table in f.profiles.items():
             profiles[name] = overlay(profiles.get(name, {}), table)
         for name, table in f.raw_profiles.items():
             raw_profiles[name] = overlay(raw_profiles.get(name, {}), table)
-        for name, table in f.models.items():
-            models[name] = {**models.get(name, {}), **table}
 
     selected: dict[str, Any] = {}
     if profile is not None:
@@ -486,15 +441,8 @@ def resolve(
         origin = _Origin("stdin", "--config - JSON", cwd)
         stdin_layer = _convert_table(stdin_json, PROFILE_KEYS, origin, "", home)
 
-    model_layer: dict[str, Any] = {}
-    if model is not None and model in models:
-        origin = _Origin("model", f'[models."{model}"]', cwd)
-        entry = {k: v for k, v in models[model].items() if k in MODEL_LAYER_KEYS}
-        model_layer = _convert_table(entry, MODEL_LAYER_KEYS, origin, "", home)
-
     layers: list[tuple[str, Mapping[str, Any]]] = [
         ("flag", _flag_layer(flags, cwd, home)),
-        ("model", model_layer),
         ("stdin", stdin_layer),
         ("profile", selected),
         ("env", _env_layer(env, cwd, home)),
@@ -539,18 +487,17 @@ def resolve(
         ttl=pick("ttl"),
         run_ttl=pick("run_ttl"),
         max_price=pick("max_price"),
-        daily_budget=pick("daily_budget"),
         warn_before_expiry=pick("warn_before_expiry"),
         disk=pick("disk"),
         gpus=pick("gpus"),
         image=pick("image"),
         gpu=pick("gpu"),
         vram=pick("vram"),
+        cuda=pick("cuda"),
         region=pick("region"),
         ports=list(pick("ports") or []),
         startup=startup,
         startup_path=startup_path,
-        models={name: ModelEntry(**fields) for name, fields in models.items()},
         profiles=raw_profiles,
         sources=sources,
     )
@@ -560,7 +507,7 @@ def resolve(
 
 
 def parse_key(text: str) -> list[str]:
-    """Split a dotted TOML key such as `models."Qwen/Qwen3-72B-Instruct".vram`."""
+    """Split a dotted TOML key such as `profiles."big-box".vram`."""
     parts: list[str] = []
     i = 0
     bad = VastyError("invalid_config", f"Bad config key {text!r}.",
@@ -602,17 +549,11 @@ def key_kind(parts: list[str]) -> str:
     elif len(parts) == 2 and parts[0] == "defaults":
         kind = DEFAULT_KEYS.get(parts[1])
     elif len(parts) == 3 and parts[0] == "profiles":
-        if parts[2] == "daily_budget":
-            raise VastyError("invalid_config", "daily_budget has no profile key.",
-                           "vasty config set defaults.daily_budget VALUE")
         kind = PROFILE_KEYS.get(parts[2])
-    elif len(parts) == 3 and parts[0] == "models":
-        kind = MODEL_KEYS.get(parts[2])
     if kind is None:
         raise VastyError(
             "invalid_config", f"Unknown config key {dotted!r}.",
-            "Pass api_key_env, owner, ssh_key, defaults.KEY, profiles.NAME.KEY "
-            "or models.NAME.KEY.",
+            "Pass api_key_env, owner, ssh_key, defaults.KEY or profiles.NAME.KEY.",
         )
     return kind
 

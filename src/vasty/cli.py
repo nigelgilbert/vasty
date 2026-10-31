@@ -21,18 +21,19 @@ if TYPE_CHECKING:
 
 VERBS = (
     "reserve", "extend", "release", "status", "run", "serve",
-    "sync", "ssh", "tag", "config", "completion",
+    "sync", "ssh", "tag", "sweep", "config", "completion",
 )
 
 # Flags that set up a new lease; `--on` rejects them.
 CREATION_FLAGS = (
-    "name", "group", "owner", "profile", "ttl", "gpu", "vram", "gpus", "disk",
+    "name", "group", "owner", "profile", "ttl", "gpu", "vram", "cuda", "gpus", "disk",
     "image", "max_price", "region", "ports", "startup", "no_wait",
 )
 
 # Flags that feed config resolution as the `flag` layer.
 SETTING_FLAGS = (
-    "ttl", "gpu", "vram", "gpus", "disk", "image", "max_price", "region", "ports", "startup",
+    "ttl", "gpu", "vram", "cuda", "gpus", "disk", "image", "max_price", "region", "ports",
+    "startup",
 )
 
 
@@ -80,6 +81,7 @@ def _reserve_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--config", dest="config_stdin", metavar="-")
     p.add_argument("--gpu")
     p.add_argument("--vram")
+    p.add_argument("--cuda", metavar="FLOOR")
     p.add_argument("--gpus")
     p.add_argument("--disk")
     p.add_argument("--image")
@@ -119,7 +121,6 @@ def build_parser() -> Parser:
     p = sub.add_parser("serve", parents=[out], help="serve a model behind an OpenAI endpoint")
     p.add_argument("--on")
     p.add_argument("--model", required=True)
-    p.add_argument("--quant")
     p.add_argument("--bind-local", action="store_true", dest="bind_local")
     _reserve_flags(p)
 
@@ -145,6 +146,9 @@ def build_parser() -> Parser:
     p.add_argument("--set-owner", dest="set_owner")
     p.add_argument("--ttl")
 
+    p = sub.add_parser("sweep", parents=[out], help="destroy boxes past their clock")
+    p.add_argument("--follow", metavar="LEASE")
+
     p = sub.add_parser("config", parents=[out], help="show or change configuration")
     action = p.add_subparsers(dest="action", parser_class=Parser, required=True)
     show = action.add_parser("show", parents=[out])
@@ -155,6 +159,7 @@ def build_parser() -> Parser:
     show.add_argument("--startup", metavar="FILE|-")
     show.add_argument("--gpu")
     show.add_argument("--vram")
+    show.add_argument("--cuda", metavar="FLOOR")
     show.add_argument("--gpus")
     show.add_argument("--disk")
     show.add_argument("--image")
@@ -202,7 +207,7 @@ def check_combinations(ns: argparse.Namespace) -> None:
     verb = ns.verb
     if verb == "run" and not ns.command:
         raise invalid("run needs a command after --.", "vasty run -- COMMAND")
-    if verb not in ("run", "ssh") and ns.command is not None:
+    if verb not in ("run", "serve", "ssh") and ns.command is not None:
         raise invalid(f"{verb} takes no command after --.", f"Run vasty {verb} --help.")
     config_stdin = getattr(ns, "config_stdin", None)
     if config_stdin is not None and config_stdin != "-":

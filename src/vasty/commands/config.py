@@ -13,8 +13,9 @@ from decimal import Decimal
 from typing import Any
 
 from vasty.cli import Outcome
-from vasty.config import SHOWN, Settings, format_duration, set_value, toml_value, user_config_path
+from vasty.config import SHOWN, Settings, set_value, toml_value, user_config_path
 from vasty.context import Context
+from vasty.timeutil import format_duration_exact
 
 DURATION_KEYS = ("ttl", "run_ttl", "warn_before_expiry")
 
@@ -47,7 +48,7 @@ def show_values(settings: Settings) -> dict[str, ConfigValue]:
     for key in SHOWN:
         value: Any = getattr(settings, key)
         if key in DURATION_KEYS:
-            value = format_duration(value)
+            value = format_duration_exact(value)
         elif key == "startup" and settings.startup_path is not None:
             value = settings.startup_path
         out[key] = ConfigValue(value, settings.sources.get(key, "default"))

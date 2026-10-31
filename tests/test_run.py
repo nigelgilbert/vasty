@@ -469,9 +469,9 @@ def test_auto_run_rejects_no_wait(harness: Harness, reserve: FakeReserve) -> Non
 
 
 def test_auto_run_reserve_failure_propagates(harness: Harness, reserve: FakeReserve) -> None:
-    reserve.fail = VastyError("budget_exceeded", "over", "release something")
+    reserve.fail = VastyError("no_offers", "none", "raise --max-price")
     code, data, _ = run(harness, "--", "ls")
-    assert code == 3 and data["error"] == "budget_exceeded"
+    assert code == 1 and data["error"] == "no_offers"
 
 
 def test_auto_run_dropped_connection_keeps_box(harness: Harness, reserve: FakeReserve) -> None:

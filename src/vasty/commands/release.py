@@ -3,7 +3,8 @@
 `release` destroys the box and returns once the provider accepts the destroy
 call. The lease is then `released` with `destroy_pending` until a list call
 shows it gone; `released_here` lets reconciliation record `released`.
-Uptime, cost and jobs come from the local cache. The engine module docstring
+Uptime and jobs come from the local cache. Cost is Vast's billed sum for the
+instance, the same figure `status` reports. The engine module docstring
 describes the destroy lifecycle.
 
 A LEASE that matches nothing returns `{lease, already_absent: true}`. A lease
@@ -48,7 +49,7 @@ from vasty.timeutil import format_duration
 
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     snap = engine.refresh(ctx)
-    engine.spend(ctx, snap)
+    engine.read_charges(ctx, snap)
     if args.target is not None:
         return _release_one(ctx, snap, args.target, bool(args.yes))
     resolved = resolve_target(ctx, snap, args, write=True)
@@ -126,7 +127,6 @@ def summarize(
     lease: CachedLease, now: int, snap: Snapshot, already_absent: bool = False
 ) -> ReleaseSummary:
     """Build the release summary from the cached lease."""
-    cost, _ = views.lease_cost(lease, now, snap.charges)
     jobs = []
     for job in lease.jobs:
         view = views.job_view(job, now, lease.state)
@@ -135,7 +135,7 @@ def summarize(
         lease=lease.lease,
         name=lease.label.name,
         uptime_s=views.uptime_s(lease, now),
-        cost=cost,
+        cost=views.lease_cost(lease.instance_id, snap.charges),
         jobs=jobs,
         destroy_pending=True if lease.destroy_pending else None,
         already_absent=True if already_absent else None,
@@ -162,8 +162,8 @@ def _release_orphan(ctx: Context, snap: Snapshot, inst: Instance, yes: bool) -> 
                 f"Pass --yes to destroy it: vasty release {ref} --yes.",
             )
     ctx.provider.destroy(inst.id)
-    billed = snap.charges.per_instance.get(inst.id) if snap.charges is not None else None
-    return ReleaseSummary(lease=ref, name=None, uptime_s=None, cost=billed, jobs=[])
+    cost = views.lease_cost(inst.id, snap.charges)
+    return ReleaseSummary(lease=ref, name=None, uptime_s=None, cost=cost, jobs=[])
 
 
 def _entry_data(summary: ReleaseSummary) -> dict[str, Any]:
