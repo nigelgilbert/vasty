@@ -805,8 +805,9 @@ def test_read_charges_caches_for_60s(harness: Harness) -> None:
     harness.provider.billed = {999: Decimal("1.00")}
     ctx = harness.context()
     snap = engine.refresh(ctx)
-    charges = engine.read_charges(ctx, snap)
-    assert charges is not None and snap.charges == charges
+    engine.read_charges(ctx, snap)
+    charges = snap.charges
+    assert charges is not None
     assert charges.per_instance == {999: Decimal("1.00")}
     assert charges.today == Decimal("1.00")
     assert len(calls(harness, "charges")) == 1
@@ -832,7 +833,7 @@ def test_read_charges_failure_sets_none(harness: Harness) -> None:
     harness.provider.fail["charges"] = VastyError("provider_error", "down", "retry")
     ctx = harness.context()
     snap = engine.refresh(ctx)
-    assert engine.read_charges(ctx, snap) is None
+    engine.read_charges(ctx, snap)
     assert snap.charges is None
 
 
@@ -841,7 +842,7 @@ def test_read_balance_caches_balance_and_credit(harness: Harness) -> None:
     harness.provider.account_credit = Decimal("19.90")
     ctx = harness.context()
     snap = engine.refresh(ctx)
-    assert engine.read_balance(ctx, snap) == Balance(Decimal("0"), Decimal("19.90"))
+    engine.read_balance(ctx, snap)
     assert snap.balance == Balance(Decimal("0"), Decimal("19.90"))
     data = ctx.cache.load()
     assert (data.balance, data.credit, data.balance_at) == (Decimal("0"), Decimal("19.90"), NOW)
@@ -851,7 +852,7 @@ def test_read_balance_caches_balance_and_credit(harness: Harness) -> None:
     harness.time.advance(1)
     harness.provider.fail["balance"] = VastyError("provider_error", "down", "retry")
     snap = engine.refresh(ctx)
-    assert engine.read_balance(ctx, snap) is None
+    engine.read_balance(ctx, snap)
     assert snap.balance is None
 
 

@@ -705,12 +705,7 @@ def cached_snapshot(ctx: Context) -> Snapshot:
 
 
 def charges_start(leases: Iterable[CachedLease], now: int) -> int:
-    """Return 00:00 UTC of the day that holds the earlier of `now` and the oldest
-    cached lease's `created`, history included.
-
-    Whole days keep every row of a lease that crossed midnight UTC, so a
-    lease `reserve` created reports its lifetime billing.
-    """
+    """Return 00:00 UTC of the earlier of `now` and the oldest cached lease's `created`."""
     return day_start(min([now, *(lease.label.created for lease in leases)]))
 
 
@@ -733,8 +728,8 @@ def _cached_balance(data: CacheData) -> Balance | None:
     return Balance(balance=data.balance, credit=data.credit)
 
 
-def read_charges(ctx: Context, snap: Snapshot) -> Charges | None:
-    """Set `snap.charges` to Vast's charges from `charges_start` to now and return them.
+def read_charges(ctx: Context, snap: Snapshot) -> None:
+    """Set `snap.charges` to Vast's charges from `charges_start` to now.
 
     Charges are read once per 60s and cached in `leases.json`. A failed
     charges call sets None.
@@ -745,20 +740,19 @@ def read_charges(ctx: Context, snap: Snapshot) -> Charges | None:
         cached = _cached_charges(data, start, snap.now)
         if cached is not None and _fresh(data.charges_at, snap.now):
             snap.charges = cached
-            return cached
+            return
         try:
             charges = ctx.provider.charges(start, snap.now)
         except VastyError:
             snap.charges = None
-            return None
+            return
         data.charges, data.charges_at, data.charges_start = charges, snap.now, start
         ctx.cache.save(data)
     snap.charges = charges
-    return charges
 
 
-def read_balance(ctx: Context, snap: Snapshot) -> Balance | None:
-    """Set `snap.balance` to Vast's balance and credit and return them.
+def read_balance(ctx: Context, snap: Snapshot) -> None:
+    """Set `snap.balance` to Vast's balance and credit.
 
     The pair is read once per 60s and cached in `leases.json`. A failed
     balance call sets None.
@@ -768,13 +762,12 @@ def read_balance(ctx: Context, snap: Snapshot) -> Balance | None:
         cached = _cached_balance(data)
         if cached is not None and _fresh(data.balance_at, snap.now):
             snap.balance = cached
-            return cached
+            return
         try:
             found = ctx.provider.balance()
         except VastyError:
             snap.balance = None
-            return None
+            return
         data.balance, data.credit, data.balance_at = found.balance, found.credit, snap.now
         ctx.cache.save(data)
     snap.balance = found
-    return found
