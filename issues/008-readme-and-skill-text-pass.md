@@ -2,7 +2,7 @@
 
 **Type**: AFK
 
-**Status:** 🔲 Not started
+**Status:** ✅ Done in 53f26c8 and 61ff9d6
 
 ## Parent
 
@@ -20,13 +20,13 @@ The warning codes line gains `idle_box_available` and loses `budget_low`. Non-go
 
 ## Acceptance criteria
 
-- [ ] `grep -n "Bounded spend\|daily budget\|daily_budget\|budget_low\|cost_source\|spend_source\|model_unknown\|--quant" README.md` returns nothing.
-- [ ] `grep -c "idle_box_available" README.md` returns at least 1.
-- [ ] The Non-goals line names account-level spend limits.
-- [ ] The README intro states the two-line pitch and names `max_price` as an offer filter.
-- [ ] The "For agents" section contains the reuse guidance with `busy`, `vram_gb`, `gpus` and `ttl_remaining_s` by name.
-- [ ] Every field named in the result shapes table exists on the matching dataclass in `models.py`, checked by reading the table against the file.
-- [ ] Every code in the error table exists in `EXIT_CODES`, and every code in `EXIT_CODES` appears in the table.
+- [x] `grep -n "Bounded spend\|daily budget\|daily_budget\|budget_low\|cost_source\|spend_source\|model_unknown\|--quant" README.md` returns nothing.
+- [x] `grep -c "idle_box_available" README.md` returns at least 1.
+- [x] The Non-goals line names account-level spend limits.
+- [x] The README intro states the two-line pitch and names `max_price` as an offer filter.
+- [x] The "For agents" section contains the reuse guidance with `busy`, `vram_gb`, `gpus` and `ttl_remaining_s` by name.
+- [x] Every field named in the result shapes table exists on the matching dataclass in `models.py`, checked by reading the table against the file.
+- [x] Every code in the error table exists in `EXIT_CODES`, and every code in `EXIT_CODES` appears in the table.
 
 ## Blocked by
 
