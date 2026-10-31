@@ -182,9 +182,10 @@ def test_serve_vllm_missing_on_box(
     assert data == {
         "error": "vllm_missing",
         "message": "Lease l-0000a001 has no vllm on PATH.",
-        "hint": f"Reserve with a vLLM image: vasty serve --model {QWEN} "
-                "--image vllm/vllm-openai:v0.32.0.",
+        "hint": "Install vllm on l-0000a001: vasty run --on l-0000a001 -- pip install vllm, "
+                "or vasty ssh l-0000a001.",
     }
+    assert "reserve" not in data["hint"].lower() and "--image" not in data["hint"]
     assert started == []
     assert box in harness.provider.instances
     assert harness.provider.destroyed == []

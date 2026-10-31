@@ -92,13 +92,14 @@ class _Plan:
     model: str
     extra: list[str]
     bind_local: bool
+    auto: bool
 
 
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     auto = args.on is None
     extra = list(args.command or [])
     check_extra(extra)
-    plan = _Plan(args.model, extra, bool(args.bind_local))
+    plan = _Plan(args.model, extra, bool(args.bind_local), auto)
     require_tools(ctx, "ssh")
 
     snap = engine.refresh(ctx)
@@ -147,7 +148,7 @@ def _public_url(ctx: Context, snap: engine.Snapshot, lease: CachedLease) -> str:
 def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Plan) -> ServeResult:
     target = engine.ssh_target(lease)
     url = f"http://127.0.0.1:{SERVE_PORT}/v1" if plan.bind_local else _public_url(ctx, snap, lease)
-    _preflight(ctx, target, lease, plan.model)
+    _preflight(ctx, target, lease, plan)
 
     key = "vasty-" + ctx.random_hex(32)
     host = "127.0.0.1" if plan.bind_local else "0.0.0.0"
@@ -172,15 +173,22 @@ def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Pl
     )
 
 
-def _preflight(ctx: Context, target: SshTarget, lease: CachedLease, model: str) -> None:
-    """Raise `vllm_missing` when the box has no `vllm` on PATH."""
+def _preflight(ctx: Context, target: SshTarget, lease: CachedLease, plan: _Plan) -> None:
+    """Raise `vllm_missing` when the box has no `vllm` on PATH.
+
+    Under auto-reserve the hint names the vLLM image. Under `--on` it says to
+    install `vllm` on the lease.
+    """
     done = ctx.box.exec(target, PREFLIGHT_COMMAND, timeout=PREFLIGHT_TIMEOUT_S)
     if done.exit != 0:
-        raise VastyError(
-            "vllm_missing",
-            f"Lease {lease.lease} has no vllm on PATH.",
-            f"Reserve with a vLLM image: vasty serve --model {model} --image {VLLM_IMAGE}.",
-        )
+        if plan.auto:
+            hint = f"Reserve with a vLLM image: vasty serve --model {plan.model} --image {VLLM_IMAGE}."
+        else:
+            hint = (
+                f"Install vllm on {lease.lease}: vasty run --on {lease.lease} -- pip install vllm, "
+                f"or vasty ssh {lease.lease}."
+            )
+        raise VastyError("vllm_missing", f"Lease {lease.lease} has no vllm on PATH.", hint)
 
 
 def _ready(ctx: Context, target: SshTarget, url: str, key: str, bind_local: bool) -> bool:
