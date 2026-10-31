@@ -146,7 +146,7 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 
 A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fields null. `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at`, `ttl_remaining_s` and `guard`.
 
-`busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. `uptime_s` counts from the first `running` sample, when Vast starts GPU billing, and is null before it. `--verbose` shows that sample as `running_at`.
+`busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. `uptime_s` counts from vasty's first `running` sample and is null before it. `--verbose` shows that sample as `running_at`.
 
 ### Error codes
 
@@ -170,7 +170,7 @@ A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fie
 | `provider_error` | 2 | a provider call fails |
 | `box_unreachable` | 2 | the box does not answer SSH |
 | `sync_failed` | 2 | rsync fails |
-| `serve_failed` | 2 | the inference server exits or times out before `/v1/models` answers; `details` carries `exit`, `lease` and `log_tail` |
+| `serve_failed` | 2 | the inference server exits or times out before `/v1/models` answers; `details` carries `exit` and `lease`, plus `log_tail` when the read succeeds |
 | `port_mapping_missing` | 2 | a required port has no external mapping at the readiness deadline |
 
 A bulk command exits with the highest exit code among its failed entries. Parser errors use the same error object.
