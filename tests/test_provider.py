@@ -276,6 +276,13 @@ def test_get_instance_row() -> None:
     assert http.calls[0][:3] == ("GET", "/instances/5/", {"owner": "me"})
 
 
+def test_normalize_instance_reads_cuda_max_good() -> None:
+    inst = normalize_instance(instance_row(5, cuda_max_good=12.8))
+    assert inst is not None and inst.cuda_max_good == 12.8
+    bare = normalize_instance(instance_row(5))
+    assert bare is not None and bare.cuda_max_good is None
+
+
 # Create.
 
 

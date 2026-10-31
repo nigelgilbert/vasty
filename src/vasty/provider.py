@@ -258,6 +258,7 @@ def normalize_instance(row: dict[str, Any]) -> Instance | None:
         ports=normalize_ports(row.get("ports")),
         image=_to_str(row.get("image_uuid")),
         runtype=_to_str(row.get("image_runtype")),
+        cuda_max_good=_to_float(row.get("cuda_max_good")),
     )
 
 

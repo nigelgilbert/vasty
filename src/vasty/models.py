@@ -72,6 +72,8 @@ class Instance:
     ports: dict[int, int] = field(default_factory=dict)
     image: str | None = None
     runtype: str | None = None
+    cuda_max_good: float | None = None
+    """The highest CUDA version the host driver supports."""
 
 
 @dataclass(frozen=True)
