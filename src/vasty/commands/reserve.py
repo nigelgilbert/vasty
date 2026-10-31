@@ -4,8 +4,8 @@
 `serve`. Under the `leases.json` lock it checks the name, searches offers,
 registers the SSH key and creates the instance. A create
 that times out is recovered by listing instances for the lease id. Outside
-the lock it waits for the lease to leave `pending` by refreshing every
-`WAIT_POLL_S` seconds.
+the lock it starts `vasty sweep --follow` for the lease and waits for the
+lease to leave `pending` by refreshing every `WAIT_POLL_S` seconds.
 
 The wait gives up at the lease's effective expiry with `box_unreachable`.
 Once SSH answers, every required port has `PORT_GRACE_S` seconds to show a
@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, TypeVar
 from vasty import engine, ids, labels, onstart, views
 from vasty.cli import Outcome
 from vasty.commands._common import merge_swept, taken_ids
+from vasty.commands.sweep import spawn_follow
 from vasty.context import Context
 from vasty.errors import VastyError, invalid
 from vasty.keys import public_key
@@ -139,6 +140,7 @@ def reserve_lease(
             required = ports if request.runtype == "ssh_direct" else []
     lease = hit
     reused = not created
+    not_spawned = spawn_follow(ctx, lease.lease)
 
     if wait and lease.state == "pending":
         lease, more_swept, account = wait_ready(ctx, lease, required, created)
@@ -147,6 +149,8 @@ def reserve_lease(
     else:
         warnings = list(snap.warnings) + warnings
     warnings += lease_warnings(lease, ctx.clock.now(), settings.warn_before_expiry)
+    if not_spawned is not None:
+        warnings.append(not_spawned)
     result = reserve_result(lease, ctx.clock.now(), reused, warnings, swept)
     return Reserved(result=result, lease=lease)
 

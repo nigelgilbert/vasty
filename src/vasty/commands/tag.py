@@ -4,8 +4,8 @@ On a lease, `tag` rewrites `name`, `group` and `owner` in the label and keeps
 unknown fields and the clock. Before the first write, `tag` checks every
 target whose name or owner changes for name conflicts and formats every new
 label. On an orphan, `tag` writes a new `vasty:` label with `expires = now + ttl`
-and `miss` listing every guard layer, then attaches the SSH key and runs the
-adoption script over SSH. The label stays when a later step fails; the lease
+and `miss` listing every guard layer, then attaches the SSH key, runs the
+adoption script over SSH and starts a detached `vasty sweep --follow`. The label stays when a later step fails; the lease
 then carries a `guard_partial` warning and later networked commands retry the
 missing steps (see `engine`).
 """
@@ -19,6 +19,7 @@ import shlex
 from vasty import engine, ids, labels, views
 from vasty.cli import Outcome
 from vasty.commands._common import taken_ids
+from vasty.commands.sweep import spawn_follow
 from vasty.context import Context
 from vasty.errors import VastyError, invalid
 from vasty.ids import orphan_id
@@ -113,8 +114,10 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
 
     snap = engine.refresh(ctx)
     resolved = resolve_target(ctx, snap, args, write=True)
+    not_spawned = None
     if resolved.orphans:
         results = [adopt(ctx, snap, resolved.orphans[0], setters, ttl)]
+        not_spawned = spawn_follow(ctx, results[0].lease)
     else:
         if ttl is not None:
             raise invalid("--ttl applies to orphans only.", "vasty extend LEASE --by 30m")
@@ -123,6 +126,8 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         views.warnings_for(results, snap.now, ctx.settings.warn_before_expiry)
         + list(snap.warnings)
     )
+    if not_spawned is not None:
+        warnings.append(not_spawned)
     entries = [views.tag_entry(lease, snap.now) for lease in results]
     result = TagResult(results=entries, warnings=warnings, swept=snap.swept)
     human = None

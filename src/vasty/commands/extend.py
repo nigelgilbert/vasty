@@ -14,6 +14,8 @@ A lease is writable when the refresh's probe reached it. `extend` checks the
 snapshot copy and again the copy reloaded under the lock. A `pending` lease
 that SSH has never answered returns `lease_pending`. An `unreachable` or
 `stopped` lease returns `box_unreachable` and changes nothing.
+
+Each extended lease gets a detached `vasty sweep --follow` for its new expiry.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from collections.abc import Mapping
 
 from vasty import engine, labels, views
 from vasty.cli import Outcome
+from vasty.commands.sweep import spawn_follow
 from vasty.context import Context
 from vasty.errors import EXIT_CODES, VastyError, invalid
 from vasty.ids import orphan_id
@@ -35,6 +38,7 @@ from vasty.models import (
     CachedLease,
     ExtendResult,
     Label,
+    WarningItem,
 )
 from vasty.state import effective_expiry
 from vasty.targeting import resolve_target
@@ -239,6 +243,14 @@ def _both_failed(
     )
 
 
+def _spawn(ctx: Context, leases: list[CachedLease], warnings: list[WarningItem]) -> None:
+    """Start a follower for each extended lease. Add a warning for each spawn that fails."""
+    for lease in leases:
+        not_spawned = spawn_follow(ctx, lease.lease)
+        if not_spawned is not None:
+            warnings.append(not_spawned)
+
+
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     requested = parse_change(args)
     snap = engine.refresh(ctx)
@@ -273,6 +285,7 @@ def _single(
         apply(ctx, lease, expires)
     warnings = views.warnings_for([lease], now, ctx.settings.warn_before_expiry)
     warnings += snap.warnings
+    _spawn(ctx, [lease], warnings)
     final = effective_expiry(lease.label)
     result = ExtendResult(
         lease=lease.lease,
@@ -334,6 +347,7 @@ def _bulk(
             ))
     warnings = views.warnings_for(leases, now, ctx.settings.warn_before_expiry)
     warnings += snap.warnings
+    _spawn(ctx, [lease for lease in leases if lease.lease not in errors], warnings)
     exit_code = max((EXIT_CODES[err.code] for err in errors.values()), default=0)
     result = BulkResult(results=entries, warnings=warnings, swept=snap.swept)
     human = None

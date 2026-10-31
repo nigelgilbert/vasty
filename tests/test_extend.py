@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from typing import Any
 
 import pytest
@@ -66,6 +67,25 @@ def test_extend_by_moves_label_and_clock(h: Harness) -> None:
     assert data["ttl_remaining_s"] == 2400
     assert label_of(h, row.id).expires == NOW + 2400
     assert h.box.state(row.id).clock == NOW + 2400
+
+
+def test_extend_spawns_a_follower(h: Harness) -> None:
+    add_lease(h, label={"expires": NOW + 600})
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert code == 0, data
+    assert h.spawned == [[sys.executable, "-m", "vasty", "sweep", "--follow", "l-0000a001"]]
+    assert data["warnings"] == []
+
+
+def test_extend_with_a_failed_spawn_warns_and_succeeds(h: Harness) -> None:
+    add_lease(h, label={"expires": NOW + 600})
+    h.spawn_error = OSError("no fork")
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert code == 0, data
+    assert data["expires_at"] == "2026-10-29T01:40:00Z"
+    assert [(w["code"], w["lease"]) for w in data["warnings"]] == [
+        ("sweep_not_spawned", "l-0000a001"),
+    ]
 
 
 def test_extend_writes_the_clock_in_box_time(h: Harness) -> None:
@@ -423,6 +443,17 @@ def test_bulk_by_extends_each_lease(h: Harness) -> None:
     ]
     assert label_of(h, a.id).expires == NOW + 2400
     assert label_of(h, b.id).expires == NOW + 3000
+
+
+def test_bulk_spawns_a_follower_per_extended_lease(h: Harness) -> None:
+    add_lease(h, "l-0000a001", label={"group": "exp", "expires": NOW + 600})
+    add_lease(h, "l-0000a002", label={"group": "exp", "expires": NOW + 600}, reachable=False)
+    code, data = run_json(h, "extend", "--group", "exp", "--by", "30m")
+    assert code == 1
+    assert [(r["lease"], r["ok"]) for r in data["results"]] == [
+        ("l-0000a001", True), ("l-0000a002", False),
+    ]
+    assert [argv[-1] for argv in h.spawned] == ["l-0000a001"]
 
 
 def test_bulk_to_aligns_expiries_with_one_now(h: Harness) -> None:

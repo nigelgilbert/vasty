@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import sys
 from dataclasses import replace
 from decimal import Decimal
 from typing import Any
@@ -85,6 +86,21 @@ def test_reserve_returns_running_lease(h: Harness) -> None:
     assert data["ssh_port"] == 41022
     assert data["ports"] == {"22": 41022, "8000": 41000, "8080": 41080}
     assert data["warnings"] == [] and data["swept"] == []
+
+
+def test_reserve_spawns_a_follower(h: Harness) -> None:
+    code, data = run_json(h, "reserve")
+    assert code == 0, data
+    assert h.spawned == [[sys.executable, "-m", "vasty", "sweep", "--follow", "l-abababab"]]
+
+
+def test_reserve_with_a_failed_spawn_warns_and_succeeds(h: Harness) -> None:
+    h.spawn_error = OSError("no fork")
+    code, data = run_json(h, "reserve")
+    assert code == 0, data
+    assert [(w["code"], w["lease"], w["fix"]) for w in data["warnings"]] == [
+        ("sweep_not_spawned", "l-abababab", "vasty sweep --follow l-abababab"),
+    ]
 
 
 def test_reserve_writes_create_label_and_copies_clock(h: Harness) -> None:

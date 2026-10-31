@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from decimal import Decimal
 from typing import Any
 
@@ -230,6 +231,32 @@ def test_adopt_orphan_writes_label_clock_and_key(h: Harness) -> None:
     assert lease.adopted is True
     assert lease.state == "running"
     assert data["warnings"] == []
+
+
+def test_adopt_spawns_a_follower(h: Harness) -> None:
+    add_key(h)
+    orphan(h)
+    code, data = run_json(h, "tag", "i-55120", "--ttl", "30m")
+    assert code == 0, data
+    assert h.spawned == [[sys.executable, "-m", "vasty", "sweep", "--follow", "l-abababab"]]
+
+
+def test_adopt_with_a_failed_spawn_warns_and_succeeds(h: Harness) -> None:
+    add_key(h)
+    orphan(h)
+    h.spawn_error = OSError("no fork")
+    code, data = run_json(h, "tag", "i-55120", "--ttl", "30m")
+    assert code == 0, data
+    assert [(w["code"], w["lease"]) for w in data["warnings"]] == [
+        ("sweep_not_spawned", "l-abababab"),
+    ]
+
+
+def test_set_group_spawns_nothing(h: Harness) -> None:
+    add_lease(h, label={"name": "ft", "expires": NOW + 600})
+    code, _ = run_json(h, "tag", "ft", "--set-group", "exp42")
+    assert code == 0
+    assert h.spawned == []
 
 
 def test_adopt_writes_the_clock_in_box_time(h: Harness) -> None:
