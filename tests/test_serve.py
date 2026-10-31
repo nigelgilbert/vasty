@@ -370,7 +370,7 @@ def test_bare_serve_reserves_default_image_and_releases_without_vllm(
     assert code == 1 and data["error"] == "vllm_missing"
     assert "--image vllm/vllm-openai:v0.32.0" in data["hint"]
     assert "profile" not in data["hint"]
-    assert reserve.calls[0]["image"] == "vasty/base:cuda12.4"
+    assert reserve.calls[0]["image"] == "vastai/base-image:cuda-12.6.3-auto"
     assert started == []
     assert harness.provider.destroyed == [1001]
 

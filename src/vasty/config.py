@@ -68,7 +68,7 @@ BUILTIN: dict[str, Any] = {
     "warn_before_expiry": 5 * 60,
     "disk": 50,
     "gpus": 1,
-    "image": "vasty/base:cuda12.4",
+    "image": "vastai/base-image:cuda-12.6.3-auto",
 }
 
 _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")

@@ -74,7 +74,7 @@ def test_builtin_defaults(cfg: Env) -> None:
     assert s.warn_before_expiry == 300
     assert s.disk == 50
     assert s.gpus == 1
-    assert s.image == "vasty/base:cuda12.4"
+    assert s.image == "vastai/base-image:cuda-12.6.3-auto"
     assert s.api_key_env == "VAST_API_KEY"
     assert (s.gpu, s.vram, s.region, s.ports, s.startup) == (None, None, None, [], None)
     assert s.sources["ttl"] == "default"
@@ -251,7 +251,7 @@ def test_example_config_from_spec(cfg: Env) -> None:
     cfg.user(
         'api_key_env = "VAST_API_KEY"\nowner = "nick"\nssh_key = "~/.ssh/id_ed25519"\n\n'
         '[defaults]\nttl = "30m"\nrun_ttl = "2h"\nmax_price = 0.60\n'
-        'warn_before_expiry = "5m"\nimage = "vasty/base:cuda12.4"\ndisk = 50\n\n'
+        'warn_before_expiry = "5m"\nimage = "vastai/base-image:cuda-12.6.3-auto"\ndisk = 50\n\n'
         '[profiles.small]\ngpu = "4090"\nvram = 24\n\n'
         '[profiles.big]\ngpu = "A100"\nvram = 80\nmax_price = 2.50\n\n'
         '[profiles.vllm]\nimage = "vllm/vllm-openai:v0.32.0"\nvram = 24\ncuda = 13\n'

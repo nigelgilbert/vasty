@@ -43,7 +43,6 @@ from vasty.state import (
     GUARD_LAYERS,
     effective_expiry,
     gpu_matches,
-    guard,
     hardware_mismatch,
     lease_warnings,
     make_warning,
@@ -55,7 +54,6 @@ from vasty.timeutil import format_duration, format_duration_exact, iso
 if TYPE_CHECKING:
     from vasty.engine import Snapshot
 
-DEFAULT_IMAGE = "vasty/base:cuda12.4"
 DEFAULT_PORTS = (22, 8000, 8080)
 MAX_PORTS = 64
 WAIT_POLL_S = 10.0
@@ -113,8 +111,7 @@ def reserve_lease(
         else:
             for idle, shortfall in reuse_candidates(snap, settings, ttl, snap.now, ports):
                 warnings.append(idle_warning(idle, shortfall, ttl, snap.now))
-            custom = settings.image != DEFAULT_IMAGE
-            onstart_cmd = onstart.build_onstart(ttl, settings.startup, custom)
+            onstart_cmd = onstart.build_onstart(ttl, settings.startup)
             query = OfferQuery(
                 gpu=settings.gpu, vram_min_gb=settings.vram, gpus=settings.gpus,
                 disk_gb=settings.disk, max_price=settings.max_price, region=settings.region,
@@ -480,7 +477,6 @@ def reserve_result(
     swept: list[SweptEntry],
 ) -> ReserveResult:
     """Build the `reserve` output. A `pending` lease has null clock and endpoint fields."""
-    level, missing = guard(lease)
     pending = lease.state == "pending"
     expiry = effective_expiry(lease.label)
     endpoint = views.endpoint_fields(lease)
@@ -490,8 +486,6 @@ def reserve_result(
         owner=lease.label.owner,
         group=lease.label.group,
         state=lease.state,
-        guard=level,
-        guard_missing=missing,
         reused=reused,
         gpu=lease.gpu,
         gpus=lease.gpus,
