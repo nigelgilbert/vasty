@@ -207,6 +207,8 @@ Selected fields:
 }
 ```
 
+On a 24 GB RTX 3090 the first command served Qwen3-14B-AWQ at its full 40,960-token context with 9.95 GiB of KV cache. The box booted in 5 minutes, the 9.6 GB of weights downloaded and loaded in 104 seconds, and `serve` returned the endpoint 9 minutes 21 seconds after it started. A 12,039-token prompt answered in 9 seconds cold. The second command caps the context at 16,384 tokens and lets four such requests run at once.
+
 The box's image supplies vLLM, and `serve` launches `vllm` from PATH. The `vllm` profile in the [sample config](#configuration) reserves on `vllm/vllm-openai:v0.32.0`. A box reserved with a `startup` hook that installs `vllm`, or one set up through `run --on`, can serve with `serve --on`.
 
 Tokens after `--` go to `vllm serve` after the model name. `serve` sets `--host` and `--port` itself, passes the key in `VLLM_API_KEY`, and rejects `--host`, `--port` and `--api-key` there.
@@ -318,7 +320,7 @@ Done:
 
 - Every verb above, in `src/vasty/`.
 - 1246 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
-- One funded live run on Vast, 2026-10-29. Every phase passed except `serve`. See [docs/live-test-report.md](docs/live-test-report.md).
+- Two funded live runs on Vast, 2026-10-29 and 2026-10-31. The second covered `serve` end to end. See [docs/live-test-report.md](docs/live-test-report.md).
 
 Not done:
 
