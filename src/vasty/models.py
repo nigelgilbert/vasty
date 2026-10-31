@@ -72,7 +72,6 @@ class Instance:
     ports: dict[int, int] = field(default_factory=dict)
     image: str | None = None
     runtype: str | None = None
-    start_date: int | None = None
 
 
 @dataclass(frozen=True)

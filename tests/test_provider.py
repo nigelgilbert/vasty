@@ -232,19 +232,10 @@ def instance_row(iid: int, **kw: Any) -> dict[str, Any]:
     return row
 
 
-@pytest.mark.parametrize(
-    ("value", "expected"), [(1_793_316_000.5, 1_793_316_000), ("1793316000", 1_793_316_000), (None, None)]
-)
-def test_normalize_instance_reads_start_date(value: object, expected: int | None) -> None:
-    inst = normalize_instance(instance_row(1, start_date=value))
-    assert inst is not None
-    assert inst.start_date == expected
-
-
 def test_list_instances_follows_next_token() -> None:
     pages = {
         None: {"instances": [instance_row(1), instance_row(2, ports=None)], "next_token": "t1"},
-        "t1": {"instances": [instance_row(3, actual_status=None, start_date=None)], "next_token": None},
+        "t1": {"instances": [instance_row(3, actual_status=None)], "next_token": None},
     }
 
     def handler(method: str, path: str, q: Any, body: Any) -> requests.Response:
@@ -506,13 +497,13 @@ def test_parse_charges_splits_today_from_earlier_days() -> None:
         {"source": "2", "amount": "0.01"},
         {"source": None, "amount": "0.04", "start": today + 60},
     ]
-    charges = parse_charges(rows, today - 86_400, today + 3600)
+    charges = parse_charges(rows, today + 3600)
     assert charges.per_instance == {1: Decimal("0.50"), 2: Decimal("0.06")}
     assert charges.today == Decimal("0.30")
 
 
 def test_parse_charges_skips_other_types() -> None:
-    volume = parse_charges([{"type": "volume", "source": "volume-5", "amount": 1, "end": 150}], 100, 200)
+    volume = parse_charges([{"type": "volume", "source": "volume-5", "amount": 1, "end": 150}], 200)
     assert volume.per_instance == {} and volume.today == Decimal("0")
 
 

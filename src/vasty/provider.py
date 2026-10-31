@@ -258,11 +258,10 @@ def normalize_instance(row: dict[str, Any]) -> Instance | None:
         ports=normalize_ports(row.get("ports")),
         image=_to_str(row.get("image_uuid")),
         runtype=_to_str(row.get("image_runtype")),
-        start_date=_to_int(row.get("start_date")),
     )
 
 
-def parse_charges(rows: list[Any], start: int, end: int) -> Charges:
+def parse_charges(rows: list[Any], end: int) -> Charges:
     """Sum top-level instance charge rows per instance and for today.
 
     Rows whose `type` is other than `instance` are skipped. `today` sums the
@@ -522,7 +521,7 @@ class VastProvider:
                     break
                 seen.add(str(token))
                 params["next_token"] = token
-            return parse_charges(rows, int(start), int(end))
+            return parse_charges(rows, int(end))
 
     def balance(self) -> Balance:
         with _guard("balance"):
