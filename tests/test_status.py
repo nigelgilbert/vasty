@@ -18,7 +18,7 @@ from vasty.timeutil import iso
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 LEASE_KEYS = {
-    "lease", "name", "group", "owner", "state", "guard", "guard_missing", "gpu", "gpus",
+    "lease", "name", "group", "owner", "state", "gpu", "gpus",
     "vram_gb", "price_per_hr", "cost", "uptime_s", "expires_at", "ttl_remaining_s", "busy",
     "jobs",
 }
@@ -89,7 +89,7 @@ def test_status_json_shape(account: Harness) -> None:
     row = by_lease(data)["l-8b12"]
     assert row == {
         "lease": "l-8b12", "name": "eval-2", "group": "exp42", "owner": "claude",
-        "state": "running", "guard": "full", "guard_missing": [], "gpu": "L40S", "gpus": 1,
+        "state": "running", "gpu": "L40S", "gpus": 1,
         "vram_gb": 24.0, "price_per_hr": 0.82, "cost": None, "uptime_s": 0,
         "expires_at": "2026-10-29T01:03:00Z", "ttl_remaining_s": 180, "busy": False, "jobs": [],
     }
@@ -98,8 +98,7 @@ def test_status_json_shape(account: Harness) -> None:
 def test_status_orphan_row(account: Harness) -> None:
     row = by_lease(status(account))["i-55120"]
     assert row["state"] == "orphan"
-    for key in ("owner", "expires_at", "ttl_remaining_s", "guard", "guard_missing", "uptime_s",
-                "busy"):
+    for key in ("owner", "expires_at", "ttl_remaining_s", "uptime_s", "busy"):
         assert row[key] is None
     assert row["gpu"] == "RTX 3090"
     assert row["price_per_hr"] == 0.22
@@ -247,6 +246,7 @@ def test_status_verbose_fields(account: Harness) -> None:
     assert extra["label"].startswith("vasty:v1;lease=l-8b12;name=eval-2")
     assert extra["guard_layers"] == {"watchdog": "ok", "destroy_key": "ok", "clock_file": "ok"}
     assert extra["ports"] == {"22": 40022, "8000": 40080, "8080": 40081}
+    assert extra["clock_skew_s"] == 0
     assert set(extra) >= {"instance_id", "image", "last_provider_error"}
 
 
@@ -335,11 +335,11 @@ def test_status_cached_reads_legacy_unprobed_entry_as_partial(harness: Harness) 
     data = ctx.cache.load()
     data.leases["l-0000a001"].guard_missing = []
     ctx.cache.save(data)
-    cached = status(harness, "--cached")
+    cached = status(harness, "--cached", "--verbose")
     row = by_lease(cached)["l-0000a001"]
-    assert (row["guard"], row["guard_missing"]) == (
-        "partial", ["watchdog", "destroy_key", "clock_file"]
-    )
+    assert row["verbose"]["guard_layers"] == {
+        "watchdog": "missing", "destroy_key": "missing", "clock_file": "missing"
+    }
     assert ("guard_partial", "l-0000a001") not in codes(cached)
 
 

@@ -21,7 +21,7 @@ from vasty.onstart import decode_onstart
 from vasty.provider import build_offer_query
 
 RESULT_KEYS = {
-    "lease", "name", "owner", "group", "state", "guard", "guard_missing", "reused", "gpu",
+    "lease", "name", "owner", "group", "state", "reused", "gpu",
     "gpus", "vram_gb", "price_per_hr", "expires_at", "ttl_remaining_s", "ssh", "rsync_target",
     "ssh_port", "ports", "warnings", "swept",
 }
@@ -76,7 +76,6 @@ def test_reserve_returns_running_lease(h: Harness) -> None:
     assert (data["name"], data["owner"], data["group"]) == ("trainer", "claude", "exp42")
     assert data["state"] == "running"
     assert data["reused"] is False
-    assert (data["guard"], data["guard_missing"]) == ("full", [])
     assert (data["gpu"], data["gpus"], data["vram_gb"], data["price_per_hr"]) == (
         "RTX 4090", 1, 24.0, 0.38)
     assert data["expires_at"] == "2026-10-29T01:30:00Z"
@@ -98,7 +97,7 @@ def test_reserve_writes_create_label_and_copies_clock(h: Harness) -> None:
     assert (created.created, created.ttl, created.expires) == (NOW, 3600, None)
     assert request.runtype == "ssh_direct"
     assert request.ports == [22, 8000, 8080]
-    assert request.image == "vasty/base:cuda12.4"
+    assert request.image == "vastai/base-image:cuda-12.6.3-auto"
     assert request.disk_gb == 50
     (iid,) = h.provider.instances
     assert label_of(h, iid).expires == NOW + 3600
@@ -277,7 +276,7 @@ def test_startup_too_large_before_create(h: Harness) -> None:
     assert calls(h, "search_offers") == []
 
 
-def test_custom_image_onstart_carries_watchdog(h: Harness) -> None:
+def test_onstart_carries_watchdog_for_any_image(h: Harness) -> None:
     run_json(h, "reserve", "--image", "ubuntu:22.04")
     request = h.provider.created[0]
     assert request.image == "ubuntu:22.04"
@@ -285,12 +284,11 @@ def test_custom_image_onstart_carries_watchdog(h: Harness) -> None:
     assert request.onstart.startswith("command -v bash")
 
 
-def test_default_image_onstart_has_startup_script(h: Harness) -> None:
+def test_onstart_has_startup_script(h: Harness) -> None:
     script = h.home / "setup.sh"
     script.write_text("pip install -U peft\n")
     run_json(h, "reserve", "--startup", str(script))
     request = h.provider.created[0]
-    assert not request.onstart.startswith("command -v bash")
     assert "pip install -U peft" in decode_onstart(request.onstart)
 
 
@@ -412,8 +410,6 @@ def test_no_wait_returns_pending_with_nulls(h: Harness) -> None:
 
 def test_no_wait_lease_is_partial_with_every_layer_and_no_warning(h: Harness) -> None:
     _, data = run_json(h, "reserve", "--no-wait")
-    assert (data["guard"], data["guard_missing"]) == (
-        "partial", ["watchdog", "destroy_key", "clock_file"])
     assert "guard_partial" not in [w["code"] for w in data["warnings"]]
     cached = h.context().cache.load().leases[data["lease"]]
     assert cached.guard_missing == ["watchdog", "destroy_key", "clock_file"]
@@ -423,7 +419,7 @@ def test_no_wait_lease_turns_full_once_the_probe_answers(h: Harness) -> None:
     _, data = run_json(h, "reserve", "--no-wait")
     _, status = run_json(h, "status", data["lease"])
     (entry,) = status["leases"]
-    assert (entry["guard"], entry["guard_missing"]) == ("full", [])
+    assert "guard" not in entry
     assert status["warnings"] == []
 
 

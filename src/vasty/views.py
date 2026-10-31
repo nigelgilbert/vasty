@@ -130,7 +130,7 @@ def _full_label(lease: CachedLease) -> str | None:
 
 
 def lease_verbose(lease: CachedLease) -> dict[str, Any]:
-    """Return the `--verbose` extras: label, guard layers, instance id, image, ports, last error."""
+    """Return the `--verbose` extras: label, guard layers, instance id, image, ports, skew, last error."""
     _, missing = guard(lease)
     return {
         "label": _full_label(lease),
@@ -142,6 +142,7 @@ def lease_verbose(lease: CachedLease) -> dict[str, Any]:
         "ports": ports_view(lease.ports),
         "actual_status": lease.actual_status,
         "reachable_at": iso(lease.reachable_at),
+        "clock_skew_s": lease.clock_skew,
         "running_at": iso(lease.running_at),
         "last_provider_error": lease.last_provider_error,
     }
@@ -155,7 +156,6 @@ def lease_view(
     log_tail: list[str] | None = None,
 ) -> LeaseView:
     """Build one `status.leases` entry for a managed lease."""
-    level, missing = guard(lease)
     expiry = effective_expiry(lease.label)
     return LeaseView(
         lease=lease.lease,
@@ -163,8 +163,6 @@ def lease_view(
         group=lease.label.group,
         owner=lease.label.owner,
         state=lease.state,
-        guard=level,
-        guard_missing=missing,
         gpu=lease.gpu,
         gpus=lease.gpus,
         vram_gb=lease.vram_gb,
@@ -203,8 +201,6 @@ def orphan_view(
         group=None,
         owner=None,
         state="orphan",
-        guard=None,
-        guard_missing=None,
         gpu=inst.gpu_name,
         gpus=inst.num_gpus,
         vram_gb=inst.gpu_ram_gb,
@@ -221,7 +217,6 @@ def orphan_view(
 
 def tag_entry(lease: CachedLease, now: int) -> TagEntry:
     """Build one `tag` result entry."""
-    level, missing = guard(lease)
     expiry = effective_expiry(lease.label)
     return TagEntry(
         lease=lease.lease,
@@ -230,8 +225,6 @@ def tag_entry(lease: CachedLease, now: int) -> TagEntry:
         owner=lease.label.owner,
         expires_at=iso(expiry),
         ttl_remaining_s=max(0, expiry - now),
-        guard=level,
-        guard_missing=missing,
     )
 
 
