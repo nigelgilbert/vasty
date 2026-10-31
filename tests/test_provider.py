@@ -13,7 +13,7 @@ import pytest
 import requests
 
 from vasty.errors import VastyError
-from vasty.models import CreateRequest, OfferQuery
+from vasty.models import Balance, CreateRequest, OfferQuery
 from vasty.provider import (
     ProviderTimeout,
     VastProvider,
@@ -440,8 +440,8 @@ def test_record_reads_date_header(headers: dict[str, Any] | None,
 
 
 def test_last_date_tracks_latest_response() -> None:
-    responses = [resp(body={"balance": 3}), resp(body={"balance": 3}, date=None),
-                 resp(body={"balance": 3}, date="garbage")]
+    body = {"balance": 3, "credit": 4}
+    responses = [resp(body=body), resp(body=body, date=None), resp(body=body, date="garbage")]
     provider, _, _ = make(lambda m, p, q, b: responses.pop(0), mono=42.0)
     assert provider.last_date() is None
     provider.balance()
@@ -477,27 +477,41 @@ def test_charges_pages_and_parses() -> None:
     start, end = 1_793_232_000, 1_793_239_000
     charges = provider.charges(start, end)
     assert charges.per_instance == {101: Decimal("0.6"), 102: Decimal("1.25")}
-    assert charges.total == Decimal("1.85")
-    assert charges.covered_through == 1_793_236_000
+    assert charges.today == Decimal("1.85")
     first_q = http.calls[0][2]
     assert first_q["select_filters"]["day"] == {"gte": start, "lte": end}
     assert first_q["select_filters"]["type"] == {"in": ["instance"]}
     assert http.calls[1][2]["after_token"] == "n1"
 
 
-def test_parse_charges_coverage_rules() -> None:
-    assert parse_charges([], 100, 200).covered_through == 100
-    assert parse_charges([{"source": "1", "amount": 1, "end": None}], 100, 200).covered_through is None
-    assert parse_charges([{"source": "1", "amount": 1, "end": 500}], 100, 200).covered_through == 200
+def test_parse_charges_splits_today_from_earlier_days() -> None:
+    today = 1_793_232_000
+    rows = [
+        {"source": "1", "amount": "0.30", "start": today - 3600, "end": today},
+        {"source": "1", "amount": "0.20", "start": today, "end": today + 1800},
+        {"source": "2", "amount": "0.05", "end": today + 600},
+        {"source": "2", "amount": "0.01"},
+        {"source": None, "amount": "0.04", "start": today + 60},
+    ]
+    charges = parse_charges(rows, today - 86_400, today + 3600)
+    assert charges.per_instance == {1: Decimal("0.50"), 2: Decimal("0.06")}
+    assert charges.today == Decimal("0.30")
+
+
+def test_parse_charges_skips_other_types() -> None:
     volume = parse_charges([{"type": "volume", "source": "volume-5", "amount": 1, "end": 150}], 100, 200)
-    assert volume.per_instance == {} and volume.covered_through == 100
+    assert volume.per_instance == {} and volume.today == Decimal("0")
 
 
-def test_balance() -> None:
+def test_balance_reads_balance_and_credit() -> None:
     provider, http, _ = make(always(resp(body={"balance": 12.5, "credit": 40})))
-    assert provider.balance() == Decimal("12.5")
+    assert provider.balance() == Balance(balance=Decimal("12.5"), credit=Decimal("40"))
     assert http.calls[0][:2] == ("GET", "/users/current")
-    provider, _, _ = make(always(resp(body={"credit": 40})))
+
+
+@pytest.mark.parametrize("body", [{"credit": 40}, {"balance": 12.5}, ["balance"]])
+def test_balance_without_both_fields_fails(body: Any) -> None:
+    provider, _, _ = make(always(resp(body=body)))
     with pytest.raises(VastyError):
         provider.balance()
 

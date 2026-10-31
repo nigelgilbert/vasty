@@ -18,6 +18,7 @@ from vasty.context import Context
 from vasty.errors import VastyError
 from vasty.labels import format_label
 from vasty.models import (
+    Balance,
     Charges,
     CreateRequest,
     Instance,
@@ -28,8 +29,9 @@ from vasty.models import (
     ProbeResult,
     SshKey,
 )
-from vasty.provider import ProviderTimeout
+from vasty.provider import ProviderTimeout, parse_charges
 from vasty.remote import BoxUnreachableError, ExecResult, SshTarget, following_job_id
+from vasty.timeutil import day_start
 
 START = 1_793_232_000  # 2026-10-29T00:00:00Z
 NOW = START + 3600  # FakeTime's default start
@@ -74,8 +76,11 @@ class FakeProvider:
     offers: list[Offer] = field(default_factory=list)
     instances: dict[int, Instance] = field(default_factory=dict)
     billed: dict[int, Decimal] = field(default_factory=dict)
-    covered_through: int | None = None
-    account_balance: Decimal = Decimal("50")
+    """Billed amount per instance in rows dated today."""
+    charge_rows: list[tuple[int, Decimal, int]] = field(default_factory=list)
+    """Extra `(instance_id, amount, start)` charge rows."""
+    account_balance: Decimal = Decimal("0")
+    account_credit: Decimal = Decimal("20")
     ssh_keys: list[SshKey] = field(default_factory=list)
     attached: list[tuple[str, int | None]] = field(default_factory=list)
     destroyed: list[int] = field(default_factory=list)
@@ -163,11 +168,16 @@ class FakeProvider:
 
     def charges(self, start: int, end: int) -> Charges:
         self._call("charges", (start, end))
-        return Charges(per_instance=dict(self.billed), covered_through=self.covered_through)
+        today = day_start(end)
+        rows = [{"source": iid, "amount": str(amount), "start": today}
+                for iid, amount in self.billed.items()]
+        rows += [{"source": iid, "amount": str(amount), "start": at}
+                 for iid, amount, at in self.charge_rows if start <= at <= end]
+        return parse_charges(rows, start, end)
 
-    def balance(self) -> Decimal:
+    def balance(self) -> Balance:
         self._call("balance")
-        return self.account_balance
+        return Balance(balance=self.account_balance, credit=self.account_credit)
 
     def list_ssh_keys(self) -> list[SshKey]:
         self._call("list_ssh_keys")

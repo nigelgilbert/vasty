@@ -110,6 +110,11 @@ def iso(epoch: int | None) -> str | None:
     return datetime.fromtimestamp(int(epoch), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def day_start(epoch: int) -> int:
+    """Return 00:00 UTC of the day that holds `epoch`."""
+    return epoch - epoch % UNITS["d"]
+
+
 def parse_http_date(value: str | None) -> float | None:
     """Parse an HTTP `Date` header into epoch seconds, or None when missing or unparsable.
 

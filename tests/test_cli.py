@@ -10,7 +10,14 @@ import pytest
 from fakes import NOW, Harness, add_lease, make_offer
 from vasty.cli import parse
 from vasty.context import Context
-from vasty.errors import VastyError
+from vasty.errors import EXIT_CODES, VastyError
+
+
+def test_exit_codes_are_0_1_and_2() -> None:
+    assert set(EXIT_CODES.values()) == {1, 2}
+    assert "spend_unavailable" not in EXIT_CODES
+    with pytest.raises(ValueError):
+        VastyError("spend_unavailable", "x", "y")
 
 
 def test_parser_error_is_invalid_arguments(harness: Harness) -> None:
@@ -128,7 +135,6 @@ def test_reserve_wait_error_reports_failed_sweep_on_stderr(harness: Harness) -> 
         add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
         harness.box.state(inst.id).unsupported = ["apt-get"]
 
-    harness.provider.covered_through = NOW
     harness.provider.offers = [make_offer(1)]
     harness.provider.on_create = lacking
     _fail_next_destroy(harness)

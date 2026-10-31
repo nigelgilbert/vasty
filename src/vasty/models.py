@@ -82,19 +82,23 @@ class SshKey:
 
 @dataclass(frozen=True)
 class Charges:
-    """Billed charges for a UTC-day range.
+    """Billed instance charges from a range start to the read.
 
-    `per_instance` maps instance id to billed amount in the range, deleted
-    instances included. `covered_through` is the epoch second billing covers;
-    None when coverage cannot be read.
+    `per_instance` maps instance id to the billed amount in the range, deleted
+    instances included. `today` is the billed total of the rows that start on
+    the UTC day of the range end.
     """
 
     per_instance: dict[int, Decimal]
-    covered_through: int | None
+    today: Decimal = Decimal("0")
 
-    @property
-    def total(self) -> Decimal:
-        return sum(self.per_instance.values(), Decimal("0"))
+
+@dataclass(frozen=True)
+class Balance:
+    """The account's `balance` and `credit` from `GET /users/current`."""
+
+    balance: Decimal
+    credit: Decimal
 
 
 # Lease records.
@@ -249,7 +253,6 @@ class LeaseView:
     gpu: str | None
     price_per_hr: Decimal
     cost: Decimal | None
-    cost_source: str | None
     expires_at: str | None
     ttl_remaining_s: int | None
     jobs: list[JobView]
@@ -260,14 +263,12 @@ class LeaseView:
 
 @dataclass
 class Totals:
-    spent_today: Decimal | None
-    daily_budget: Decimal
-    remaining_budget: Decimal | None
+    balance: Decimal | None
+    credit: Decimal | None
+    charges_today: Decimal | None
     burn_per_hr: Decimal
     live: int
     live_mine: int
-    spend_source: str | None
-    daily_budget_source: str
 
 
 @dataclass

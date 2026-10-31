@@ -35,7 +35,6 @@ _FIXES: dict[str, list[str]] = {
     "expired_with_running_jobs": ["vasty", "status", _L],
     "flag_mismatch": ["vasty", "status", _L],
     "label_unreadable": ["vasty", "release", _L],
-    "budget_low": ["vasty", "status"],
     "spend_unavailable": ["vasty", "status"],
     "clock_unverified": ["vasty", "status"],
     "cache_rebuilt": ["vasty", "status"],

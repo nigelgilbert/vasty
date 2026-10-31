@@ -271,7 +271,6 @@ def test_fixes_use_the_lease_id_and_shell_quote_it() -> None:
         ("expired_with_running_jobs", "l-1", "vasty status l-1"),
         ("flag_mismatch", "l-1", "vasty status l-1"),
         ("label_unreadable", "i-7", "vasty release i-7"),
-        ("budget_low", None, "vasty status"),
         ("spend_unavailable", None, "vasty status"),
         ("clock_unverified", None, "vasty status"),
         ("cache_rebuilt", None, "vasty status"),
@@ -285,7 +284,7 @@ def test_fix_table(code: str, target: str | None, fix: str) -> None:
 def test_make_warning() -> None:
     w = make_warning("orphan", "i-55120", "not created by vasty")
     assert (w.code, w.lease, w.message, w.fix) == ("orphan", "i-55120", "not created by vasty", "vasty tag i-55120 --ttl 30m")
-    assert make_warning("budget_low", None, "x").lease is None
+    assert make_warning("cache_rebuilt", None, "x").lease is None
 
 
 def test_fix_errors() -> None:

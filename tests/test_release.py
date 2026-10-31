@@ -4,7 +4,7 @@ import json
 from decimal import Decimal
 from typing import Any
 
-from fakes import NOW, Harness, add_lease
+from fakes import NOW, START, Harness, add_lease
 from vasty.errors import VastyError
 from vasty.models import Instance, Job
 
@@ -35,7 +35,7 @@ def test_release_returns_summary_and_marks_cache(harness: Harness) -> None:
     assert data["lease"] == "l-0000a001"
     assert data["name"] == "trainer"
     assert data["uptime_s"] == 5820
-    assert data["cost"] == 0.61
+    assert data["cost"] is None
     assert data["destroy_pending"] is True
     assert "already_absent" not in data
     assert data["jobs"] == [
@@ -45,6 +45,19 @@ def test_release_returns_summary_and_marks_cache(harness: Harness) -> None:
     assert data["warnings"] == [] and data["swept"] == []
     lease = cached(harness, "l-0000a001")
     assert (lease.state, lease.released_here, lease.destroy_pending) == ("released", True, True)
+
+
+def test_release_cost_sums_charge_rows_across_two_days(harness: Harness) -> None:
+    row = add_lease(harness, label={"created": START - 1800, "ttl": 4 * 3600})
+    harness.provider.charge_rows = [(row.id, Decimal("0.19"), START - 1800)]
+    harness.provider.billed = {row.id: Decimal("0.42")}
+    code, data, _ = release(harness, "l-0000a001")
+    assert code == 0
+    assert data["cost"] == 0.61
+    assert [arg for call, arg in harness.provider.calls if call == "charges"] == [
+        (START - 86_400, NOW)
+    ]
+    assert [call for call, _ in harness.provider.calls if call == "balance"] == []
 
 
 def test_release_stays_destroy_pending_until_gone(harness: Harness) -> None:
@@ -212,7 +225,6 @@ def test_orphan_release_non_tty_needs_yes(harness: Harness) -> None:
 def test_orphan_release_with_yes(harness: Harness) -> None:
     harness.provider.add_instance(id=55120)
     harness.provider.billed = {55120: Decimal("0.44")}
-    harness.provider.covered_through = NOW
     code, data, _ = release(harness, "i-55120", "--yes")
     assert code == 0
     assert harness.provider.destroyed == [55120]

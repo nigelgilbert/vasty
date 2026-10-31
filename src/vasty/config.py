@@ -36,7 +36,6 @@ DEFAULT_KEYS: dict[str, str] = {
     "ttl": "duration",
     "run_ttl": "duration",
     "max_price": "money",
-    "daily_budget": "money",
     "warn_before_expiry": "duration",
     "image": "str",
     "disk": "int",
@@ -48,7 +47,7 @@ DEFAULT_KEYS: dict[str, str] = {
     "startup": "text",
     "startup_file": "path",
 }
-PROFILE_KEYS: dict[str, str] = {k: v for k, v in DEFAULT_KEYS.items() if k != "daily_budget"}
+PROFILE_KEYS: dict[str, str] = dict(DEFAULT_KEYS)
 TOP_KEYS: dict[str, str] = {"api_key_env": "str", "owner": "owner", "ssh_key": "path"}
 MODEL_KEYS: dict[str, str] = {"vram": "number", "quant": "str", "image": "str", "gpu": "str"}
 # Model-entry keys `serve` applies as reservation settings.
@@ -58,7 +57,7 @@ FLAG_KEYS: dict[str, str] = {**PROFILE_KEYS, "owner": "owner"}
 
 # Keys `config show` reports, in display order.
 SHOWN = (
-    "owner", "api_key_env", "ssh_key", "ttl", "run_ttl", "max_price", "daily_budget",
+    "owner", "api_key_env", "ssh_key", "ttl", "run_ttl", "max_price",
     "warn_before_expiry", "disk", "gpus", "image", "gpu", "vram", "region", "ports", "startup",
 )
 
@@ -67,7 +66,6 @@ BUILTIN: dict[str, Any] = {
     "ttl": 30 * 60,
     "run_ttl": 2 * 3600,
     "max_price": Decimal("0.60"),
-    "daily_budget": Decimal("10.00"),
     "warn_before_expiry": 5 * 60,
     "disk": 50,
     "gpus": 1,
@@ -103,7 +101,6 @@ class Settings:
     ttl: int
     run_ttl: int
     max_price: Decimal
-    daily_budget: Decimal
     warn_before_expiry: int
     disk: int
     gpus: int
@@ -304,8 +301,6 @@ def _convert_table(
         full = prefix + key
         kind = allowed.get(key)
         if kind is None:
-            if key == "daily_budget":
-                raise origin.fail(full, "has no profile, flag or stdin form; set it in [defaults]")
             raise origin.fail(full, "is not a known key")
         if key == "startup_file" and origin.source == "flag" and value == "-":
             out["startup"] = StartupSpec("stdin")
@@ -539,7 +534,6 @@ def resolve(
         ttl=pick("ttl"),
         run_ttl=pick("run_ttl"),
         max_price=pick("max_price"),
-        daily_budget=pick("daily_budget"),
         warn_before_expiry=pick("warn_before_expiry"),
         disk=pick("disk"),
         gpus=pick("gpus"),
@@ -602,9 +596,6 @@ def key_kind(parts: list[str]) -> str:
     elif len(parts) == 2 and parts[0] == "defaults":
         kind = DEFAULT_KEYS.get(parts[1])
     elif len(parts) == 3 and parts[0] == "profiles":
-        if parts[2] == "daily_budget":
-            raise VastyError("invalid_config", "daily_budget has no profile key.",
-                           "vasty config set defaults.daily_budget VALUE")
         kind = PROFILE_KEYS.get(parts[2])
     elif len(parts) == 3 and parts[0] == "models":
         kind = MODEL_KEYS.get(parts[2])

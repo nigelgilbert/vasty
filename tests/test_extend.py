@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -15,7 +14,6 @@ from vasty.remote import BoxUnreachableError, SshTarget
 
 @pytest.fixture
 def h(harness: Harness) -> Harness:
-    harness.provider.covered_through = NOW
     return harness
 
 
@@ -299,26 +297,6 @@ def test_orphan_is_unmanaged(h: Harness) -> None:
     assert data["hint"] == "vasty tag i-55120 --ttl 30m"
 
 
-def test_budget_refusal_says_by_how_much(h: Harness) -> None:
-    h.env["VASTY_DAILY_BUDGET"] = "1.00"
-    row = add_lease(h, label={"expires": NOW + 3600}, dph_total=Decimal("0.50"))
-    code, data = run_json(h, "extend", "l-0000a001", "--by", "2h")
-    assert code == 3
-    assert data["error"] == "budget_exceeded"
-    assert data["details"] == {"projected": 1.5, "remaining": 0.5, "daily_budget": 1.0}
-    assert "by $0.50" in data["message"]
-    assert label_of(h, row.id).expires == NOW + 3600
-    assert h.box.clock_writes == []
-
-
-def test_shortening_passes_over_budget(h: Harness) -> None:
-    h.env["VASTY_DAILY_BUDGET"] = "0.10"
-    row = add_lease(h, label={"expires": NOW + 7200}, dph_total=Decimal("0.50"))
-    code, _ = run_json(h, "extend", "l-0000a001", "--to", "1h")
-    assert code == 0
-    assert label_of(h, row.id).expires == NOW + 3600
-
-
 def run_after_refresh(h: Harness, monkeypatch: pytest.MonkeyPatch, *argv: str) -> None:
     """Run `argv` as a second local vasty command right after the next refresh returns."""
     from vasty import engine
@@ -333,42 +311,6 @@ def run_after_refresh(h: Harness, monkeypatch: pytest.MonkeyPatch, *argv: str) -
         return snap
 
     monkeypatch.setattr(engine, "refresh", refresh_then_run)
-
-
-def reserve_after_refresh(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run a second local `reserve --no-wait` right after the next refresh returns."""
-    from fakes import make_offer
-
-    h.provider.offers = [make_offer(1)]
-    h.hex_values = ["0000b001"]
-    run_after_refresh(h, monkeypatch, "reserve", "--ttl", "1h", "--no-wait")
-
-
-def test_budget_counts_local_reserve_between_refresh_and_lock(
-    h: Harness, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    h.env["VASTY_DAILY_BUDGET"] = "1.00"
-    row = add_lease(h, label={"expires": NOW + 3600}, dph_total=Decimal("0.50"))
-    reserve_after_refresh(h, monkeypatch)
-    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
-    assert code == 3
-    assert data["details"] == {"projected": 1.13, "remaining": 0.12, "daily_budget": 1.0}
-    assert label_of(h, row.id).expires == NOW + 3600
-
-
-def test_budget_counts_local_extend_between_refresh_and_lock(
-    h: Harness, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    h.env["VASTY_DAILY_BUDGET"] = "1.60"
-    row = add_lease(h, "l-0000a001", label={"expires": NOW + 1800}, dph_total=Decimal("0.50"))
-    add_lease(h, "l-0000a002", label={"expires": NOW + 1800}, dph_total=Decimal("0.50"))
-    run_after_refresh(h, monkeypatch, "extend", "l-0000a002", "--by", "2h")
-    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
-    assert code == 3, data
-    assert data["error"] == "budget_exceeded"
-    assert data["details"] == {"projected": 1.75, "remaining": 0.1, "daily_budget": 1.6}
-    assert label_of(h, row.id).expires == NOW + 1800
-    assert h.box.state(row.id).clock == NOW + 1800
 
 
 def test_extend_stacks_on_local_extend_between_refresh_and_lock(
@@ -478,19 +420,6 @@ def test_bulk_to_aligns_expiries_with_one_now(h: Harness) -> None:
     assert {r["expires_at"] for r in data["results"]} == {"2026-10-29T02:00:00Z"}
 
 
-def test_bulk_budget_counts_local_reserve_between_refresh_and_lock(
-    h: Harness, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    h.env["VASTY_DAILY_BUDGET"] = "1.00"
-    add_lease(h, "l-0000a001", label={"group": "exp", "expires": NOW + 1800},
-              dph_total=Decimal("0.50"))
-    reserve_after_refresh(h, monkeypatch)
-    code, data = run_json(h, "extend", "--group", "exp", "--by", "1h")
-    assert code == 3
-    assert data["error"] == "budget_exceeded"
-    assert data["details"] == {"projected": 1.13, "remaining": 0.37, "daily_budget": 1.0}
-
-
 def test_bulk_release_between_refresh_and_lock_is_expired(
     h: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -542,26 +471,6 @@ def test_bulk_unwritable_between_refresh_and_lock_changes_nothing(
     assert [c[1][0] for c in h.provider.calls if c[0] == "set_label"] == [a.id]
     assert h.box.clock_writes == [(a.id, expires)]
     assert "clock_file" not in cached(h, "l-0000a002").guard_missing
-
-
-def test_bulk_budget_is_atomic(h: Harness) -> None:
-    h.env["VASTY_DAILY_BUDGET"] = "2.00"
-    a = add_lease(h, "l-0000a001", label={"group": "exp", "expires": NOW + 1800},
-                  dph_total=Decimal("0.50"))
-    b = add_lease(h, "l-0000a002", label={"group": "exp", "expires": NOW + 1800},
-                  dph_total=Decimal("0.50"))
-    code, data = run_json(h, "extend", "l-0000a001", "--by", "2h")
-    assert code == 0
-    code, data = run_json(h, "extend", "l-0000a001", "--to", "30m")
-    assert code == 0
-    h.box.clock_writes.clear()
-    code, data = run_json(h, "extend", "--group", "exp", "--by", "2h")
-    assert code == 3
-    assert data["error"] == "budget_exceeded"
-    assert data["details"] == {"projected": 2.5, "remaining": 1.5, "daily_budget": 2.0}
-    assert label_of(h, a.id).expires == NOW + 1800
-    assert label_of(h, b.id).expires == NOW + 1800
-    assert h.box.clock_writes == []
 
 
 def test_bulk_reports_per_lease_errors_with_highest_exit(h: Harness) -> None:

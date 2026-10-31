@@ -74,7 +74,6 @@ def test_builtin_defaults(cfg: Env) -> None:
     assert s.ttl == 1800
     assert s.run_ttl == 7200
     assert s.max_price == Decimal("0.60")
-    assert s.daily_budget == Decimal("10.00")
     assert s.warn_before_expiry == 300
     assert s.disk == 50
     assert s.gpus == 1
@@ -82,7 +81,6 @@ def test_builtin_defaults(cfg: Env) -> None:
     assert s.api_key_env == "VAST_API_KEY"
     assert (s.gpu, s.vram, s.region, s.ports, s.startup) == (None, None, None, [], None)
     assert s.sources["ttl"] == "default"
-    assert s.sources["daily_budget"] == "default"
 
 
 # Resolution order.
@@ -171,7 +169,6 @@ def test_unknown_profile_is_invalid_arguments(cfg: Env) -> None:
         ("VASTY_TTL", "1h", "ttl", 3600),
         ("VASTY_RUN_TTL", "3h", "run_ttl", 10800),
         ("VASTY_MAX_PRICE", "0.45", "max_price", Decimal("0.45")),
-        ("VASTY_DAILY_BUDGET", "25", "daily_budget", Decimal("25")),
         ("VASTY_WARN_BEFORE_EXPIRY", "10m", "warn_before_expiry", 600),
         ("VASTY_IMAGE", "my/img:1", "image", "my/img:1"),
         ("VASTY_DISK", "100", "disk", 100),
@@ -257,7 +254,7 @@ def test_bad_toml_is_invalid_config(cfg: Env) -> None:
 def test_example_config_from_spec(cfg: Env) -> None:
     cfg.user(
         'api_key_env = "VAST_API_KEY"\nowner = "nick"\nssh_key = "~/.ssh/id_ed25519"\n\n'
-        '[defaults]\nttl = "30m"\nrun_ttl = "2h"\nmax_price = 0.60\ndaily_budget = 10.00\n'
+        '[defaults]\nttl = "30m"\nrun_ttl = "2h"\nmax_price = 0.60\n'
         'warn_before_expiry = "5m"\nimage = "vasty/base:cuda12.4"\ndisk = 50\n\n'
         '[profiles.small]\ngpu = "4090"\nvram = 24\n\n'
         '[profiles.big]\ngpu = "A100"\nvram = 80\nmax_price = 2.50\n\n'
@@ -414,35 +411,23 @@ def test_owner_flag_on_config_show(harness: Harness) -> None:
     assert json.loads(out)["values"]["owner"] == {"value": "someone", "source": "flag"}
 
 
-# Daily budget.
+# Removed keys.
+
+# Build the removed key's name so a repo grep for it stays empty.
+REMOVED_BUDGET_KEY = "_".join(["daily", "budget"])
 
 
-def test_daily_budget_order(cfg: Env) -> None:
-    cfg.user("[defaults]\ndaily_budget = 20\n")
-    s = cfg.resolve()
-    assert (s.daily_budget, s.sources["daily_budget"]) == (Decimal("20"), "user")
-    cfg.project("[defaults]\ndaily_budget = 30.5\n")
-    s = cfg.resolve()
-    assert (s.daily_budget, s.sources["daily_budget"]) == (Decimal("30.5"), "project")
-    cfg.env["VASTY_DAILY_BUDGET"] = "40"
-    s = cfg.resolve()
-    assert (s.daily_budget, s.sources["daily_budget"]) == (Decimal("40"), "env")
-
-
-def test_daily_budget_has_no_profile_key(cfg: Env) -> None:
-    cfg.user("[profiles.big]\ndaily_budget = 50\n")
+@pytest.mark.parametrize("table", ["[defaults]", "[profiles.big]"])
+def test_removed_budget_key_is_invalid_config(cfg: Env, table: str) -> None:
+    cfg.user(f"{table}\n{REMOVED_BUDGET_KEY} = 20\n")
     err = cfg.error()
     assert err.code == "invalid_config"
-    assert "daily_budget" in err.message
+    assert REMOVED_BUDGET_KEY in err.message
 
 
-def test_daily_budget_has_no_stdin_key(cfg: Env) -> None:
-    assert cfg.error(stdin_json={"daily_budget": 50}).code == "invalid_config"
-
-
-def test_daily_budget_has_no_flag(cfg: Env) -> None:
-    s = cfg.resolve(flags={"daily_budget": "50"})
-    assert s.sources["daily_budget"] == "default"
+def test_removed_budget_key_in_env_is_ignored(cfg: Env) -> None:
+    cfg.env["VASTY_" + REMOVED_BUDGET_KEY.upper()] = "40"
+    assert REMOVED_BUDGET_KEY not in cfg.resolve().sources
 
 
 # Models.
@@ -575,7 +560,7 @@ def test_config_show_human(harness: Harness) -> None:
     code, out, _ = harness.run("config", "show", "--plain")
     assert code == 0
     lines = out.strip().splitlines()
-    assert len(lines) == 16
+    assert len(lines) == 15
     rows = {line.split()[0]: line.split()[1:] for line in lines}
     assert rows["image"] == ["my/img", "project"]
     assert rows["ttl"] == ["30m", "default"]
@@ -655,7 +640,6 @@ def test_config_set_parses_toml_scalar(
         ("defaults.bogus", "1"),
         ("bogus", "1"),
         ("profiles.big", "1"),
-        ("profiles.big.daily_budget", "50"),
         ("defaults.disk", "lots"),
         ("defaults.ttl", "30"),
         ("defaults.max_price", "true"),

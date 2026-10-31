@@ -4,8 +4,9 @@ With no target, `status` lists every active lease, then orphans and
 unreadable rows. `--verbose` also lists history leases; a named lease in
 history always shows. Warnings cover the shown leases, `expired_with_running_jobs`
 for every history lease when no target is given, the account warnings from
-the refresh, `orphan` per shown orphan, `spend_unavailable` and `budget_low`.
-`totals` covers the whole account.
+the refresh, `orphan` per shown orphan, and `spend_unavailable` when the
+balance or charges read fails. `totals` covers the whole account with Vast's
+own `balance`, `credit` and today's billed charges.
 
 `--cached` reads `leases.json` only. It uses the local clock, returns
 `swept: []`, sets `cached_at` and skips the log tail. That path imports only
@@ -19,7 +20,7 @@ import posixpath
 import shlex
 from decimal import Decimal
 
-from vasty import budget, engine, views
+from vasty import engine, views
 from vasty.cli import Outcome
 from vasty.context import Context
 from vasty.errors import VastyError
@@ -35,7 +36,7 @@ from vasty.models import (
     WarningItem,
 )
 from vasty.output import money
-from vasty.state import LIVE_JOB_STATES
+from vasty.state import LIVE_JOB_STATES, make_warning
 from vasty.targeting import has_target, resolve_target
 from vasty.timeutil import format_duration, iso
 
@@ -50,10 +51,10 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     cached = bool(args.cached)
     if cached:
         snap = engine.cached_snapshot(ctx)
-        spent, source = engine.spend_from(snap.charges, snap)
     else:
         snap = engine.refresh(ctx)
-        spent, source = engine.spend(ctx, snap)
+        engine.read_charges(ctx, snap)
+        engine.read_balance(ctx, snap)
     verbose = bool(args.verbose)
     now = snap.now
     settings = ctx.settings
@@ -90,27 +91,19 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     warnings += [views.orphan_warning(inst) for inst in rows if inst.id not in unreadable_ids]
     warnings += snap.warnings
 
-    daily = settings.daily_budget
-    if spent is None:
-        warnings.append(budget.spend_unavailable_warning())
-    else:
-        projected = budget.projection(
-            spent, budget.lease_commitments(snap.active()), now, Decimal("0")
-        )
-        low = budget.budget_low_warning(projected, daily)
-        if low is not None:
-            warnings.append(low)
+    if snap.charges is None or snap.balance is None:
+        warnings.append(make_warning(
+            "spend_unavailable", None, "Vast's balance or charges cannot be read"
+        ))
 
     active = snap.active()
     totals = Totals(
-        spent_today=spent,
-        daily_budget=daily,
-        remaining_budget=daily - spent if spent is not None else None,
-        burn_per_hr=budget.burn_per_hr(snap.live_instances()),
+        balance=snap.balance.balance if snap.balance is not None else None,
+        credit=snap.balance.credit if snap.balance is not None else None,
+        charges_today=snap.charges.today if snap.charges is not None else None,
+        burn_per_hr=views.burn_per_hr(snap.live_instances()),
         live=len(active),
         live_mine=sum(1 for lease in active if lease.label.owner == settings.owner),
-        spend_source=source,
-        daily_budget_source=settings.sources.get("daily_budget", "default"),
     )
     result = StatusResult(
         leases=lease_views,
@@ -298,11 +291,15 @@ def swept_lines(swept: list[SweptEntry]) -> list[str]:
     return out
 
 
+def _dollars(value: Decimal | None) -> str:
+    return "unknown" if value is None else f"${money(value):.2f}"
+
+
 def today_line(totals: Totals) -> str:
-    spent = "unknown" if totals.spent_today is None else f"${money(totals.spent_today):.2f}"
     noun = "lease" if totals.live == 1 else "leases"
     return (
-        f"TODAY  spent {spent} of ${money(totals.daily_budget):.2f}  ·  "
+        f"TODAY  charged {_dollars(totals.charges_today)}  ·  "
+        f"credit {_dollars(totals.credit)}  ·  balance {_dollars(totals.balance)}  ·  "
         f"{totals.live} {noun} live ({totals.live_mine} yours)  ·  "
         f"burning ${money(totals.burn_per_hr):.2f}/hr"
     )

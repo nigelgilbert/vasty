@@ -1,8 +1,9 @@
 """The local cache `~/.local/state/vasty/leases.json`.
 
 The file holds `{"version": 1, "cached_at": EPOCH, "leases": {ID: LEASE}}` plus
-the last instance listing and today's billed charges, which `status --cached`
-reads. Files without those keys load with empty values.
+the last instance listing, the billed charges and the account balance and
+credit, which `status --cached` reads. Files without those keys load with
+empty values.
 Each lease serializes every `CachedLease` field by its type hints: Decimal as a
 string, dataclasses as objects, int dict keys as strings. Load restores the
 types, fills defaults for absent fields and ignores unknown keys. A value of
@@ -40,7 +41,11 @@ class CacheData:
     charges_at: int | None = None
     """When `charges` was fetched; billing data is fresh for 60s."""
     charges_start: int | None = None
-    """The start of the UTC day `charges` covers."""
+    """The start of the range `charges` covers."""
+    balance: Decimal | None = None
+    credit: Decimal | None = None
+    balance_at: int | None = None
+    """When `balance` and `credit` were fetched; they are fresh for 60s."""
 
 
 class CorruptCache(ValueError):
@@ -129,6 +134,9 @@ def encode(data: CacheData) -> str:
         "charges": _to_json(data.charges),
         "charges_at": data.charges_at,
         "charges_start": data.charges_start,
+        "balance": _to_json(data.balance),
+        "credit": _to_json(data.credit),
+        "balance_at": data.balance_at,
     }
     return json.dumps(body, indent=1, sort_keys=False) + "\n"
 
@@ -153,6 +161,9 @@ def decode(text: str) -> CacheData:
         charges=_from_json(body.get("charges"), Union[Charges, None]),
         charges_at=_from_json(body.get("charges_at"), Union[int, None]),
         charges_start=_from_json(body.get("charges_start"), Union[int, None]),
+        balance=_from_json(body.get("balance"), Union[Decimal, None]),
+        credit=_from_json(body.get("credit"), Union[Decimal, None]),
+        balance_at=_from_json(body.get("balance_at"), Union[int, None]),
     )
 
 

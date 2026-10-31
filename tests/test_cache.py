@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from vasty.cache import Cache, CacheData
-from vasty.models import CachedLease, Job, Label
+from vasty.models import CachedLease, Charges, Job, Label
 
 
 def full_lease() -> CachedLease:
@@ -75,6 +75,33 @@ def test_round_trip(cache: Cache) -> None:
     assert isinstance(restored.price_per_hr, Decimal)
     assert list(restored.ports) == [22, 8000]
     assert list(restored.label.extra) == ["zeta", "alpha"]
+
+
+def test_round_trip_billing(cache: Cache) -> None:
+    charges = Charges(per_instance={55120: Decimal("1.20")}, today=Decimal("0.40"))
+    cache.save(CacheData(
+        charges=charges, charges_at=1793236500, charges_start=1793145600,
+        balance=Decimal("0"), credit=Decimal("19.9062"), balance_at=1793236490,
+    ))
+    body = json.loads(cache.path.read_text())
+    assert (body["balance"], body["credit"], body["charges_start"]) == ("0", "19.9062", 1793145600)
+    data = cache.load()
+    assert not data.rebuilt
+    assert data.charges == charges
+    assert (data.charges_at, data.charges_start) == (1793236500, 1793145600)
+    assert (data.balance, data.credit, data.balance_at) == (
+        Decimal("0"), Decimal("19.9062"), 1793236490
+    )
+
+
+def test_billing_fields_default_when_absent(cache: Cache) -> None:
+    cache.path.parent.mkdir(parents=True)
+    cache.path.write_text(json.dumps({"version": 1, "cached_at": None, "leases": {}}))
+    data = cache.load()
+    assert not data.rebuilt
+    assert (data.balance, data.credit, data.balance_at, data.charges_start) == (
+        None, None, None, None
+    )
 
 
 def test_file_shape(cache: Cache) -> None:

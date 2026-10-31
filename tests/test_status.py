@@ -10,19 +10,17 @@ from typing import Any
 
 import pytest
 
-from fakes import NOW, Harness, add_lease
+from fakes import NOW, START, Harness, add_lease
+from vasty.errors import VastyError
 from vasty.models import Job
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 LEASE_KEYS = {
     "lease", "name", "group", "owner", "state", "guard", "guard_missing", "gpu",
-    "price_per_hr", "cost", "cost_source", "expires_at", "ttl_remaining_s", "jobs",
+    "price_per_hr", "cost", "expires_at", "ttl_remaining_s", "jobs",
 }
-TOTALS_KEYS = {
-    "spent_today", "daily_budget", "remaining_budget", "burn_per_hr", "live", "live_mine",
-    "spend_source", "daily_budget_source",
-}
+TOTALS_KEYS = {"balance", "credit", "charges_today", "burn_per_hr", "live", "live_mine"}
 
 
 def status(harness: Harness, *argv: str) -> dict[str, Any]:
@@ -66,8 +64,8 @@ def account(harness: Harness) -> Harness:
                                         "expires": NOW + 1140},
               gpu_name="RTX 4090", dph_total=Decimal("0.38"))
     p.add_instance(id=55120, label=None, gpu_name="RTX 3090", dph_total=Decimal("0.22"))
-    p.billed = {1: Decimal("7.12")}
-    p.covered_through = NOW
+    p.billed = {1: Decimal("2.32"), trainer.id: Decimal("4.80")}
+    p.charge_rows = [(trainer.id, Decimal("1.20"), START - 3600)]
     harness.run("status")
     harness.box.state(dead.id).reachable = False
     return harness
@@ -90,7 +88,7 @@ def test_status_json_shape(account: Harness) -> None:
     assert row == {
         "lease": "l-8b12", "name": "eval-2", "group": "exp42", "owner": "claude",
         "state": "running", "guard": "full", "guard_missing": [], "gpu": "L40S",
-        "price_per_hr": 0.82, "cost": 0.14, "cost_source": "estimated",
+        "price_per_hr": 0.82, "cost": None,
         "expires_at": "2026-10-29T01:03:00Z", "ttl_remaining_s": 180, "jobs": [],
     }
 
@@ -107,16 +105,17 @@ def test_status_orphan_row(account: Harness) -> None:
 def test_status_totals(account: Harness) -> None:
     totals = status(account)["totals"]
     assert totals == {
-        "spent_today": 7.12, "daily_budget": 10.0, "remaining_budget": 2.88,
+        "balance": 0.0, "credit": 20.0, "charges_today": 7.12,
         "burn_per_hr": 5.46, "live": 5, "live_mine": 4,
-        "spend_source": "billing", "daily_budget_source": "default",
     }
 
 
-def test_status_daily_budget_source(account: Harness) -> None:
-    account.env["VASTY_DAILY_BUDGET"] = "20"
-    totals = status(account)["totals"]
-    assert (totals["daily_budget"], totals["daily_budget_source"]) == (20.0, "env")
+def test_status_cost_sums_charge_rows_across_two_days(account: Harness) -> None:
+    rows = by_lease(status(account))
+    assert rows["l-7f3a"]["cost"] == 6.0
+    assert rows["l-8b10"]["cost"] is None
+    starts = [arg[0] for call, arg in account.provider.calls if call == "charges"]
+    assert starts and set(starts) == {START - 86_400}
 
 
 def test_status_warnings(account: Harness) -> None:
@@ -125,11 +124,10 @@ def test_status_warnings(account: Harness) -> None:
     assert ("expiring_soon", "l-8b12") in found
     assert ("box_unreachable", "l-8b11") in found
     assert ("orphan", "i-55120") in found
-    assert ("budget_low", None) in found
+    assert ("spend_unavailable", None) not in found
     fixes = {w["code"]: w["fix"] for w in data["warnings"]}
     assert fixes["expiring_soon"] == "vasty extend l-8b12 --by 30m"
     assert fixes["orphan"] == "vasty tag i-55120 --ttl 30m"
-    assert fixes["budget_low"] == "vasty status"
 
 
 def test_status_unreachable_jobs_unknown(account: Harness) -> None:
@@ -139,12 +137,21 @@ def test_status_unreachable_jobs_unknown(account: Harness) -> None:
                             "duration_s": 60}]
 
 
-def test_status_spend_unavailable(harness: Harness) -> None:
+@pytest.mark.parametrize(
+    ("failing", "nulls", "kept"),
+    [("charges", ["charges_today"], ["balance", "credit"]),
+     ("balance", ["balance", "credit"], ["charges_today"])],
+)
+def test_status_spend_unavailable(
+    harness: Harness, failing: str, nulls: list[str], kept: list[str]
+) -> None:
     add_lease(harness)
+    harness.provider.billed = {1: Decimal("1.00")}
+    harness.provider.fail[failing] = VastyError("provider_error", "down", "Run vasty status.")
     data = status(harness)
-    assert data["totals"]["spent_today"] is None
-    assert data["totals"]["remaining_budget"] is None
-    assert data["totals"]["spend_source"] is None
+    assert all(data["totals"][key] is None for key in nulls)
+    assert all(data["totals"][key] is not None for key in kept)
+    assert data["leases"][0]["cost"] is None
     assert ("spend_unavailable", None) in codes(data)
 
 
@@ -233,7 +240,8 @@ def test_status_cached_makes_no_network_call(account: Harness) -> None:
     assert [row["lease"] for row in data["leases"]] == [
         "l-7f3a", "l-8b10", "l-8b11", "l-8b12", "l-a003", "i-55120"
     ]
-    assert data["totals"]["spent_today"] == 7.12
+    assert (data["totals"]["charges_today"], data["totals"]["credit"]) == (7.12, 20.0)
+    assert by_lease(data)["l-7f3a"]["cost"] == 6.0
     assert ("expiring_soon", "l-8b12") in codes(data)
     assert ("orphan", "i-55120") in codes(data)
     assert "log_tail" not in status(account, "--cached", "trainer")["leases"][0]
@@ -284,8 +292,8 @@ def test_status_human_table(account: Harness) -> None:
     assert "WARNINGS" in lines
     warn = next(line for line in lines if "expiring_soon" in line)
     assert warn.split()[0] == "l-8b12" and warn.endswith("fix: vasty extend l-8b12 --by 30m")
-    assert lines[-1] == ("TODAY  spent $7.12 of $10.00  ·  5 leases live (4 yours)  ·  "
-                         "burning $5.46/hr")
+    assert lines[-1] == ("TODAY  charged $7.12  ·  credit $20.00  ·  balance $0.00  ·  "
+                         "5 leases live (4 yours)  ·  burning $5.46/hr")
 
 
 def test_status_human_group_view(account: Harness) -> None:

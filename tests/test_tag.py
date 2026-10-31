@@ -19,7 +19,6 @@ ENTRY_KEYS = {
 
 @pytest.fixture
 def h(harness: Harness) -> Harness:
-    harness.provider.covered_through = NOW
     return harness
 
 
@@ -330,21 +329,12 @@ def test_adoption_retry_survives_cache_loss(h: Harness) -> None:
     assert h.context().cache.load().leases["l-abababab"].adopted is True
 
 
-def test_adopt_never_refused_by_budget(h: Harness) -> None:
-    h.env["VASTY_DAILY_BUDGET"] = "0.05"
-    iid = orphan(h)
-    code, data = run_json(h, "tag", "i-55120", "--ttl", "1h")
-    assert code == 0
-    assert [w["code"] for w in data["warnings"]] == ["budget_low"]
-    assert label_of(h, iid).lease == "l-abababab"
-
-
-def test_adopt_with_spend_unknown_warns(h: Harness) -> None:
-    h.provider.covered_through = None
+def test_adopt_reads_no_billing(h: Harness) -> None:
     orphan(h)
     code, data = run_json(h, "tag", "i-55120", "--ttl", "1h")
     assert code == 0
-    assert [w["code"] for w in data["warnings"]] == ["spend_unavailable"]
+    assert data["warnings"] == []
+    assert [c for c, _ in h.provider.calls if c in ("balance", "charges")] == []
 
 
 def test_adopt_name_conflict(h: Harness) -> None:

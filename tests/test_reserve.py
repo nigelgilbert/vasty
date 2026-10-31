@@ -35,7 +35,6 @@ def boot(harness: Harness, inst: Instance, request: CreateRequest) -> None:
 
 @pytest.fixture
 def h(harness: Harness) -> Harness:
-    harness.provider.covered_through = NOW
     harness.provider.offers = [make_offer(1)]
     harness.provider.on_create = lambda inst, req: boot(harness, inst, req)
     return harness
@@ -598,7 +597,6 @@ def test_name_hit_returns_existing_lease(h: Harness) -> None:
 def test_name_hit_warns_on_flag_mismatch(h: Harness) -> None:
     add_lease(h, "l-0000a001", label={"name": "ft", "group": "a", "expires": NOW + 1200},
               gpu_name="RTX 3090", gpu_ram_gb=24.0)
-    h.env["VASTY_DAILY_BUDGET"] = "0.01"
     code, data = run_json(h, "reserve", "--name", "ft", "--gpu", "4090", "--vram", "48",
                           "--group", "b", "--ttl", "2h")
     assert code == 0
@@ -646,57 +644,6 @@ def test_ttl_accepts_chained_units(h: Harness) -> None:
     created = parse(request.label)
     assert isinstance(created, Label)
     assert created.ttl == 5400
-
-
-# Budget.
-
-
-def test_budget_refusal_details_and_exit(h: Harness) -> None:
-    h.env["VASTY_DAILY_BUDGET"] = "1.00"
-    h.provider.billed = {9: Decimal("0.20")}
-    code, data = run_json(h, "reserve", "--ttl", "3h")
-    assert code == 3
-    assert data["error"] == "budget_exceeded"
-    assert data["details"] == {"projected": 1.34, "remaining": 0.8, "daily_budget": 1.0}
-    assert "by $0.34" in data["message"]
-    assert calls(h, "create") == []
-
-
-def test_budget_low_warning_near_cap(h: Harness) -> None:
-    h.env["VASTY_DAILY_BUDGET"] = "0.40"
-    _, data = run_json(h, "reserve", "--ttl", "1h")
-    assert [w["code"] for w in data["warnings"]] == ["budget_low"]
-
-
-def test_budget_counts_local_reserve_between_refresh_and_lock(
-    h: Harness, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from vasty import engine
-
-    h.env["VASTY_DAILY_BUDGET"] = "0.60"
-    real = engine.refresh
-
-    def refresh_then_reserve(ctx: Any, probe: bool = True) -> engine.Snapshot:
-        snap = real(ctx, probe)
-        monkeypatch.setattr(engine, "refresh", real)
-        h.hex_values = ["0000b001"]
-        assert h.run("reserve", "--ttl", "1h", "--no-wait")[0] == 0
-        return snap
-
-    monkeypatch.setattr(engine, "refresh", refresh_then_reserve)
-    code, data = run_json(h, "reserve", "--ttl", "1h", "--no-wait")
-    assert code == 3
-    assert data["error"] == "budget_exceeded"
-    assert data["details"] == {"projected": 0.76, "remaining": 0.22, "daily_budget": 0.6}
-    assert len(calls(h, "create")) == 1
-
-
-def test_spend_unavailable_refuses(h: Harness) -> None:
-    h.provider.covered_through = None
-    code, data = run_json(h, "reserve")
-    assert code == 2
-    assert data["error"] == "spend_unavailable"
-    assert calls(h, "create") == []
 
 
 # SSH key.

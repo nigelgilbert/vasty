@@ -2,7 +2,7 @@
 
 `reserve_lease` does the work for `reserve` and for auto-reserved `run` and
 `serve`. Under the `leases.json` lock it checks the name, searches offers,
-checks the budget, registers the SSH key and creates the instance. A create
+registers the SSH key and creates the instance. A create
 that times out is recovered by listing instances for the lease id. Outside
 the lock it waits for the lease to leave `pending` by refreshing every
 `WAIT_POLL_S` seconds.
@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, TypeVar
 
-from vasty import budget, engine, ids, labels, onstart, views
+from vasty import engine, ids, labels, onstart, views
 from vasty.cli import Outcome
 from vasty.commands._common import merge_swept, taken_ids
 from vasty.context import Context
@@ -52,7 +52,6 @@ WAIT_POLL_S = 10.0
 PORT_GRACE_S = 60
 RECOVER_POLL_S = 5.0
 RECOVER_WINDOW_S = 60
-RESERVE_BUDGET_HINT = "Shorten --ttl, lower --max-price, or release a lease. Run vasty status."
 
 
 @dataclass
@@ -68,9 +67,8 @@ def reserve_lease(
 ) -> Reserved:
     """Reserve a box from the creation flags in `args` and `ctx.settings`.
 
-    Apply name idempotency, the budget check with `ttl`, offer search, create
-    with recovery and the readiness wait. `run` and `serve` call this for
-    auto-reserve. Raise `VastyError` on failure; a box this call created and
+    Apply name idempotency, offer search, create with recovery and the
+    readiness wait. `run` and `serve` call this for auto-reserve. Raise `VastyError` on failure; a box this call created and
     then gave up on is destroyed before the error propagates.
     """
     settings = ctx.settings
@@ -101,13 +99,6 @@ def reserve_lease(
                 disk_gb=settings.disk, max_price=settings.max_price, region=settings.region,
             )
             offer = choose_offer(ctx, query)
-            projected, daily = engine.budget_check(
-                ctx, snap, budget.cost(offer.dph_total, ttl), RESERVE_BUDGET_HINT,
-                leases=engine.locked_active(ctx, snap),
-            )
-            low = budget.budget_low_warning(projected, daily)
-            if low is not None:
-                warnings.append(low)
             register_key(ctx)
             taken = taken_ids(snap)
             lease_id = ids.new_lease_id(ctx.random_hex, taken)
