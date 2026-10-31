@@ -47,6 +47,7 @@ _FIXES: dict[str, list[str]] = {
     "guard_partial": ["vasty", "release", _L],
     "clock_skew": ["vasty", "release", _L],
     "clock_skew_unknown": ["vasty", "release", _L],
+    "sweep_not_spawned": ["vasty", "sweep", "--follow", _L],
     "orphan": ["vasty", "tag", _L, "--ttl", "30m"],
     "startup_failed": ["vasty", "ssh", _L, "--", "cat", "/workspace/.vasty/startup.log"],
     "expired_with_running_jobs": ["vasty", "status", _L],

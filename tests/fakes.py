@@ -248,6 +248,8 @@ class FakeBox:
     clock_writes: list[tuple[int, int]] = field(default_factory=list)
     adopts: list[int] = field(default_factory=list)
     """Instance ids `adopt` ran on, in call order."""
+    probes: list[int] = field(default_factory=list)
+    """Instance ids `probe` ran on, in call order."""
 
     def state(self, instance_id: int) -> BoxState:
         return self.boxes.setdefault(instance_id, BoxState())
@@ -273,6 +275,7 @@ class FakeBox:
         provider_now: int | None = None,
         timeout: float = 5.0,
     ) -> ProbeResult:
+        self.probes.append(target.instance_id)
         box = self._get(target)
         target_clock = None
         if label_expires is not None:
@@ -402,6 +405,10 @@ class Harness:
     http_headers: list[dict[str, str]] = field(default_factory=list)
     missing_tools: set[str] = field(default_factory=set)
     """Tool names `which` reports as absent."""
+    spawned: list[list[str]] = field(default_factory=list)
+    """Argument lists `spawn` received."""
+    spawn_error: OSError | None = None
+    """When set, `spawn` raises it instead of recording the call."""
     last_ctx: Context | None = None
     """The context the latest `run` built, kept when an exception escapes."""
 
@@ -419,6 +426,11 @@ class Harness:
             return self.http_statuses.pop(0)
         return self.http_status
 
+    def spawn(self, argv: list[str], env: Mapping[str, str]) -> None:
+        if self.spawn_error is not None:
+            raise self.spawn_error
+        self.spawned.append(list(argv))
+
     def random_hex(self, nbytes: int) -> str:
         if self.hex_values:
             return self.hex_values.pop(0)
@@ -433,6 +445,7 @@ class Harness:
             random_hex=self.random_hex,
             which=lambda name: None if name in self.missing_tools else f"/usr/bin/{name}",
             http_get=self.http_get,
+            spawn=self.spawn,
             provider_factory=lambda ctx: self.provider,
             box_factory=lambda ctx: self.box,
         )

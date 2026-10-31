@@ -275,6 +275,7 @@ def test_fixes_use_the_lease_id_and_shell_quote_it() -> None:
         ("guard_partial", "l-1", "vasty release l-1"),
         ("clock_skew", "l-1", "vasty release l-1"),
         ("clock_skew_unknown", "l-1", "vasty release l-1"),
+        ("sweep_not_spawned", "l-1", "vasty sweep --follow l-1"),
         ("orphan", "i-55120", "vasty tag i-55120 --ttl 30m"),
         ("startup_failed", "l-1", "vasty ssh l-1 -- cat /workspace/.vasty/startup.log"),
         ("expired_with_running_jobs", "l-1", "vasty status l-1"),

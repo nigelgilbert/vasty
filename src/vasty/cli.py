@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 VERBS = (
     "reserve", "extend", "release", "status", "run", "serve",
-    "sync", "ssh", "tag", "config", "completion",
+    "sync", "ssh", "tag", "sweep", "config", "completion",
 )
 
 # Flags that set up a new lease; `--on` rejects them.
@@ -145,6 +145,9 @@ def build_parser() -> Parser:
     p.add_argument("--set-group", dest="set_group")
     p.add_argument("--set-owner", dest="set_owner")
     p.add_argument("--ttl")
+
+    p = sub.add_parser("sweep", parents=[out], help="destroy boxes past their clock")
+    p.add_argument("--follow", metavar="LEASE")
 
     p = sub.add_parser("config", parents=[out], help="show or change configuration")
     action = p.add_subparsers(dest="action", parser_class=Parser, required=True)

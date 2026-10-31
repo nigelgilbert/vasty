@@ -372,6 +372,12 @@ class TagEntry:
 
 
 @dataclass
+class SweepResult:
+    swept: list[SweptEntry]
+    warnings: list[WarningItem]
+
+
+@dataclass
 class TagResult:
     results: list[TagEntry]
     warnings: list[WarningItem]
