@@ -289,7 +289,7 @@ cuda = 13
 Done:
 
 - Every verb above, in `src/vasty/`.
-- 1091 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
+- 1118 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
 - One funded live run on Vast, 2026-10-29. Every phase passed except `serve`. See [docs/live-test-report.md](docs/live-test-report.md).
 
 Not done:
