@@ -228,7 +228,7 @@ Per-box spend is `max_price` times `ttl`: `max_price` filters offers by dollars 
 
 For runway, read `credit` over `burn_per_hr`. When the balance or charges are unavailable, those totals are null and `status` warns with `spend_unavailable`.
 
-A lease's `cost` sums Vast's charge rows for its instance since 00:00 UTC on the day the oldest cached lease was created. A box adopted with `tag`, or an orphan, reports only the rows from that day on. `release` reports the same figure. `cost: null` means Vast has posted no row yet. `price_per_hr` times `uptime_s` approximates it.
+A lease's `cost` sums the Vast charge rows available for its instance. A box adopted with `tag`, or an orphan, can show partial history. `release` reports the same figure. `cost` is null when no charge row is available, and `status` warns `spend_unavailable` when the read failed. `price_per_hr` times `uptime_s` approximates it.
 
 ## State
 
