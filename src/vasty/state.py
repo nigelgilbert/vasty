@@ -7,9 +7,22 @@ name a lease by its id, which resolves for every owner.
 from __future__ import annotations
 
 import shlex
+from typing import TYPE_CHECKING
 
-from vasty.models import HISTORY_STATES, CachedLease, Label, LeaseState, ProbeResult, WarningItem
+from vasty.models import (
+    HISTORY_STATES,
+    CachedLease,
+    Instance,
+    Label,
+    LeaseState,
+    ProbeResult,
+    WarningItem,
+)
 from vasty.timeutil import format_duration
+
+if TYPE_CHECKING:
+    from vasty.config import Settings
+    from vasty.engine import Snapshot
 
 GUARD_LAYERS: tuple[str, ...] = ("watchdog", "destroy_key", "clock_file")
 LIVE_JOB_STATES: frozenset[str] = frozenset({"running", "serving"})
@@ -34,6 +47,7 @@ _FIXES: dict[str, list[str]] = {
     "startup_failed": ["vasty", "ssh", _L, "--", "cat", "/workspace/.vasty/startup.log"],
     "expired_with_running_jobs": ["vasty", "status", _L],
     "flag_mismatch": ["vasty", "status", _L],
+    "idle_box_available": ["vasty", "status", _L],
     "label_unreadable": ["vasty", "release", _L],
     "spend_unavailable": ["vasty", "status"],
     "clock_unverified": ["vasty", "status"],
@@ -125,6 +139,75 @@ def busy(lease: CachedLease) -> bool | None:
     if lease.state != "running":
         return None
     return any(job.state in LIVE_JOB_STATES or job.state == "unknown" for job in lease.jobs)
+
+
+def gpu_matches(wanted: str, actual: str | None) -> bool:
+    """Return True when `actual` is one of the GPU names `wanted` selects."""
+    from vasty.provider import gpu_name_filter
+
+    if actual is None:
+        return False
+    rule = gpu_name_filter(wanted)
+    names = [rule["eq"]] if "eq" in rule else list(rule.get("in", []))
+    return actual.lower() in {str(n).lower() for n in names}
+
+
+def hardware_mismatch(
+    lease: CachedLease, inst: Instance | None, settings: Settings, ports: list[int] | None
+) -> list[str]:
+    """Return the settings keys the lease fails to meet.
+
+    Keys come back in the order `gpu`, `vram`, `gpus`, `max_price`, `image`,
+    `cuda`, `ports`. `image` is checked when the lease records one. `cuda`
+    reads `cuda_max_good` from the instance row `inst` when the settings
+    carry a floor, and an absent row or value counts as a mismatch. `ports`
+    is checked when the caller passes them.
+    """
+    out: list[str] = []
+    if settings.gpu and not gpu_matches(settings.gpu, lease.gpu):
+        out.append("gpu")
+    if settings.vram is not None and (lease.vram_gb is None or lease.vram_gb < settings.vram):
+        out.append("vram")
+    if settings.gpus != lease.gpus:
+        out.append("gpus")
+    if lease.price_per_hr > settings.max_price:
+        out.append("max_price")
+    if lease.image is not None and settings.image != lease.image:
+        out.append("image")
+    if settings.cuda is not None:
+        cuda = inst.cuda_max_good if inst is not None else None
+        if cuda is None or cuda < settings.cuda:
+            out.append("cuda")
+    if ports is not None and any(p not in lease.ports for p in ports):
+        out.append("ports")
+    return out
+
+
+def reuse_candidates(
+    snap: Snapshot, settings: Settings, ttl: int, now: int, ports: list[int] | None
+) -> list[tuple[CachedLease, int]]:
+    """Return up to three idle leases that fit the settings, each with its TTL shortfall.
+
+    A candidate belongs to `settings.owner`, is `running` and reached, has no
+    destroy pending, a startup hook that exited 0, no live tracked job, no
+    `hardware_mismatch` and time left. Every managed lease has a guard of
+    `full` or `partial`, so the guard needs no check. The shortfall is the
+    seconds the lease falls short of `ttl`, 0 when it outlasts it. Leases
+    with no shortfall come first, then most time left first.
+    """
+    found: list[tuple[CachedLease, int, int]] = []
+    for lease in snap.active():
+        if lease.label.owner != settings.owner or lease.state != "running":
+            continue
+        if lease.reachable_at is None or lease.destroy_pending or lease.startup_exit != 0:
+            continue
+        if busy(lease) or hardware_mismatch(lease, snap.instance(lease.instance_id), settings, ports):
+            continue
+        remaining = ttl_remaining(lease.label, now)
+        if remaining > 0:
+            found.append((lease, max(0, ttl - remaining), remaining))
+    found.sort(key=lambda item: (item[1] > 0, -item[2]))
+    return [(lease, shortfall) for lease, shortfall, _ in found[:3]]
 
 
 def startup_failed(lease: CachedLease) -> bool:

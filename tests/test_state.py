@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from decimal import Decimal
 from typing import Any
 
 import pytest
 
-from vasty.models import CachedLease, Job, Label, LeaseState, ProbeResult
+from vasty.config import Settings
+from vasty.engine import Snapshot
+from vasty.models import CachedLease, Instance, Job, Label, LeaseState, ProbeResult
 from vasty.state import (
     busy,
     derive_state,
     effective_expiry,
     fix_for,
     guard,
+    hardware_mismatch,
     lease_warnings,
     make_warning,
     resolve_state,
+    reuse_candidates,
     ttl_remaining,
 )
 from vasty.timeutil import format_duration
@@ -271,6 +277,7 @@ def test_fixes_use_the_lease_id_and_shell_quote_it() -> None:
         ("startup_failed", "l-1", "vasty ssh l-1 -- cat /workspace/.vasty/startup.log"),
         ("expired_with_running_jobs", "l-1", "vasty status l-1"),
         ("flag_mismatch", "l-1", "vasty status l-1"),
+        ("idle_box_available", "l-1", "vasty status l-1"),
         ("label_unreadable", "i-7", "vasty release i-7"),
         ("spend_unavailable", None, "vasty status"),
         ("clock_unverified", None, "vasty status"),
@@ -313,3 +320,124 @@ def test_fix_errors() -> None:
 )
 def test_busy(state: LeaseState, jobs: list[str], expected: bool | None) -> None:
     assert busy(lease(state, jobs=[job("j-1", s) for s in jobs])) is expected
+
+
+# Hardware match and reuse candidates.
+
+
+def settings(**kw: Any) -> Settings:
+    base: dict[str, Any] = dict(
+        owner="claude", api_key_env="VAST_API_KEY", ssh_key=None, ttl=1800, run_ttl=1800,
+        max_price=Decimal("1.00"), warn_before_expiry=WARN, disk=50, gpus=1, image="img:1",
+    )
+    base.update(kw)
+    return Settings(**base)
+
+
+def box(lease_id: str = "l-8b12", instance_id: int = 1001, expires: int = NOW + 3600,
+        **kw: Any) -> CachedLease:
+    base: dict[str, Any] = dict(
+        gpu="RTX 3060", gpus=1, vram_gb=12.0, price_per_hr=Decimal("0.10"), image="img:1",
+        ports={22: 40022, 8000: 40080}, reachable_at=NOW - 60, startup_exit=0,
+    )
+    base.update(kw)
+    lab = label(lease=lease_id, expires=expires)
+    return CachedLease(lease=lease_id, instance_id=instance_id, label=lab, state="running", **base)
+
+
+def row(instance_id: int = 1001, cuda: float | None = 12.8) -> Instance:
+    return Instance(
+        id=instance_id, label=None, actual_status="running", gpu_name="RTX 3060", num_gpus=1,
+        gpu_ram_gb=12.0, dph_total=Decimal("0.10"), public_ipaddr=None, ssh_host=None,
+        ssh_port=None, cuda_max_good=cuda,
+    )
+
+
+def test_hardware_match_is_empty() -> None:
+    wanted = settings(gpu="3060", vram=12, cuda=12.4)
+    assert hardware_mismatch(box(), row(), wanted, [22, 8000]) == []
+
+
+@pytest.mark.parametrize(
+    ("lease_kw", "settings_kw", "key"),
+    [
+        ({}, {"gpu": "4090"}, "gpu"),
+        ({}, {"vram": 16}, "vram"),
+        ({}, {"gpus": 2}, "gpus"),
+        ({}, {"image": "img:2"}, "image"),
+        ({}, {"max_price": Decimal("0.05")}, "max_price"),
+    ],
+)
+def test_hardware_mismatch_clause(lease_kw: dict[str, Any], settings_kw: dict[str, Any], key: str) -> None:
+    assert hardware_mismatch(box(**lease_kw), row(), settings(**settings_kw), None) == [key]
+
+
+def test_hardware_mismatch_skips_image_the_lease_lacks() -> None:
+    assert hardware_mismatch(box(image=None), row(), settings(image="img:2"), None) == []
+
+
+def test_hardware_mismatch_cuda_below_floor() -> None:
+    assert hardware_mismatch(box(), row(cuda=12.4), settings(cuda=13), None) == ["cuda"]
+
+
+def test_hardware_mismatch_cuda_unknown_with_floor() -> None:
+    assert hardware_mismatch(box(), row(cuda=None), settings(cuda=12), None) == ["cuda"]
+    assert hardware_mismatch(box(), None, settings(cuda=12), None) == ["cuda"]
+
+
+def test_hardware_mismatch_cuda_unknown_without_floor() -> None:
+    assert hardware_mismatch(box(), None, settings(), None) == []
+
+
+def test_hardware_mismatch_ports() -> None:
+    assert hardware_mismatch(box(ports={22: 40022}), row(), settings(), [8000]) == ["ports"]
+    assert hardware_mismatch(box(ports={22: 40022}), row(), settings(), None) == []
+
+
+def snapshot(*leases: CachedLease) -> Snapshot:
+    rows = [row(lease.instance_id) for lease in leases]
+    return Snapshot(now=NOW, instances=rows, leases={lease.lease: lease for lease in leases},
+                    orphans=[], unreadable=[])
+
+
+def test_reuse_candidate_carries_shortfall() -> None:
+    snap = snapshot(box(expires=NOW + 600))
+    [(found, shortfall)] = reuse_candidates(snap, settings(gpu="3060"), 1800, NOW, None)
+    assert (found.lease, shortfall) == ("l-8b12", 1200)
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"jobs": [job("j-1", "running")]},
+        {"label": label(owner="nick", expires=NOW + 3600)},
+        {"state": "pending"},
+        {"destroy_pending": True},
+        {"startup_exit": 1},
+        {"label": label(expires=NOW)},
+        {"reachable_at": None},
+        {"gpu": "RTX 4090"},
+    ],
+)
+def test_reuse_candidates_exclude(kw: dict[str, Any]) -> None:
+    snap = snapshot(replace(box(), **kw))
+    assert reuse_candidates(snap, settings(gpu="3060"), 1800, NOW, None) == []
+
+
+def test_reuse_candidates_pass_ports() -> None:
+    snap = snapshot(box(ports={22: 40022}))
+    assert reuse_candidates(snap, settings(), 1800, NOW, [8000]) == []
+    assert len(reuse_candidates(snap, settings(), 1800, NOW, None)) == 1
+
+
+def test_reuse_candidates_tier_one_first_and_cap_at_three() -> None:
+    snap = snapshot(
+        box("l-1", 1, expires=NOW + 600),
+        box("l-2", 2, expires=NOW + 2400),
+        box("l-3", 3, expires=NOW + 900),
+        box("l-4", 4, expires=NOW + 3600),
+    )
+    found = reuse_candidates(snap, settings(), 1800, NOW, None)
+    assert [(lease.lease, shortfall) for lease, shortfall in found] == [
+        ("l-4", 0), ("l-2", 0), ("l-3", 900),
+    ]

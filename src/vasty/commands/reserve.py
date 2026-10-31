@@ -39,7 +39,15 @@ from vasty.models import (
     SweptEntry,
     WarningItem,
 )
-from vasty.state import GUARD_LAYERS, effective_expiry, guard, lease_warnings, make_warning
+from vasty.state import (
+    GUARD_LAYERS,
+    effective_expiry,
+    gpu_matches,
+    guard,
+    hardware_mismatch,
+    lease_warnings,
+    make_warning,
+)
 from vasty.timeutil import format_duration, iso
 
 if TYPE_CHECKING:
@@ -89,7 +97,7 @@ def reserve_lease(
     with ctx.cache.lock():
         hit = _name_hit(ctx, snap, name, owner) if name is not None else None
         if hit is not None:
-            mismatch = flag_mismatch(ctx, args, hit, ttl, ports)
+            mismatch = flag_mismatch(ctx, args, hit, snap.instance(hit.instance_id), ttl, ports)
             if mismatch is not None:
                 warnings.append(mismatch)
         else:
@@ -174,20 +182,19 @@ def _name_hit(ctx: Context, snap: Snapshot, name: str, owner: str) -> CachedLeas
     return hits[0] if hits else None
 
 
-def _gpu_matches(wanted: str, actual: str | None) -> bool:
-    from vasty.provider import gpu_name_filter
-
-    if actual is None:
-        return False
-    rule = gpu_name_filter(wanted)
-    names = [rule["eq"]] if "eq" in rule else list(rule.get("in", []))
-    return actual.lower() in {str(n).lower() for n in names}
-
-
 def flag_mismatch(
-    ctx: Context, args: argparse.Namespace, lease: CachedLease, ttl: int, ports: list[int]
+    ctx: Context,
+    args: argparse.Namespace,
+    lease: CachedLease,
+    inst: Instance | None,
+    ttl: int,
+    ports: list[int],
 ) -> WarningItem | None:
-    """Return the `flag_mismatch` warning listing flags the reused lease does not match."""
+    """Return the `flag_mismatch` warning listing flags the reused lease does not match.
+
+    Hardware keys come from `hardware_mismatch` on the instance row `inst`,
+    kept when a flag set them. Ports are checked when the lease has a mapping.
+    """
     settings = ctx.settings
     given = {key for key, source in settings.sources.items() if source == "flag"}
     differ: list[str] = []
@@ -196,20 +203,8 @@ def flag_mismatch(
         differ.append("--group")
     if "ttl" in given and ttl != lease.label.ttl:
         differ.append("--ttl")
-    if "gpu" in given and settings.gpu and not _gpu_matches(settings.gpu, lease.gpu):
-        differ.append("--gpu")
-    if "vram" in given and settings.vram is not None and (
-        lease.vram_gb is None or lease.vram_gb < settings.vram
-    ):
-        differ.append("--vram")
-    if "gpus" in given and settings.gpus != lease.gpus:
-        differ.append("--gpus")
-    if "max_price" in given and lease.price_per_hr > settings.max_price:
-        differ.append("--max-price")
-    if "image" in given and lease.image is not None and settings.image != lease.image:
-        differ.append("--image")
-    if "ports" in given and lease.ports and any(p not in lease.ports for p in ports):
-        differ.append("--ports")
+    hardware = hardware_mismatch(lease, inst, settings, ports if lease.ports else None)
+    differ += ["--" + key.replace("_", "-") for key in hardware if key in given]
     if not differ:
         return None
     message = f"lease {lease.lease} differs from {', '.join(differ)}"
@@ -221,7 +216,7 @@ def _offer_ok(offer: Offer, query: OfferQuery) -> bool:
         return False
     if query.vram_min_gb is not None and offer.gpu_ram_gb < query.vram_min_gb:
         return False
-    return not query.gpu or _gpu_matches(query.gpu, offer.gpu_name)
+    return not query.gpu or gpu_matches(query.gpu, offer.gpu_name)
 
 
 def rank_offers(offers: list[Offer], query: OfferQuery) -> list[Offer]:
