@@ -658,6 +658,59 @@ def test_name_hit_warns_on_flag_mismatch(h: Harness) -> None:
     assert calls(h, "create") == []
 
 
+def test_name_hit_warns_on_cuda_below_flag(h: Harness) -> None:
+    add_lease(h, label={"name": "ft"}, cuda_max_good=12.4)
+    _, data = run_json(h, "reserve", "--name", "ft", "--cuda", "13")
+    (warning,) = data["warnings"]
+    assert warning["message"] == "lease l-0000a001 differs from --cuda"
+
+
+def idle(data: dict[str, Any]) -> list[dict[str, Any]]:
+    return [w for w in data["warnings"] if w["code"] == "idle_box_available"]
+
+
+def test_reserve_warns_idle_box_available(h: Harness) -> None:
+    add_lease(h, label={"name": "ft"}, gpu_name="RTX 3060", gpu_ram_gb=12.0)
+    code, data = run_json(h, "reserve")
+    assert code == 0, data
+    assert data["reused"] is False
+    assert idle(data) == [{
+        "code": "idle_box_available", "lease": "l-0000a001",
+        "message": "lease l-0000a001 (ft) is idle: RTX 3060, 1x12 GB, 50m left",
+        "fix": "vasty status l-0000a001",
+    }]
+
+
+def test_name_miss_warns_idle_box_available(h: Harness) -> None:
+    add_lease(h, label={"name": "ft"})
+    _, data = run_json(h, "reserve", "--name", "other", "--ttl", "1h")
+    assert data["reused"] is False
+    [warning] = idle(data)
+    assert warning["message"] == (
+        "lease l-0000a001 (ft) is idle: RTX 3090, 1x24 GB, 50m left, 10m short; extend --to 1h"
+    )
+
+
+def test_four_idle_boxes_yield_three_warnings(h: Harness) -> None:
+    for lease, left in (("l-0000a001", 600), ("l-0000a002", 2400), ("l-0000a003", 900),
+                        ("l-0000a004", 3600)):
+        add_lease(h, lease, label={"expires": NOW + left})
+    _, data = run_json(h, "reserve")
+    assert [(w["lease"], w["message"].split(": ")[1]) for w in idle(data)] == [
+        ("l-0000a004", "RTX 3090, 1x24 GB, 1h left"),
+        ("l-0000a002", "RTX 3090, 1x24 GB, 40m left"),
+        ("l-0000a003", "RTX 3090, 1x24 GB, 15m left, 15m short; extend --to 30m"),
+    ]
+
+
+def test_name_hit_emits_no_idle_box_available(h: Harness) -> None:
+    add_lease(h, "l-0000a001", label={"name": "ft"})
+    add_lease(h, "l-0000a002", label={"name": "other"})
+    _, data = run_json(h, "reserve", "--name", "ft")
+    assert data["reused"] is True
+    assert idle(data) == []
+
+
 def test_name_scoped_to_owner(h: Harness) -> None:
     add_lease(h, "l-0000a001", label={"name": "ft", "owner": "nick"})
     _, data = run_json(h, "reserve", "--name", "ft")

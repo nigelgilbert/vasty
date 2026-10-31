@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from fakes import Harness, make_offer
+from fakes import Harness, add_lease, make_offer
 from vasty.labels import parse
 from vasty.models import CreateRequest, Instance, Label
 from vasty.provider import build_offer_query
@@ -74,6 +74,33 @@ def test_auto_reserved_serve_returns_endpoint(h: Harness) -> None:
     assert data["api_key"].startswith("vasty-")
     assert h.provider.created[0].image == "vllm/vllm-openai:v0.32.0"
     assert len(h.provider.instances) == 1
+
+
+def idle(data: dict[str, Any]) -> list[tuple[str, str, str]]:
+    return [(w["lease"], w["message"], w["fix"]) for w in data["warnings"]
+            if w["code"] == "idle_box_available"]
+
+
+def test_auto_reserved_run_warns_idle_box_available(h: Harness) -> None:
+    add_lease(h, "l-0000a001", gpu_name="RTX 3060", gpu_ram_gb=12.0)
+    code, data = run_json(h, "run", "--", "python", "train.py")
+    assert code == 0, data
+    assert idle(data) == [(
+        "l-0000a001",
+        "lease l-0000a001 is idle: RTX 3060, 1x12 GB, 50m left, 1h10m short; extend --to 2h",
+        "vasty status l-0000a001",
+    )]
+
+
+def test_auto_reserved_serve_warns_idle_box_with_serve_port(h: Harness) -> None:
+    add_lease(h, "l-0000a001")
+    add_lease(h, "l-0000a002", ports={22: 40022})
+    code, data = run_json(h, "serve", "--model", "Qwen/Qwen3-14B-AWQ",
+                          "--image", "vllm/vllm-openai:v0.32.0", "--max-price", "2")
+    assert code == 0, data
+    assert [(lease, fix) for lease, _, fix in idle(data)] == [
+        ("l-0000a001", "vasty status l-0000a001"),
+    ]
 
 
 def test_serve_profile_sends_hardware_to_search(h: Harness) -> None:

@@ -422,9 +422,9 @@ def test_serve_failure_keeps_reused_box(harness: Harness, reserve: FakeReserve, 
 def test_serve_reports_reserve_wait_sweep(
     harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch, ok: bool
 ) -> None:
-    def wait(ctx: Any, args: Any, snap: Any, *, ttl: int, wait: bool = True) -> Any:
+    def wait(ctx: Any, args: Any, snap: Any, *, ttl: int, wait: bool = True, **kw: Any) -> Any:
         add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
-        return reserve(ctx, args, snap, ttl=ttl, wait=wait)
+        return reserve(ctx, args, snap, ttl=ttl, wait=wait, **kw)
 
     monkeypatch.setattr("vasty.commands.reserve.reserve_lease", wait)
     if not ok:

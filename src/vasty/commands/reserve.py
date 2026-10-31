@@ -47,6 +47,8 @@ from vasty.state import (
     hardware_mismatch,
     lease_warnings,
     make_warning,
+    reuse_candidates,
+    ttl_remaining,
 )
 from vasty.timeutil import format_duration, iso
 
@@ -71,7 +73,13 @@ class Reserved:
 
 
 def reserve_lease(
-    ctx: Context, args: argparse.Namespace, snap: Snapshot, *, ttl: int, wait: bool
+    ctx: Context,
+    args: argparse.Namespace,
+    snap: Snapshot,
+    *,
+    ttl: int,
+    wait: bool,
+    reuse_ports: list[int] | None = None,
 ) -> Reserved:
     """Reserve a box from the creation flags in `args` and `ctx.settings`.
 
@@ -79,6 +87,9 @@ def reserve_lease(
     readiness wait. `run` and `serve` call this for auto-reserve. Raise
     `VastyError` on failure; a box this call created and then gave up on is
     destroyed before the error propagates.
+
+    A creation adds one `idle_box_available` warning per reuse candidate.
+    `reuse_ports` lists the ports a candidate has mapped.
     """
     settings = ctx.settings
     name = getattr(args, "name", None)
@@ -101,6 +112,8 @@ def reserve_lease(
             if mismatch is not None:
                 warnings.append(mismatch)
         else:
+            for idle, shortfall in reuse_candidates(snap, settings, ttl, snap.now, reuse_ports):
+                warnings.append(idle_warning(idle, shortfall, ttl, snap.now))
             custom = settings.image != DEFAULT_IMAGE
             onstart_cmd = onstart.build_onstart(ttl, settings.startup, custom)
             query = OfferQuery(
@@ -209,6 +222,21 @@ def flag_mismatch(
         return None
     message = f"lease {lease.lease} differs from {', '.join(differ)}"
     return make_warning("flag_mismatch", lease.lease, message)
+
+
+def idle_warning(lease: CachedLease, shortfall: int, ttl: int, now: int) -> WarningItem:
+    """Return the `idle_box_available` warning for a reuse candidate.
+
+    A candidate short of `ttl` names the shortfall and the `extend --to` that
+    covers it.
+    """
+    named = f"{lease.lease} ({lease.label.name})" if lease.label.name else lease.lease
+    vram = "?" if lease.vram_gb is None else str(int(lease.vram_gb))
+    left = format_duration(ttl_remaining(lease.label, now))
+    message = f"lease {named} is idle: {lease.gpu or '?'}, {lease.gpus}x{vram} GB, {left} left"
+    if shortfall:
+        message += f", {format_duration(shortfall)} short; extend --to {format_duration(ttl)}"
+    return make_warning("idle_box_available", lease.lease, message)
 
 
 def _offer_ok(offer: Offer, query: OfferQuery) -> bool:
