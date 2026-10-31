@@ -154,9 +154,11 @@ class ProbeResult:
     startup_interrupted: bool = False
     """Set when the hook started, the container restarted, and no exit marker exists."""
     guard_file: bool = False
-    """Set when `onstart` or the adoption script has written the guard file."""
+    """Set when the watchdog has written the guard file."""
     adopted: bool = False
     """Set when the adoption script has written its `adopted` marker."""
+    box_now: int | None = None
+    """The box's `date +%s` when the probe ran, or None when it printed nothing numeric."""
 
 
 LeaseState = Literal[
@@ -211,7 +213,11 @@ class CachedLease:
     adopt_at: int | None = None
     """When the last adoption rerun ran."""
     unsupported: list[str] = field(default_factory=list)
-    """What the last probe found missing from a custom image; non-empty maps to `image_unsupported`."""
+    """What the last probe found missing from the image; non-empty maps to `image_unsupported`."""
+    clock_skew: int | None = None
+    """Box clock minus provider clock in seconds, from the last probe under a verified clock."""
+    clock_skew_unknown: bool = False
+    """Set when the last probe returned no box time."""
 
 
 # Output shapes.
@@ -252,8 +258,6 @@ class LeaseView:
     group: str | None
     owner: str | None
     state: str
-    guard: str | None
-    guard_missing: list[str] | None
     gpu: str | None
     gpus: int
     vram_gb: float | None
@@ -295,8 +299,6 @@ class ReserveResult:
     owner: str
     group: str | None
     state: str
-    guard: str
-    guard_missing: list[str]
     reused: bool
     gpu: str | None
     gpus: int
@@ -367,8 +369,6 @@ class TagEntry:
     owner: str
     expires_at: str | None
     ttl_remaining_s: int | None
-    guard: str
-    guard_missing: list[str]
 
 
 @dataclass

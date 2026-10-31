@@ -13,7 +13,7 @@ from vasty.models import Label
 
 PUB = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample test@host"
 ENTRY_KEYS = {
-    "lease", "name", "group", "owner", "expires_at", "ttl_remaining_s", "guard", "guard_missing",
+    "lease", "name", "group", "owner", "expires_at", "ttl_remaining_s",
 }
 
 
@@ -62,7 +62,7 @@ def test_set_group_rewrites_label_and_keeps_clock(h: Harness) -> None:
         "l-0000a001", "ft", "exp42", "claude")
     assert entry["expires_at"] == "2026-10-29T01:10:00Z"
     assert entry["ttl_remaining_s"] == 600
-    assert (entry["guard"], entry["guard_missing"]) == ("full", [])
+    assert data["warnings"] == []
     label = label_of(h, row.id)
     assert (label.group, label.expires, label.extra) == ("exp42", NOW + 600, {"note": "x"})
     assert h.box.clock_writes == []
@@ -219,7 +219,7 @@ def test_adopt_orphan_writes_label_clock_and_key(h: Harness) -> None:
     assert entry["owner"] == "claude"
     assert entry["expires_at"] == "2026-10-29T01:30:00Z"
     assert entry["ttl_remaining_s"] == 1800
-    assert (entry["guard"], entry["guard_missing"]) == ("full", [])
+    assert data["warnings"] == []
     label = label_of(h, iid)
     assert (label.lease, label.owner, label.created, label.ttl, label.expires) == (
         "l-abababab", "claude", NOW, 1800, NOW + 1800)
@@ -230,6 +230,18 @@ def test_adopt_orphan_writes_label_clock_and_key(h: Harness) -> None:
     assert lease.adopted is True
     assert lease.state == "running"
     assert data["warnings"] == []
+
+
+def test_adopt_writes_the_clock_in_box_time(h: Harness) -> None:
+    iid = orphan(h)
+    h.box.state(iid).clock_offset = 90
+    code, data = run_json(h, "tag", "i-55120", "--ttl", "30m")
+    assert code == 0, data
+    assert label_of(h, iid).expires == NOW + 1800
+    assert h.box.state(iid).clock == NOW + 1800 + 90
+    _, status = run_json(h, "status", "l-abababab")
+    assert status["warnings"] == []
+    assert h.box.state(iid).clock == NOW + 1800 + 90
 
 
 def test_adopt_orphan_with_setters(h: Harness) -> None:
@@ -261,9 +273,8 @@ def test_adopt_partial_guard_keeps_label(h: Harness) -> None:
     h.box.state(iid).adopt_missing = ["destroy_key"]
     code, data = run_json(h, "tag", "i-55120", "--ttl", "30m")
     assert code == 0
-    (entry,) = data["results"]
-    assert (entry["guard"], entry["guard_missing"]) == ("partial", ["destroy_key"])
     assert [w["code"] for w in data["warnings"]] == ["guard_partial"]
+    assert data["warnings"][0]["message"] == "destroy key missing"
     assert data["warnings"][0]["fix"] == "vasty release l-abababab"
     assert label_of(h, iid).lease == "l-abababab"
     assert label_of(h, iid).miss == ["destroy_key"]
@@ -273,10 +284,9 @@ def test_adopt_unreachable_box_keeps_label_with_partial_guard(h: Harness) -> Non
     iid = orphan(h, reachable=False)
     code, data = run_json(h, "tag", "i-55120", "--ttl", "30m")
     assert code == 0
-    (entry,) = data["results"]
-    assert entry["guard"] == "partial"
-    assert entry["guard_missing"] == ["watchdog", "destroy_key", "clock_file"]
-    assert "guard_partial" in [w["code"] for w in data["warnings"]]
+    partial = [w for w in data["warnings"] if w["code"] == "guard_partial"]
+    assert partial[0]["message"] == (
+        "watchdog not running or without curl, destroy key missing, clock file out of sync")
     assert label_of(h, iid).expires == NOW + 1800
     assert label_of(h, iid).miss == ["watchdog", "destroy_key", "clock_file"]
     lease = h.context().cache.load().leases["l-abababab"]
@@ -290,7 +300,7 @@ def test_adopt_retried_by_later_probe(h: Harness) -> None:
     h.box.state(iid).guard_missing = ["watchdog"]
     h.box.state(iid).adopt_missing = []
     _, data = run_json(h, "status", "l-abababab")
-    assert data["leases"][0]["guard"] == "full"
+    assert data["warnings"] == []
 
 
 def test_failed_key_attach_is_retried_and_adoption_finishes(h: Harness) -> None:
@@ -299,7 +309,7 @@ def test_failed_key_attach_is_retried_and_adoption_finishes(h: Harness) -> None:
     h.provider.fail["attach_ssh_key"] = VastyError("provider_error", "boom", "Run vasty status.")
     code, data = run_json(h, "tag", "i-55120", "--ttl", "30m")
     assert code == 0
-    assert data["results"][0]["guard"] == "partial"
+    assert "guard_partial" in [w["code"] for w in data["warnings"]]
     assert h.provider.attached == []
     run_json(h, "status")
     assert h.provider.attached == [(PUB, iid)]
@@ -307,7 +317,7 @@ def test_failed_key_attach_is_retried_and_adoption_finishes(h: Harness) -> None:
     box.startup_started, box.startup_exit = False, None
     h.time.advance(5)
     _, data = run_json(h, "status", "l-abababab")
-    assert data["leases"][0]["guard"] == "full"
+    assert data["warnings"] == []
     assert h.box.adopts == [iid]
     assert label_of(h, iid).miss == []
 
@@ -322,7 +332,7 @@ def test_adoption_retry_survives_cache_loss(h: Harness) -> None:
     box = h.box.state(iid)
     box.startup_started, box.startup_exit = False, None
     _, status = run_json(h, "status", "l-abababab")
-    assert status["leases"][0]["guard"] == "full"
+    assert status["warnings"] == []
     assert h.box.adopts == [iid]
     assert box.clock == NOW + 1800
     assert label_of(h, iid).miss == []

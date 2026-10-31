@@ -30,7 +30,13 @@ from vasty.models import (
     SshKey,
 )
 from vasty.provider import ProviderTimeout, parse_charges
-from vasty.remote import BoxUnreachableError, ExecResult, SshTarget, following_job_id
+from vasty.remote import (
+    CLOCK_TOLERANCE_S,
+    BoxUnreachableError,
+    ExecResult,
+    SshTarget,
+    following_job_id,
+)
 from vasty.timeutil import day_start
 
 START = 1_793_232_000  # 2026-10-29T00:00:00Z
@@ -202,6 +208,10 @@ class BoxState:
 
     clock: int | None = None
     clock_readable: bool = True
+    clock_offset: int = 0
+    """Box clock minus the harness clock; the clock file is kept in box time."""
+    box_now_hidden: bool = False
+    """Set to make the probe return no box time."""
     guard_missing: list[str] = field(default_factory=list)
     startup_started: bool = True
     startup_exit: int | None = 0
@@ -221,7 +231,7 @@ class BoxState:
     """Errors `exec` raises for a command that starts with the key."""
     unsupported: list[str] = field(default_factory=list)
     guard_file: bool = False
-    """Set when `onstart` or `adopt` has written the guard file."""
+    """Set when the watchdog has written the guard file."""
     adopted: bool = False
     """Set when `adopt` has written its `adopted` marker."""
 
@@ -248,16 +258,37 @@ class FakeBox:
             raise BoxUnreachableError()
         return box
 
-    def probe(self, target: SshTarget, label_expires: int | None, timeout: float = 5.0) -> ProbeResult:
+    def _box_now(self, box: BoxState) -> int:
+        return int(self.time.wall_now) + box.clock_offset
+
+    def _translate(self, box: BoxState, expires: int, provider_now: int | None) -> int:
+        if provider_now is None:
+            return expires
+        return expires + self._box_now(box) - provider_now
+
+    def probe(
+        self,
+        target: SshTarget,
+        label_expires: int | None,
+        provider_now: int | None = None,
+        timeout: float = 5.0,
+    ) -> ProbeResult:
         box = self._get(target)
-        if label_expires is not None and box.clock != label_expires and not box.clock_write_fails:
-            box.clock = label_expires
-            box.clock_readable = True
+        target_clock = None
+        if label_expires is not None:
+            target_clock = self._translate(box, label_expires, provider_now)
+            off = box.clock is None or abs(box.clock - target_clock) > CLOCK_TOLERANCE_S
+            if off and not box.clock_write_fails:
+                box.clock = target_clock
+                box.clock_readable = True
         missing = list(box.guard_missing)
         if box.alive_mtime is not None and self.time.wall_now - box.alive_mtime > 180:
             if "watchdog" not in missing:
                 missing.append("watchdog")
-        if label_expires is not None and box.clock != label_expires and "clock_file" not in missing:
+        off = box.clock is None or (
+            target_clock is not None and abs(box.clock - target_clock) > CLOCK_TOLERANCE_S
+        )
+        if off and "clock_file" not in missing:
             missing.append("clock_file")
         return ProbeResult(
             clock_expires=box.clock if box.clock_readable else None,
@@ -270,20 +301,21 @@ class FakeBox:
             unsupported=list(box.unsupported),
             guard_file=box.guard_file,
             adopted=box.adopted,
+            box_now=None if box.box_now_hidden else self._box_now(box),
         )
 
-    def write_clock(self, target: SshTarget, expires: int) -> None:
+    def write_clock(self, target: SshTarget, expires: int, provider_now: int | None = None) -> None:
         box = self._get(target)
         if box.clock_write_fails:
             raise BoxUnreachableError("clock write failed")
-        box.clock = expires
+        box.clock = self._translate(box, expires, provider_now)
         box.clock_readable = True
         self.clock_writes.append((target.instance_id, expires))
 
-    def adopt(self, target: SshTarget, expires: int) -> list[str]:
+    def adopt(self, target: SshTarget, expires: int, provider_now: int | None = None) -> list[str]:
         box = self._get(target)
         self.adopts.append(target.instance_id)
-        box.clock = expires
+        box.clock = self._translate(box, expires, provider_now)
         box.guard_file = True
         box.startup_started = True
         box.adopted = True
@@ -524,17 +556,15 @@ class FakeReserve:
 def reserve_result(lease: Any, now: int, reused: bool, warnings: list[Any], swept: list[Any]) -> Any:
     """Build a `ReserveResult` for a cached lease."""
     from vasty.models import ReserveResult
-    from vasty.state import effective_expiry, guard
+    from vasty.state import effective_expiry
     from vasty.timeutil import iso
     from vasty.views import endpoint_fields
 
-    level, missing = guard(lease)
     point = endpoint_fields(lease)
     expiry = effective_expiry(lease.label)
     return ReserveResult(
         lease=lease.lease, name=lease.label.name, owner=lease.label.owner,
-        group=lease.label.group, state=lease.state, guard=level, guard_missing=missing,
-        reused=reused, gpu=lease.gpu, gpus=lease.gpus, vram_gb=lease.vram_gb,
+        group=lease.label.group, state=lease.state, reused=reused, gpu=lease.gpu, gpus=lease.gpus, vram_gb=lease.vram_gb,
         price_per_hr=lease.price_per_hr, expires_at=iso(expiry),
         ttl_remaining_s=max(0, expiry - now), ssh=point.ssh, rsync_target=point.rsync_target,
         ssh_port=point.ssh_port, ports=point.ports, warnings=list(warnings), swept=list(swept),

@@ -6,8 +6,8 @@ target whose name or owner changes for name conflicts and formats every new
 label. On an orphan, `tag` writes a new `vasty:` label with `expires = now + ttl`
 and `miss` listing every guard layer, then attaches the SSH key and runs the
 adoption script over SSH. The label stays when a later step fails; the lease
-then shows `guard: partial` and later networked commands retry the missing
-steps (see `engine`).
+then carries a `guard_partial` warning and later networked commands retry the
+missing steps (see `engine`).
 """
 
 from __future__ import annotations
@@ -129,7 +129,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     if ctx.mode == "human":
         lines = [
             f"{e.lease}  name={e.name or '—'}  group={e.group or '—'}  owner={e.owner}  "
-            f"expires {format_duration(e.ttl_remaining_s or 0)}  guard {e.guard}"
+            f"expires {format_duration(e.ttl_remaining_s or 0)}"
             for e in entries
         ]
         human = "\n".join(lines) if lines else "no leases matched"
@@ -241,7 +241,9 @@ def _guard_steps(ctx: Context, lease: CachedLease) -> None:
             ctx.provider.attach_ssh_key(key, lease.instance_id)
         except VastyError as err:
             ctx.warn(f"vasty: could not attach the SSH key to {lease.lease}: {err.message}")
-    missing = ctx.box.adopt(engine.ssh_target(lease), effective_expiry(lease.label))
+    missing = ctx.box.adopt(
+        engine.ssh_target(lease), effective_expiry(lease.label), engine.provider_now(ctx)
+    )
     present = set(missing)
     lease.guard_missing = [layer for layer in GUARD_LAYERS if layer in present]
 

@@ -393,12 +393,12 @@ def test_reconcile_gone_with_time_left(harness: Harness) -> None:
 
 def test_reconcile_adopts_another_machines_lease(harness: Harness) -> None:
     add_lease(harness, "l-0000b001", label={"owner": "nick", "name": "scratch"},
-              gpu_name="RTX 4090", dph_total=Decimal("0.38"), image="vasty/base:cuda12.4")
+              gpu_name="RTX 4090", dph_total=Decimal("0.38"), image="vastai/base-image:cuda-12.6.3-auto")
     snap = refresh(harness)
     lease = snap.leases["l-0000b001"]
     assert lease.state == "running"
     assert (lease.gpu, lease.price_per_hr, lease.image) == ("RTX 4090", Decimal("0.38"),
-                                                             "vasty/base:cuda12.4")
+                                                             "vastai/base-image:cuda-12.6.3-auto")
     assert (lease.ssh_host, lease.ssh_port) == ("198.51.100.9", 40022)
     assert lease.ports == {22: 40022, 8000: 40080, 8080: 40081}
     assert "l-0000b001" in harness.context().cache.load().leases
@@ -466,6 +466,56 @@ def test_probe_copies_clock_file_to_label(harness: Harness) -> None:
     assert label_of(harness, row.id).expires == NOW + 1234
     assert snap.leases["l-0000a001"].label.expires == NOW + 1234
     assert snap.leases["l-0000a001"].reachable_at == NOW
+
+
+def test_probe_copies_clock_file_to_label_minus_skew(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": None})
+    box = harness.box.state(row.id)
+    box.clock_offset = 300
+    box.clock = NOW + 1234 + 300
+    snap = refresh(harness)
+    lease = snap.leases["l-0000a001"]
+    assert label_of(harness, row.id).expires == NOW + 1234
+    assert lease.clock_skew == 300
+    assert lease.clock_skew_unknown is False
+    assert box.clock == NOW + 1234 + 300
+    assert "clock_file" not in lease.guard_missing
+
+
+def test_probe_rewrites_clock_in_box_time(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": NOW + 1800})
+    box = harness.box.state(row.id)
+    box.clock_offset = -500
+    box.clock = NOW + 1800
+    lease = refresh(harness).leases["l-0000a001"]
+    assert box.clock == NOW + 1800 - 500
+    assert lease.clock_skew == -500
+    assert "clock_file" not in lease.guard_missing
+
+
+def test_unverified_clock_skips_translation(harness: Harness) -> None:
+    harness.provider.date_header = False
+    row = add_lease(harness, label={"expires": None})
+    box = harness.box.state(row.id)
+    box.clock_offset = 300
+    box.clock = NOW + 1234
+    lease = refresh(harness).leases["l-0000a001"]
+    assert label_of(harness, row.id).expires == NOW + 1234
+    assert lease.clock_skew is None
+    assert box.clock == NOW + 1234
+
+
+def test_probe_without_box_time_marks_skew_unknown(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": None})
+    box = harness.box.state(row.id)
+    box.box_now_hidden = True
+    box.clock = NOW + 1234
+    lease = refresh(harness).leases["l-0000a001"]
+    assert label_of(harness, row.id).expires == NOW + 1234
+    assert lease.clock_skew is None and lease.clock_skew_unknown is True
+    box.box_now_hidden = False
+    lease = refresh(harness).leases["l-0000a001"]
+    assert lease.clock_skew == 0 and lease.clock_skew_unknown is False
 
 
 def test_probe_writes_and_clears_miss(harness: Harness) -> None:
@@ -682,7 +732,7 @@ def test_failed_adoption_rerun_keeps_layers_in_label(
 
     row = adopted_orphan(harness, reachable=True)
 
-    def fail(target: SshTarget, expires: int) -> list[str]:
+    def fail(target: SshTarget, expires: int, provider_now: int | None = None) -> list[str]:
         raise BoxUnreachableError("adopt failed")
 
     monkeypatch.setattr(harness.box, "adopt", fail)
@@ -698,7 +748,7 @@ def test_held_adoption_rerun_keeps_layers_in_label(
 
     row = adopted_orphan(harness, reachable=True)
 
-    def fail(target: SshTarget, expires: int) -> list[str]:
+    def fail(target: SshTarget, expires: int, provider_now: int | None = None) -> list[str]:
         raise BoxUnreachableError("adopt failed")
 
     monkeypatch.setattr(harness.box, "adopt", fail)
@@ -744,7 +794,7 @@ def test_marker_without_guard_file_or_startup_keeps_layers_and_reruns(
     box.adopted = True
     real_adopt = harness.box.adopt
 
-    def fail(target: SshTarget, expires: int) -> list[str]:
+    def fail(target: SshTarget, expires: int, provider_now: int | None = None) -> list[str]:
         raise BoxUnreachableError("adopt failed")
 
     monkeypatch.setattr(harness.box, "adopt", fail)

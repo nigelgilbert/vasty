@@ -3,8 +3,8 @@
 `extend` takes one `now` for every target. Each lease gets two writes,
 ordered so the earlier-firing enforcer stays behind the reported value: clock
 file then label when lengthening, label then clock file when shortening. A failed second write
-restores the first and returns `provider_error`; the lease shows
-`guard: partial` with `clock_file` missing until the next probe.
+restores the first and returns `provider_error`; the lease carries a
+`guard_partial` warning naming the clock file until the next probe.
 
 Under the `leases.json` lock, `extend` reloads each target from the file and
 computes the new expiry from that copy. A target another local process
@@ -145,7 +145,7 @@ def _mark_partial(lease: CachedLease) -> None:
 
 def _write_clock(ctx: Context, lease: CachedLease, expires: int) -> None:
     try:
-        ctx.box.write_clock(engine.ssh_target(lease), expires)
+        ctx.box.write_clock(engine.ssh_target(lease), expires, engine.provider_now(ctx))
     except OSError as exc:
         raise VastyError("box_unreachable", f"Clock write failed: {exc}.", "Run vasty status.") from exc
 

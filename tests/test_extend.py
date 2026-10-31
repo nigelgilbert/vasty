@@ -44,9 +44,9 @@ def record_writes(h: Harness, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str
         events.append(("label", parsed.expires))
         set_label(instance_id, text)
 
-    def clock(target: SshTarget, expires: int) -> None:
+    def clock(target: SshTarget, expires: int, provider_now: int | None = None) -> None:
         events.append(("clock", expires))
-        write_clock(target, expires)
+        write_clock(target, expires, provider_now)
 
     monkeypatch.setattr(h.provider, "set_label", label)
     monkeypatch.setattr(h.box, "write_clock", clock)
@@ -66,6 +66,19 @@ def test_extend_by_moves_label_and_clock(h: Harness) -> None:
     assert data["ttl_remaining_s"] == 2400
     assert label_of(h, row.id).expires == NOW + 2400
     assert h.box.state(row.id).clock == NOW + 2400
+
+
+def test_extend_writes_the_clock_in_box_time(h: Harness) -> None:
+    row = add_lease(h, label={"expires": NOW + 600})
+    box = h.box.state(row.id)
+    box.clock_offset = 240
+    box.clock = NOW + 600 + 240
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert code == 0, data
+    assert label_of(h, row.id).expires == NOW + 2400
+    assert box.clock == NOW + 2400 + 240
+    assert h.box.clock_writes == [(row.id, NOW + 2400)]
+    assert [w["code"] for w in data["warnings"]] == ["clock_skew"]
 
 
 def test_extend_to_counts_from_now(h: Harness) -> None:
@@ -161,11 +174,11 @@ def test_lengthen_restore_failure_names_both_values(
     write_clock = h.box.write_clock
     count = [0]
 
-    def clock(target: SshTarget, expires: int) -> None:
+    def clock(target: SshTarget, expires: int, provider_now: int | None = None) -> None:
         count[0] += 1
         if count[0] > 1:
             raise BoxUnreachableError("gone")
-        write_clock(target, expires)
+        write_clock(target, expires, provider_now)
 
     monkeypatch.setattr(h.box, "write_clock", clock)
     code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
@@ -175,10 +188,9 @@ def test_lengthen_restore_failure_names_both_values(
         "old_expires_at": "2026-10-29T01:10:00Z", "new_expires_at": "2026-10-29T01:40:00Z",
     }
     assert h.box.state(row.id).clock == NOW + 2400
-    code, out, _ = h.run("status", "--cached", "l-0000a001")
+    code, out, _ = h.run("status", "--cached", "--verbose", "l-0000a001")
     view = json.loads(out)["leases"][0]
-    assert view["guard"] == "partial"
-    assert view["guard_missing"] == ["clock_file"]
+    assert view["verbose"]["guard_layers"]["clock_file"] == "missing"
 
 
 def test_shorten_clock_failure_restores_label(h: Harness) -> None:

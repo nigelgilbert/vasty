@@ -64,10 +64,10 @@ it adopts an orphan. A lease whose label `miss` lists `watchdog` or
   the script writes first, or the box lacks both the guard file and
   `startup.started`. A probe that finds the marker sets `adopted` in the
   cache, so a lost cache entry still gets reruns after a container restart.
-  Boxes adopted before the marker existed rely on the cache flag. `onstart`
-  writes the guard file and then `startup.started` on every box `reserve`
-  makes, so the script skips `reserve` boxes. A probe between the two writes
-  sees the guard file.
+  Boxes adopted before the marker existed rely on the cache flag. On every
+  box `reserve` makes, the watchdog writes the guard file on its first loop
+  and `onstart` then writes `startup.started`, so the script skips `reserve`
+  boxes. A probe between the two writes sees the guard file.
 - The rerun runs over SSH inside the probe pool. The wait between reruns
   follows `retry_delay`, counted by `adopt_attempts` from `adopt_at`. The
   count resets once the probe finds `watchdog` and `destroy_key` in place.
@@ -445,6 +445,13 @@ class _Probed:
     result: ProbeResult | None
     adopt_ran: bool = False
     adopt_missing: list[str] | None = None
+    skew: int | None = None
+    """Box clock minus provider clock when the probe returned, under a verified clock."""
+
+
+def provider_now(ctx: Context) -> int | None:
+    """Return the provider clock for a box write, or None while the clock is unverified."""
+    return ctx.clock.now() if ctx.clock.verified else None
 
 
 def _adoption_listed(names: list[str]) -> bool:
@@ -473,16 +480,21 @@ def _reruns_adoption(lease: CachedLease, result: ProbeResult, now: int) -> bool:
 def _probe_one(ctx: Context, lease: CachedLease, now: int) -> _Probed:
     try:
         target = ssh_target(lease)
-        result = ctx.box.probe(target, lease.label.expires, timeout=PROBE_TIMEOUT_S)
+        sent = provider_now(ctx)
+        result = ctx.box.probe(target, lease.label.expires, sent, timeout=PROBE_TIMEOUT_S)
     except (VastyError, OSError):
         return _Probed(None)
+    returned = provider_now(ctx)
     if result.startup_exit == STARTUP_INTERRUPTED:
         result = dataclasses.replace(result, startup_interrupted=True)
     probed = _Probed(result)
+    if returned is not None and result.box_now is not None:
+        probed.skew = result.box_now - returned
     if _reruns_adoption(lease, result, now):
         probed.adopt_ran = True
         try:
-            probed.adopt_missing = _layers(ctx.box.adopt(target, effective_expiry(lease.label)))
+            missing = ctx.box.adopt(target, effective_expiry(lease.label), provider_now(ctx))
+            probed.adopt_missing = _layers(missing)
         except (VastyError, OSError):
             pass
     return probed
@@ -553,6 +565,9 @@ def _apply_probe(ctx: Context, lease: CachedLease, probed: _Probed, now: int) ->
     lease.startup_interrupted = result.startup_interrupted
     lease.startup_exit = None if result.startup_exit == STARTUP_INTERRUPTED else result.startup_exit
     lease.jobs = _merge_jobs(lease.jobs, result.jobs)
+    lease.clock_skew_unknown = result.box_now is None
+    if probed.skew is not None:
+        lease.clock_skew = probed.skew
     label = lease.label
     if probed.adopt_missing is not None:
         missing = probed.adopt_missing
@@ -571,7 +586,7 @@ def _apply_probe(ctx: Context, lease: CachedLease, probed: _Probed, now: int) ->
     lease.guard_missing = missing
     wanted = dataclasses.replace(label, miss=list(missing))
     if label.expires is None and result.clock_expires is not None:
-        wanted.expires = result.clock_expires
+        wanted.expires = result.clock_expires - (probed.skew or 0)
     if wanted.expires == label.expires and wanted.miss == label.miss:
         return
     try:
