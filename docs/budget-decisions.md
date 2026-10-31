@@ -14,7 +14,7 @@ Behaviour after the change. With no `start_date`, the estimate runs from the las
 
 ## 2. `daily_budget` becomes a pass-through of Vast's figures
 
-`daily_budget` and the spend estimator are removed. Filed as `issues/replace-daily-budget-with-vast-pass-through.md`, a follow-up to PR #1.
+`daily_budget` and the spend estimator are removed. Filed as `docs/replace-daily-budget-with-vast-pass-through.md`, a follow-up to PR #1.
 
 Why. Vast has no daily spending cap to defer to. The estimator guesses the spend between billing posts, and that guess needed two fixes in one live run. Vast already returns the numbers the guess approximates.
 

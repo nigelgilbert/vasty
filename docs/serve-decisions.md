@@ -12,7 +12,7 @@ Research sources: unauthenticated `POST /bundles/` searches through the vastai S
 
 ## 1. The offer search filters on host CUDA
 
-`cuda` becomes a hardware key beside `vram` and `gpu`: flag, profile, config and env. `OfferQuery` carries it and `build_offer_query` adds `cuda_max_good: {"gte": cuda}` when it is set. The `no_offers` hint names `cuda` beside `max_price` and `region`. Filed as `issues/filter-offers-on-host-cuda.md`. Revised in the second pass: the model entry key and the `serve --on` check are gone with the models table, and the floor is a plain hardware key.
+`cuda` becomes a hardware key beside `vram` and `gpu`: flag, profile, config and env. `OfferQuery` carries it and `build_offer_query` adds `cuda_max_good: {"gte": cuda}` when it is set. The `no_offers` hint names `cuda` beside `max_price` and `region`. Filed as `docs/filter-offers-on-host-cuda.md`. Revised in the second pass: the model entry key and the `serve --on` check are gone with the models table, and the floor is a plain hardware key.
 
 Why. `vllm/vllm-openai:v0.32.0` declares `NVIDIA_REQUIRE_CUDA=cuda>=13.0` and ships torch built for CUDA 13.0. At 05:30Z, four of the top five verified RTX 3060 offers by reliability ran CUDA 12.2 to 12.8. The plan's command landed on a 12.8 host, where vLLM died with `Error 804`, NVIDIA's `CUDA_ERROR_COMPAT_NOT_SUPPORTED_ON_DEVICE`. Two retries with `--region` landed on 12.x hosts too.
 
@@ -28,7 +28,7 @@ Until it lands. Phase 5 of the plan reserves with `--gpu 5060ti --max-price 0.21
 
 ## 2. `uptime_s` starts at the first `running` sample
 
-`uptime_s` in `views.py` counts from the moment `engine.refresh` first saw `actual_status` equal `running`. The lease cache records that time as `running_at`. A lease without it reports `uptime_s` null. Filed as `issues/uptime-counts-the-image-pull.md`. Changed from the first draft: the fallback to the label's `created` is dropped.
+`uptime_s` in `views.py` counts from the moment `engine.refresh` first saw `actual_status` equal `running`. The lease cache records that time as `running_at`. A lease without it reports `uptime_s` null. Filed as `docs/uptime-counts-the-image-pull.md`. Changed from the first draft: the fallback to the label's `created` is dropped.
 
 Why. Vast bills no GPU time while an instance is `loading`. The charges for 2026-10-30 show it per item: instance 58355222 lived 23 minutes, pulled for 20m35s, and billed `gpu` for 0.060 hours against `disk` for 0.394 hours. The two boxes released while `loading` billed `gpu` 0.0 and `disk` for 0.008 and 0.080 hours. Disk bills from create, GPU from `running`. A fallback to `created` would report positive uptime for a box released while `loading`, which is the original bug.
 

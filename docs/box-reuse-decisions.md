@@ -4,7 +4,7 @@
 
 ## Decisions
 
-1. `daily_budget` is retired for a pass-through of Vast's balance and charges, with no account-level check in its place. Recorded in `docs/budget-decisions.md` and filed as `issues/replace-daily-budget-with-vast-pass-through.md`.
+1. `daily_budget` is retired for a pass-through of Vast's balance and charges, with no account-level check in its place. Recorded in `docs/budget-decisions.md` and filed as `docs/replace-daily-budget-with-vast-pass-through.md`.
 2. The spend model is rate cap, time cap, prepaid credit. `max_price` filters offers by dollars per hour. `ttl` bounds hours per box through the watchdog and sweep. `max_boxes` is deferred.
 3. The remaining failure is fan-out: an agent reserves a box while one it owns sits idle. Reuse already works through `reserve --name`, `run --on` and `serve --on`. The gap is visibility before creation and a prompt after it. This doc plans those two changes.
 

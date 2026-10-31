@@ -2,7 +2,7 @@
 
 Order of work for PR #2, branch `refactor/live-run-followups`. Everything lands in this one PR, squash merged. Each step below is one or more commits, and each commit leaves `uv run pytest` and `uv run mypy` green.
 
-Sources: `docs/budget-decisions.md`, `docs/box-reuse-decisions.md`, `docs/serve-decisions.md`, and the three files under `issues/`. GPT-6 Astra reviewed the sequencing; its points are folded in.
+Sources: `docs/budget-decisions.md`, `docs/box-reuse-decisions.md`, `docs/serve-decisions.md`, and the three live-run findings now under `docs/`. GPT-6 Astra reviewed the sequencing; its points are folded in.
 
 ## 0. Settle the decisions. Done 2026-10-30.
 
@@ -32,7 +32,7 @@ Closed by the research pass and the second Astra review: `POST /bundles/` honour
 
 ## 1. Foundation
 
-**1a. Budget pass-through.** `issues/replace-daily-budget-with-vast-pass-through.md`. Pure deletion plus pass-through. It rewrites the `status` JSON contract the later steps report through.
+**1a. Budget pass-through.** `docs/replace-daily-budget-with-vast-pass-through.md`. Pure deletion plus pass-through. It rewrites the `status` JSON contract the later steps report through.
 
 1. Read `credit` beside `balance` in `Provider.balance` and cache both in `CacheData`. Additive, so it can be its own commit.
 2. Remove `daily_budget`, `src/vasty/budget.py`, `budget_exceeded`, `budget_low`, `spend_source` and exit code 3. `status` totals report `balance`, `credit`, `charges_today` and `burn_per_hr`.
@@ -41,7 +41,7 @@ Closed by the research pass and the second Astra review: `POST /bundles/` honour
 
 Deleting the estimator removes `instance_start`, which closes finding 4 of the PR #1 code review.
 
-**1b. Serve and host CUDA.** `issues/filter-offers-on-host-cuda.md` and serve decisions 1 and 3.
+**1b. Serve and host CUDA.** `docs/filter-offers-on-host-cuda.md` and serve decisions 1 and 3.
 
 1. Add `cuda` to the hardware keys in `src/vasty/config.py` and to `OfferQuery`. `build_offer_query` adds `cuda_max_good: {"gte": cuda}` when it is set. The `no_offers` hint names `cuda` beside `max_price` and `region`.
 2. Remove the `[models]` table: `BUILTIN_MODELS`, `ModelEntry`, `MODEL_KEYS`, `MODEL_LAYER_KEYS`, the model layer in `resolve`, `model_unknown`, `--quant` and `ctx.model`. `serve` resolves settings the same way `reserve` does.
@@ -58,7 +58,7 @@ These can start now or fill gaps while step 1 is in review.
 
 - **Box reuse change A.** `busy`, `gpus` and `vram_gb` on `LeaseView`, `idle` in the jobs cell. Add one busy helper in `state.py` that counts an `unknown` job as busy; change B reuses it.
 - **Serve diagnostics.** `log_tail` on `serve_failed`, with the serve key redacted by value. Capture it in `_wait_ready` before `execute` releases an auto-created box. Fix the `vllm_missing` hint under `--on`, which today suggests reserving a second box (PR #1 code review, finding 2).
-- **Uptime from first `running`.** `issues/uptime-counts-the-image-pull.md`. Add `running_at`, set in `engine.refresh`, and count `uptime_s` from it.
+- **Uptime from first `running`.** `docs/uptime-counts-the-image-pull.md`. Add `running_at`, set in `engine.refresh`, and count `uptime_s` from it.
 
 ## 3. After the foundation
 
@@ -72,9 +72,10 @@ These can start now or fill gaps while step 1 is in review.
   - `serve ... -- --max-model-len 16384` passing through to the job;
   - `uptime_s` against the balance ledger;
   - per-lease `cost` going from null to billed;
-  - `idle_box_available` on a second `reserve`.
+  - `idle_box_available` on a second `reserve`;
+  - two failure paths with an agent reading only the error objects: `serve --on` a 12.x host reserved with the vLLM image and no floor, and a bare `serve --model X` with no profile. A miss on either is the evidence for `cuda_too_low` or a builtin `vllm` profile.
 - Record the run in `docs/live-test-report.md`.
-- Delete the issue files this PR closes, and this memo.
+- Delete the three live-run finding files, the generated issues this PR closes, and this memo.
 
 ## Deferred
 

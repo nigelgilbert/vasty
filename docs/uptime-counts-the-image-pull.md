@@ -23,7 +23,7 @@ The image pull took 20m35s of the 23 minutes. Vast's charges for the day bill in
 ## Fix
 
 1. The lease cache records `running_at`, the time vasty first saw the instance `running`. `engine.refresh` sets it on the first sample where `actual_status` reads `running`, which lands before the ssh readiness wait ends. The loading row carries `cur_state: running` beside `actual_status: loading`, so `cur_state` is left alone. `reachable_at` stays as it is: `_apply_probe` in `src/vasty/engine.py` rewrites it on every answered probe, so it holds the last probe time.
-2. `uptime_s` counts from `running_at` and is null without it. A box released while `loading` reports null, matching its GPU bill of 0. `cost` and `spent_today` are covered by `issues/replace-daily-budget-with-vast-pass-through.md`, which reports Vast's billed figures and drops the estimate.
+2. `uptime_s` counts from `running_at` and is null without it. A box released while `loading` reports null, matching its GPU bill of 0. `cost` and `spent_today` are covered by `docs/replace-daily-budget-with-vast-pass-through.md`, which reports Vast's billed figures and drops the estimate.
 
 `running_at` has the granularity of vasty's sampling. A `reserve --wait` poll sets it within one interval; a `--no-wait` box gets it at the next command that refreshes. `uptime_s` is elapsed time since that sample and includes any interval the box spent stopped.
 
