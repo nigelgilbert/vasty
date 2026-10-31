@@ -42,6 +42,7 @@ DEFAULT_KEYS: dict[str, str] = {
     "gpus": "int",
     "gpu": "str",
     "vram": "number",
+    "cuda": "number",
     "region": "str",
     "ports": "ports",
     "startup": "text",
@@ -58,7 +59,8 @@ FLAG_KEYS: dict[str, str] = {**PROFILE_KEYS, "owner": "owner"}
 # Keys `config show` reports, in display order.
 SHOWN = (
     "owner", "api_key_env", "ssh_key", "ttl", "run_ttl", "max_price",
-    "warn_before_expiry", "disk", "gpus", "image", "gpu", "vram", "region", "ports", "startup",
+    "warn_before_expiry", "disk", "gpus", "image", "gpu", "vram", "cuda", "region", "ports",
+    "startup",
 )
 
 BUILTIN: dict[str, Any] = {
@@ -107,6 +109,7 @@ class Settings:
     image: str
     gpu: str | None = None
     vram: float | None = None
+    cuda: float | None = None
     region: str | None = None
     ports: list[int] = field(default_factory=list)
     startup: str | None = None
@@ -540,6 +543,7 @@ def resolve(
         image=pick("image"),
         gpu=pick("gpu"),
         vram=pick("vram"),
+        cuda=pick("cuda"),
         region=pick("region"),
         ports=list(pick("ports") or []),
         startup=startup,

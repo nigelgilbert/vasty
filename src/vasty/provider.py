@@ -173,6 +173,8 @@ def build_offer_query(query: OfferQuery) -> dict[str, Any]:
         q["gpu_ram"] = {"gte": query.vram_min_gb * 1000}
     if query.region:
         q["geolocation"] = _region_filter(query.region)
+    if query.cuda is not None:
+        q["cuda_max_good"] = {"gte": query.cuda}
     return q
 
 

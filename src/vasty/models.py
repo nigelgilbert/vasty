@@ -27,6 +27,7 @@ class OfferQuery:
     disk_gb: int
     max_price: Decimal
     region: str | None
+    cuda: float | None = None
 
 
 @dataclass(frozen=True)

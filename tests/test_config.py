@@ -175,6 +175,7 @@ def test_unknown_profile_is_invalid_arguments(cfg: Env) -> None:
         ("VASTY_GPUS", "2", "gpus", 2),
         ("VASTY_GPU", "L40S", "gpu", "L40S"),
         ("VASTY_VRAM", "48", "vram", 48.0),
+        ("VASTY_CUDA", "12.8", "cuda", 12.8),
         ("VASTY_REGION", "EU", "region", "EU"),
         ("VASTY_PORTS", "8888,9000", "ports", [8888, 9000]),
         ("VASTY_STARTUP", "echo hi\n", "startup", "echo hi\n"),
@@ -560,11 +561,39 @@ def test_config_show_human(harness: Harness) -> None:
     code, out, _ = harness.run("config", "show", "--plain")
     assert code == 0
     lines = out.strip().splitlines()
-    assert len(lines) == 15
+    assert len(lines) == 16
     rows = {line.split()[0]: line.split()[1:] for line in lines}
     assert rows["image"] == ["my/img", "project"]
     assert rows["ttl"] == ["30m", "default"]
     assert rows["max_price"] == ["0.60", "default"]
+
+
+def test_config_show_cuda_from_env(harness: Harness) -> None:
+    harness.env["VASTY_CUDA"] = "13"
+    code, out, _ = harness.run("config", "show")
+    assert code == 0
+    assert json.loads(out)["values"]["cuda"] == {"value": 13.0, "source": "env"}
+
+
+def test_config_show_cuda_flag(harness: Harness) -> None:
+    code, out, _ = harness.run("config", "show", "--cuda", "12.8")
+    assert code == 0
+    assert json.loads(out)["values"]["cuda"] == {"value": 12.8, "source": "flag"}
+
+
+def test_config_set_cuda(harness: Harness) -> None:
+    code, _, _ = harness.run("config", "set", "profiles.vllm.cuda", "13")
+    assert code == 0
+    assert read_user(harness)["profiles"]["vllm"]["cuda"] == 13
+    code, _, _ = harness.run("config", "set", "defaults.cuda", "12.8")
+    assert code == 0
+    assert read_user(harness)["defaults"]["cuda"] == 12.8
+
+
+def test_config_set_cuda_rejects_text(harness: Harness) -> None:
+    code, out, _ = harness.run("config", "set", "defaults.cuda", "high")
+    assert code == 1
+    assert json.loads(out)["error"] == "invalid_config"
 
 
 def test_config_show_invalid_config(harness: Harness) -> None:

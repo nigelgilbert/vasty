@@ -71,7 +71,7 @@ vasty config    (show | set KEY VALUE | profiles)
 vasty completion (bash | zsh | fish)
 ```
 
-Hardware flags on `reserve`, `run` and `serve`: `--gpu NAME`, `--vram MIN_GB`, `--gpus N`, `--disk GB`, `--image IMAGE`, `--max-price $/HR`, `--region R`, `--ports N[,N...]`. A profile or config file supplies defaults for any of them. `run --on` and `serve --on` reuse a box and reject creation flags. Auto-reserved `run` and `serve` reject `--no-wait`.
+Hardware flags on `reserve`, `run` and `serve`: `--gpu NAME`, `--vram MIN_GB`, `--cuda FLOOR`, `--gpus N`, `--disk GB`, `--image IMAGE`, `--max-price $/HR`, `--region R`, `--ports N[,N...]`. A profile or config file supplies defaults for any of them. `--cuda` is the minimum CUDA version the host driver supports. Read an image's floor from `NVIDIA_REQUIRE_CUDA` in `docker inspect IMAGE`. `run --on` and `serve --on` reuse a box and reject creation flags. Auto-reserved `run` and `serve` reject `--no-wait`.
 
 Every verb takes `--json`, `--plain` and `--verbose`.
 

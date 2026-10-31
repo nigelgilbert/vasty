@@ -42,6 +42,35 @@ def test_run_on_accepts_sync() -> None:
     assert ns.command == ["python", "x.py"]
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["reserve", "--cuda", "13"],
+        ["run", "--cuda", "13", "--", "true"],
+        ["serve", "--model", "m", "--cuda", "13"],
+    ],
+)
+def test_cuda_flag_parses(argv: list[str]) -> None:
+    assert parse(argv).cuda == "13"
+
+
+def test_on_rejects_cuda() -> None:
+    with pytest.raises(VastyError) as exc:
+        parse(["serve", "--on", "ft", "--model", "m", "--cuda", "13"])
+    assert "--cuda" in exc.value.message
+
+
+@pytest.mark.parametrize("verb", [["reserve"], ["run", "--", "true"], ["serve", "--model", "m"]])
+def test_cuda_flag_rejects_text(harness: Harness, verb: list[str]) -> None:
+    argv = [verb[0], "--cuda", "abc", *verb[1:]]
+    code, out, _ = harness.run(*argv)
+    assert code == 1
+    data = json.loads(out)
+    assert data["error"] == "invalid_arguments"
+    assert "--cuda" in data["message"]
+    assert "search_offers" not in [name for name, _ in harness.provider.calls]
+
+
 def test_auto_reserve_rejects_no_wait() -> None:
     with pytest.raises(VastyError):
         parse(["serve", "--model", "m", "--no-wait"])

@@ -12,11 +12,13 @@ import pytest
 from fakes import NOW, Harness, add_lease, make_offer, timeout_error
 from vasty import engine
 from vasty.commands import reserve
+from vasty.config import user_config_path
 from vasty.context import Context
 from vasty.errors import VastyError
 from vasty.labels import format_label, parse
 from vasty.models import CreateRequest, Instance, Label
 from vasty.onstart import decode_onstart
+from vasty.provider import build_offer_query
 
 RESULT_KEYS = {
     "lease", "name", "owner", "group", "state", "guard", "guard_missing", "reused", "gpu",
@@ -164,6 +166,53 @@ def test_no_offers_names_constraints_and_hint(h: Harness) -> None:
     assert data["message"] == "No offers match gpu=4090 under $0.30/hr."
     assert "--max-price 0.45" in data["hint"]
     assert calls(h, "create") == []
+
+
+def write_user(harness: Harness, text: str) -> None:
+    path = user_config_path(harness.home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def cuda_filter(harness: Harness) -> Any:
+    query = calls(harness, "search_offers")[0]
+    return build_offer_query(query).get("cuda_max_good")
+
+
+def test_cuda_flag_sends_filter(h: Harness) -> None:
+    code, _ = run_json(h, "reserve", "--image", "vllm/vllm-openai:v0.32.0", "--cuda", "13")
+    assert code == 0
+    assert cuda_filter(h) == {"gte": 13.0}
+
+
+def test_cuda_profile_sends_filter(h: Harness) -> None:
+    write_user(h, '[profiles.vllm]\nimage = "vllm/vllm-openai:v0.32.0"\nvram = 24\ncuda = 13\n')
+    h.provider.offers = [make_offer(1, gpu_ram_gb=24.0)]
+    code, _ = run_json(h, "reserve", "--profile", "vllm")
+    assert code == 0
+    assert cuda_filter(h) == {"gte": 13.0}
+
+
+def test_cuda_env_sends_filter(h: Harness) -> None:
+    h.env["VASTY_CUDA"] = "13"
+    code, _ = run_json(h, "reserve")
+    assert code == 0
+    assert cuda_filter(h) == {"gte": 13.0}
+
+
+def test_no_cuda_sends_no_filter(h: Harness) -> None:
+    code, _ = run_json(h, "reserve")
+    assert code == 0
+    assert "cuda_max_good" not in build_offer_query(calls(h, "search_offers")[0])
+
+
+def test_no_offers_names_cuda(h: Harness) -> None:
+    h.provider.offers = []
+    code, data = run_json(h, "reserve", "--cuda", "13")
+    assert code == 1
+    assert data["error"] == "no_offers"
+    assert "cuda>=13" in data["message"]
+    assert "--cuda" in data["hint"]
 
 
 def test_proxy_runtype_without_direct_ports(h: Harness) -> None:

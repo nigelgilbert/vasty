@@ -146,7 +146,20 @@ def test_offer_query_omits_unset_and_country_region() -> None:
         gpu=None, vram_min_gb=None, gpus=1, disk_gb=50, max_price=Decimal("1"), region="de",
     ))
     assert "gpu_name" not in q and "gpu_ram" not in q
+    assert "cuda_max_good" not in q
     assert q["geolocation"] == {"eq": "DE"}
+
+
+def test_offer_query_cuda_floor() -> None:
+    base = OfferQuery(
+        gpu=None, vram_min_gb=None, gpus=1, disk_gb=50, max_price=Decimal("1"), region=None,
+    )
+    floored = build_offer_query(OfferQuery(
+        gpu=None, vram_min_gb=None, gpus=1, disk_gb=50, max_price=Decimal("1"), region=None,
+        cuda=13.0,
+    ))
+    assert floored["cuda_max_good"] == {"gte": 13.0}
+    assert {k: v for k, v in floored.items() if k != "cuda_max_good"} == build_offer_query(base)
 
 
 def test_search_posts_bundles_and_normalizes() -> None:

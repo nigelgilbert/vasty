@@ -26,13 +26,14 @@ VERBS = (
 
 # Flags that set up a new lease; `--on` rejects them.
 CREATION_FLAGS = (
-    "name", "group", "owner", "profile", "ttl", "gpu", "vram", "gpus", "disk",
+    "name", "group", "owner", "profile", "ttl", "gpu", "vram", "cuda", "gpus", "disk",
     "image", "max_price", "region", "ports", "startup", "no_wait",
 )
 
 # Flags that feed config resolution as the `flag` layer.
 SETTING_FLAGS = (
-    "ttl", "gpu", "vram", "gpus", "disk", "image", "max_price", "region", "ports", "startup",
+    "ttl", "gpu", "vram", "cuda", "gpus", "disk", "image", "max_price", "region", "ports",
+    "startup",
 )
 
 
@@ -80,6 +81,7 @@ def _reserve_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--config", dest="config_stdin", metavar="-")
     p.add_argument("--gpu")
     p.add_argument("--vram")
+    p.add_argument("--cuda", metavar="FLOOR")
     p.add_argument("--gpus")
     p.add_argument("--disk")
     p.add_argument("--image")
@@ -155,6 +157,7 @@ def build_parser() -> Parser:
     show.add_argument("--startup", metavar="FILE|-")
     show.add_argument("--gpu")
     show.add_argument("--vram")
+    show.add_argument("--cuda", metavar="FLOOR")
     show.add_argument("--gpus")
     show.add_argument("--disk")
     show.add_argument("--image")

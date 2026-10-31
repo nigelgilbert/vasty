@@ -97,6 +97,7 @@ def reserve_lease(
             query = OfferQuery(
                 gpu=settings.gpu, vram_min_gb=settings.vram, gpus=settings.gpus,
                 disk_gb=settings.disk, max_price=settings.max_price, region=settings.region,
+                cuda=settings.cuda,
             )
             offer = choose_offer(ctx, query)
             register_key(ctx)
@@ -238,6 +239,8 @@ def _no_offers(query: OfferQuery) -> VastyError:
         parts.append(f"gpus={query.gpus}")
     if query.region:
         parts.append(f"region={query.region}")
+    if query.cuda is not None:
+        parts.append(f"cuda>={query.cuda:g}")
     what = " ".join(parts) or "the request"
     higher = (query.max_price * Decimal("1.5")).quantize(Decimal("0.01"))
     tips = [f"--max-price {higher}"]
@@ -247,6 +250,8 @@ def _no_offers(query: OfferQuery) -> VastyError:
         tips.append("a lower --vram")
     if query.region:
         tips.append("relax --region")
+    if query.cuda is not None:
+        tips.append("a lower --cuda")
     hint = "Try " + (", ".join(tips[:-1]) + ", or " + tips[-1] if len(tips) > 1 else tips[0]) + "."
     return VastyError(
         "no_offers", f"No offers match {what} under ${query.max_price}/hr.", hint,
