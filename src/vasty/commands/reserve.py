@@ -371,7 +371,9 @@ def _clear_rejected(ctx: Context, lease_id: str, err: VastyError) -> VastyError:
     Return `err` with `lease`, `instance_id` and `destroyed` added to its
     details. `instance_id` is the lowest matching id, or None when no row
     carries the lease. `destroyed` is true when Vast accepted every destroy.
-    A failed list or destroy writes one stderr line naming the fix.
+    With no row the hint sends the caller to `status` before a retry, since
+    Vast can list the row late. A failed list or destroy writes one stderr
+    line naming the fix.
     """
     try:
         rows = _rows_for(ctx.provider.list_instances(), lease_id)
@@ -392,6 +394,8 @@ def _clear_rejected(ctx: Context, lease_id: str, err: VastyError) -> VastyError:
                 f" Run vasty release i-{inst.id} --yes."
             )
     instance_id = rows[0].id if rows else None
+    if instance_id is None:
+        err.hint = f"Run vasty status to look for {lease_id} before reserving again."
     err.details = {
         **(err.details or {}), "lease": lease_id, "instance_id": instance_id, "destroyed": destroyed,
     }

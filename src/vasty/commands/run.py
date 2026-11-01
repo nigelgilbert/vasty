@@ -62,7 +62,7 @@ from vasty.models import (
 from vasty.onstart import WORKDIR
 from vasty.remote import SshTarget
 from vasty.state import effective_expiry, fix_for
-from vasty.timeutil import format_duration, iso
+from vasty.timeutil import format_duration, format_minutes_up, iso
 
 INTERRUPT_WAIT_S = 10.0
 INTERRUPT_EXIT = 130
@@ -134,7 +134,7 @@ def warn_if_expiring(ctx: Context, lease: CachedLease, now: int) -> None:
     remaining = effective_expiry(lease.label) - now
     if remaining < ctx.settings.warn_before_expiry:
         fix = fix_for("expiring_soon", lease.lease, lease.label.ttl)
-        ctx.warn(f"vasty: lease {lease.lease} expires in {format_duration(remaining)}. Extend it: {fix}")
+        ctx.warn(f"vasty: lease {lease.lease} expires in {format_minutes_up(remaining)}. Extend it: {fix}")
 
 
 def _check_sync_dir(ctx: Context, directory: str) -> Path:

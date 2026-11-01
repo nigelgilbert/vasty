@@ -952,6 +952,7 @@ def test_create_rejected_without_an_instance_destroys_nothing(h: Harness) -> Non
     assert (details["lease"], details["instance_id"], details["destroyed"]) == (
         "l-abababab", None, False)
     assert calls(h, "destroy") == []
+    assert data["hint"] == "Run vasty status to look for l-abababab before reserving again."
 
 
 def test_create_rejected_failed_destroy_names_release_fix(h: Harness) -> None:
