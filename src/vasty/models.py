@@ -323,6 +323,7 @@ class ReserveResult:
 @dataclass
 class ExtendResult:
     lease: str
+    previous_expires_at: str
     expires_at: str
     ttl_remaining_s: int
     warnings: list[WarningItem]

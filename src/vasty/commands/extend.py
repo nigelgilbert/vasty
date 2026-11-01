@@ -16,6 +16,9 @@ that SSH has never answered returns `lease_pending`. An `unreachable` or
 `stopped` lease returns `box_unreachable` and changes nothing.
 
 Each extended lease gets a detached `vasty sweep --follow` for its new expiry.
+
+The result carries `previous_expires_at`, the expiry read under the lock
+before the writes. The label's `ttl` keeps the reserve's value.
 """
 
 from __future__ import annotations
@@ -279,6 +282,7 @@ def _single(
     check_writable(lease)
     with ctx.cache.lock():
         lease = _reload(ctx.cache.load().leases, lease)
+        previous = effective_expiry(lease.label)
         expires = new_expiry(lease, change)
         if expires <= now:
             raise invalid("The new expiry is at or before now.", _release_hint(None, lease.lease))
@@ -289,6 +293,7 @@ def _single(
     final = effective_expiry(lease.label)
     result = ExtendResult(
         lease=lease.lease,
+        previous_expires_at=iso(previous),
         expires_at=iso(final),
         ttl_remaining_s=max(0, final - now),
         warnings=warnings,
@@ -333,6 +338,7 @@ def _bulk(
             except VastyError as err:
                 errors[lease.lease] = err
         for lease in leases:
+            previous = effective_expiry(lease.label)
             if lease.lease in targets:
                 try:
                     apply(ctx, lease, targets[lease.lease])
@@ -343,7 +349,10 @@ def _bulk(
                 lease=lease.lease,
                 ok=found is None,
                 error=found.code if found is not None else None,
-                data={"expires_at": iso(effective_expiry(lease.label))},
+                data={
+                    "previous_expires_at": iso(previous),
+                    "expires_at": iso(effective_expiry(lease.label)),
+                },
             ))
     warnings = views.warnings_for(leases, now, ctx.settings.warn_before_expiry)
     warnings += snap.warnings

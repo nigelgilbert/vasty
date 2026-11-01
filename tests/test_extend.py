@@ -61,12 +61,25 @@ def test_extend_by_moves_label_and_clock(h: Harness) -> None:
     row = add_lease(h, label={"name": "ft", "expires": NOW + 600})
     code, data = run_json(h, "extend", "ft", "--by", "30m")
     assert code == 0, data
-    assert set(data) == {"lease", "expires_at", "ttl_remaining_s", "warnings", "swept"}
+    assert set(data) == {
+        "lease", "previous_expires_at", "expires_at", "ttl_remaining_s", "warnings", "swept",
+    }
     assert data["lease"] == "l-0000a001"
+    assert data["previous_expires_at"] == "2026-10-29T01:10:00Z"
     assert data["expires_at"] == "2026-10-29T01:40:00Z"
     assert data["ttl_remaining_s"] == 2400
     assert label_of(h, row.id).expires == NOW + 2400
     assert h.box.state(row.id).clock == NOW + 2400
+
+
+def test_extend_returns_the_previous_clock_and_keeps_the_label_ttl(h: Harness) -> None:
+    row = add_lease(h, label={"name": "ft", "ttl": 2700, "expires": NOW + 600})
+    code, data = run_json(h, "extend", "ft", "--by", "20m")
+    assert code == 0, data
+    assert (data["previous_expires_at"], data["expires_at"]) == (
+        "2026-10-29T01:10:00Z", "2026-10-29T01:30:00Z",
+    )
+    assert label_of(h, row.id).ttl == 2700
 
 
 def test_extend_spawns_a_follower(h: Harness) -> None:
@@ -448,11 +461,25 @@ def test_bulk_by_extends_each_lease(h: Harness) -> None:
     assert code == 0
     assert set(data) == {"results", "warnings", "swept"}
     assert data["results"] == [
-        {"lease": "l-0000a001", "ok": True, "error": None, "expires_at": "2026-10-29T01:40:00Z"},
-        {"lease": "l-0000a002", "ok": True, "error": None, "expires_at": "2026-10-29T01:50:00Z"},
+        {"lease": "l-0000a001", "ok": True, "error": None,
+         "previous_expires_at": "2026-10-29T01:10:00Z", "expires_at": "2026-10-29T01:40:00Z"},
+        {"lease": "l-0000a002", "ok": True, "error": None,
+         "previous_expires_at": "2026-10-29T01:20:00Z", "expires_at": "2026-10-29T01:50:00Z"},
     ]
     assert label_of(h, a.id).expires == NOW + 2400
     assert label_of(h, b.id).expires == NOW + 3000
+
+
+def test_bulk_all_carries_the_previous_clock_on_each_entry(h: Harness) -> None:
+    a = add_lease(h, "l-0000a001", label={"ttl": 1800, "expires": NOW + 600})
+    add_lease(h, "l-0000a002", label={"expires": NOW + 1200})
+    code, data = run_json(h, "extend", "--all", "--by", "20m")
+    assert code == 0, data
+    assert [(r["lease"], r["previous_expires_at"], r["expires_at"]) for r in data["results"]] == [
+        ("l-0000a001", "2026-10-29T01:10:00Z", "2026-10-29T01:30:00Z"),
+        ("l-0000a002", "2026-10-29T01:20:00Z", "2026-10-29T01:40:00Z"),
+    ]
+    assert label_of(h, a.id).ttl == 1800
 
 
 def test_bulk_spawns_a_follower_per_extended_lease(h: Harness) -> None:
@@ -483,9 +510,10 @@ def test_bulk_release_between_refresh_and_lock_is_expired(
     code, data = run_json(h, "extend", "--group", "exp", "--by", "30m")
     assert code == 1
     assert data["results"] == [
-        {"lease": "l-0000a001", "ok": True, "error": None, "expires_at": "2026-10-29T01:40:00Z"},
+        {"lease": "l-0000a001", "ok": True, "error": None,
+         "previous_expires_at": "2026-10-29T01:10:00Z", "expires_at": "2026-10-29T01:40:00Z"},
         {"lease": "l-0000a002", "ok": False, "error": "lease_expired",
-         "expires_at": "2026-10-29T01:10:00Z"},
+         "previous_expires_at": "2026-10-29T01:10:00Z", "expires_at": "2026-10-29T01:10:00Z"},
     ]
     lease = cached(h, "l-0000a002")
     assert lease.state == "released"
@@ -537,7 +565,7 @@ def test_bulk_reports_per_lease_errors_with_highest_exit(h: Harness) -> None:
     assert results["l-0000a001"]["ok"] is True
     assert results["l-0000a002"] == {
         "lease": "l-0000a002", "ok": False, "error": "box_unreachable",
-        "expires_at": "2026-10-29T01:10:00Z",
+        "previous_expires_at": "2026-10-29T01:10:00Z", "expires_at": "2026-10-29T01:10:00Z",
     }
 
 
