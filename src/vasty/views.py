@@ -248,12 +248,12 @@ def tag_entry(lease: CachedLease, now: int) -> TagEntry:
 
 
 def warnings_for(
-    leases: Iterable[CachedLease], now: int, warn_before_expiry: int
+    leases: Iterable[CachedLease], now: int
 ) -> list[WarningItem]:
     """Return the per-lease warnings for each lease in order."""
     out: list[WarningItem] = []
     for lease in leases:
-        out.extend(lease_warnings(lease, now, warn_before_expiry))
+        out.extend(lease_warnings(lease, now))
     return out
 
 

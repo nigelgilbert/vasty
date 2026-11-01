@@ -70,7 +70,7 @@ vasty sync      LEASE (push [--delete] SRC DEST | pull SRC DEST)
 vasty ssh       LEASE [-- COMMAND...]
 vasty tag       TARGET [--set-name NAME] [--set-group G] [--set-owner O] [--ttl 30m]
 vasty sweep     [--follow LEASE]
-vasty config    (show | set KEY VALUE | profiles)
+vasty config    (show [--profile P] | set KEY VALUE | profiles)
 vasty completion (bash | zsh | fish)
 ```
 
@@ -166,7 +166,7 @@ A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fie
 |---|---|---|
 | `invalid_arguments` | 1 | a flag combination, name, duration, TIME or port list is invalid |
 | `invalid_config` | 1 | a config key or value is invalid |
-| `auth_missing` | 1 | no API key in the `api_key_env` variable or `~/.config/vastai/vast_api_key` |
+| `auth_missing` | 1 | no API key in `VAST_API_KEY` or `~/.config/vastai/vast_api_key` |
 | `dependency_missing` | 1 | `ssh` or `rsync` is not on PATH |
 | `no_offers` | 1 | no offer matches |
 | `lease_not_found` | 1 | unknown id or name |
@@ -300,14 +300,17 @@ Any machine with the API key sees the same leases, owners and groups. An instanc
 
 ## Configuration
 
-Resolution order, highest first: flags, `--config -` JSON on stdin, `--profile NAME`, `VASTY_*` environment variables, `./vasty.toml`, `~/.config/vasty/config.toml`, built-in defaults. `vasty config show` prints every effective value and its source.
+Resolution order, highest first: flags, `--profile NAME`, `VASTY_*` environment variables, `./vasty.toml`, `~/.config/vasty/config.toml`, built-in defaults. `vasty config show` prints every effective value and its source. `--help` prints the built-in defaults.
+
+`reserve`, `run` and `serve` all read `ttl` through this order. An auto-reserved `run` or `serve` without `--ttl` gets the 30m built-in; earlier releases gave it 2h.
+
+`any` clears `gpu` or `region`, so `--gpu any` or `gpu = "any"` in a profile drops a pin from a lower layer.
 
 ```toml
 owner = "nigel"                 # overridden by VASTY_OWNER or --owner
 
 [defaults]
 ttl = "30m"
-run_ttl = "2h"
 max_price = 0.60
 
 [profiles.train]
@@ -323,9 +326,9 @@ image = "vllm/vllm-openai:v0.32.0"
 vram = 24
 ```
 
-`startup` runs once on each box as root in `/workspace` after Vasty's own setup. The box reports `pending` while the hook runs. A hook that exits nonzero leaves the box `running` with a `startup_failed` warning so you can `ssh` in and look.
+The `startup` key holds script text. `--startup FILE` reads a file and `--startup -` reads stdin. The script runs once on each box as root in `/workspace` after Vasty's own setup. The box reports `pending` while the hook runs. A hook that exits nonzero leaves the box `running` with a `startup_failed` warning so you can `ssh` in and look.
 
-The API key comes from the environment variable named by `api_key_env`, `VAST_API_KEY` by default. When that is unset, vasty reads `~/.config/vastai/vast_api_key`, the file the `vastai` CLI writes. `config show` names the source in `api_key_source` and never prints the key.
+The API key comes from `VAST_API_KEY`. When that is unset, vasty reads `~/.config/vastai/vast_api_key`, the file the `vastai` CLI writes. `config show` names the source in `api_key_source` and never prints the key.
 
 ## Status
 

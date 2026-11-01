@@ -82,26 +82,35 @@ def _output_flags() -> Parser:
     return parent
 
 
-def _setting_help(ttl_default: str) -> dict[str, str]:
-    """Return help lines for the setting flags, with defaults read from `config.BUILTIN`."""
-    from vasty.config import BUILTIN
+def _setting_help() -> dict[str, str]:
+    """Return help lines for the setting flags, with defaults read from `config.BUILTIN`.
 
+    Config files, profiles and `VASTY_*` variables can replace a builtin
+    default, so each line with a config key points at `vasty config show`.
+    """
+    from vasty.config import BUILTIN
+    from vasty.timeutil import format_duration_exact
+
+    see = "; see vasty config show"
     return {
-        "owner": "owner label for a new lease; default: VASTY_OWNER, config, then $USER",
-        "ttl": f"lease clock as a duration such as 45m or 2h; default: {ttl_default}",
+        "owner": "owner label for a new lease; default: VASTY_OWNER, config, then $USER" + see,
+        "ttl": "lease clock as a duration such as 45m or 2h; "
+               f"builtin default: {format_duration_exact(BUILTIN['ttl'])}" + see,
         "profile": "config profile to apply; default: none",
-        "startup": "script that runs once on the box after setup, or - for stdin; default: none",
-        "config_stdin": "pass - to read config JSON from stdin",
-        "gpu": "GPU model name such as 4090 or A100; default: any",
-        "vram": "minimum GPU memory in GB; default: any",
+        "startup": "script file that runs once on the box after setup, or - for stdin; "
+                   "default: none" + see,
+        "gpu": "GPU model name such as 4090 or A100, or any; default: any" + see,
+        "vram": "minimum GPU memory in GB; default: any" + see,
         "cuda": "minimum CUDA version the host driver supports, such as 12.6; "
-                "default: the image's floor, 13 for the vllm image and 12.6 for the base image",
-        "gpus": f"number of GPUs; default: {BUILTIN['gpus']}",
-        "disk": f"disk size in GB; default: {BUILTIN['disk']}",
-        "image": f"Docker image; default: {BUILTIN['image']}",
-        "max_price": f"offer price cap in dollars per hour; default: {BUILTIN['max_price']}",
-        "region": "region code or name such as US or Europe; default: any",
-        "ports": "comma-separated ports to open such as 8000,8080; default: none",
+                "builtin default: the image's floor, 13 for the vllm image and 12.6 for the "
+                "base image" + see,
+        "gpus": f"number of GPUs; builtin default: {BUILTIN['gpus']}" + see,
+        "disk": f"disk size in GB; builtin default: {BUILTIN['disk']}" + see,
+        "image": f"Docker image; builtin default: {BUILTIN['image']}" + see,
+        "max_price": "offer price cap in dollars per hour; "
+                     f"builtin default: {BUILTIN['max_price']}" + see,
+        "region": "region code or name such as US or Europe, or any; default: any" + see,
+        "ports": "comma-separated ports to open such as 8000,8080; default: none" + see,
     }
 
 
@@ -137,20 +146,15 @@ def _reserve_flags(p: argparse.ArgumentParser, h: dict[str, str]) -> None:
     p.add_argument("--startup", metavar="FILE|-", help=h["startup"])
     p.add_argument("--no-wait", action="store_true", dest="no_wait",
                    help="return once the box is created without waiting for it to run")
-    p.add_argument("--config", dest="config_stdin", metavar="-", help=h["config_stdin"])
     _hardware_flags(p, h)
 
 
 def build_parser() -> Parser:
-    from vasty.config import BUILTIN
-    from vasty.timeutil import format_duration_exact
-
     out = _output_flags()
     root = Parser(prog="vasty", description="Leased GPU compute for agents.", parents=[out])
     root.add_argument("--version", action=_Version, help="print the vasty version and exit")
     sub = root.add_subparsers(dest="verb", parser_class=Parser, metavar="VERB")
-    reserve_help = _setting_help(format_duration_exact(BUILTIN["ttl"]))
-    run_help = _setting_help(f"run_ttl, {format_duration_exact(BUILTIN['run_ttl'])}")
+    reserve_help = _setting_help()
 
     p = sub.add_parser("reserve", parents=[out], help="rent a box with a clock")
     _reserve_flags(p, reserve_help)
@@ -181,7 +185,7 @@ def build_parser() -> Parser:
                    help="return once the job starts and leave the box up")
     p.add_argument("--sync", dest="sync_dir", metavar="DIR",
                    help="push DIR to the box before the command; default: none")
-    _reserve_flags(p, run_help)
+    _reserve_flags(p, reserve_help)
 
     p = sub.add_parser("serve", parents=[out], help="serve a model behind an OpenAI endpoint",
                        usage="%(prog)s [options] --model MODEL [-- VLLM_ARGS...]")
@@ -190,7 +194,7 @@ def build_parser() -> Parser:
     p.add_argument("--model", required=True, help="model name or box path for vllm serve")
     p.add_argument("--bind-local", action="store_true", dest="bind_local",
                    help="bind vLLM to 127.0.0.1 for use through vasty ssh -L")
-    _reserve_flags(p, run_help)
+    _reserve_flags(p, reserve_help)
 
     p = sub.add_parser("stop", parents=[out], help="stop a job on a box")
     p.add_argument("lease", metavar="LEASE", help="lease id or name")
@@ -236,12 +240,6 @@ def build_parser() -> Parser:
     action = p.add_subparsers(dest="action", parser_class=Parser, required=True)
     show = action.add_parser("show", parents=[out], help="print the effective settings")
     show.add_argument("--profile", help=reserve_help["profile"])
-    show.add_argument("--config", dest="config_stdin", metavar="-",
-                      help=reserve_help["config_stdin"])
-    show.add_argument("--owner", help=reserve_help["owner"])
-    show.add_argument("--ttl", metavar="DURATION", help=reserve_help["ttl"])
-    show.add_argument("--startup", metavar="FILE|-", help=reserve_help["startup"])
-    _hardware_flags(show, reserve_help)
     cset = action.add_parser("set", parents=[out], help="write one key to the user config")
     cset.add_argument("key", metavar="KEY", help="dotted key such as defaults.ttl or owner")
     cset.add_argument("value", metavar="VALUE", help="value in the key's unit, such as 45m")
@@ -285,16 +283,9 @@ def check_combinations(ns: argparse.Namespace) -> None:
         raise invalid("run needs a command after --.", "vasty run -- COMMAND")
     if verb not in ("run", "serve", "ssh") and ns.command is not None:
         raise invalid(f"{verb} takes no command after --.", f"Run vasty {verb} --help.")
-    config_stdin = getattr(ns, "config_stdin", None)
-    if config_stdin is not None and config_stdin != "-":
-        raise invalid("--config takes only '-'.", "Pass --config - and JSON on stdin.")
-    if config_stdin == "-" and getattr(ns, "startup", None) == "-":
-        raise invalid("--config - and --startup - both read stdin.", "Pass --startup FILE.")
     if verb in ("run", "serve"):
         if ns.on is not None:
             given = [f for f in CREATION_FLAGS if getattr(ns, f, None) not in (None, False)]
-            if config_stdin is not None:
-                given.append("config")
             if given:
                 flags = ", ".join("--" + f.replace("_", "-") for f in given)
                 raise invalid(f"--on takes no creation flags: {flags}.", f"Drop {flags}.")
@@ -342,7 +333,7 @@ def build_context(ns: argparse.Namespace) -> Context:
 
 
 def configure(ctx: Context, ns: argparse.Namespace) -> None:
-    """Fill the parsed flags, output mode and stdin JSON into a context."""
+    """Fill the parsed flags and output mode into a context."""
     ctx.flags = setting_flags(ns)
     ctx.profile = getattr(ns, "profile", None)
     if ns.json:
@@ -351,14 +342,6 @@ def configure(ctx: Context, ns: argparse.Namespace) -> None:
         ctx.mode = "human"
     else:
         ctx.mode = "human" if ctx.stdout_tty else "json"
-    if getattr(ns, "config_stdin", None) == "-":
-        try:
-            data = json.loads(ctx.stdin.read())
-        except json.JSONDecodeError as exc:
-            raise invalid(f"--config - read invalid JSON: {exc}.", "Pass a JSON object on stdin.")
-        if not isinstance(data, dict):
-            raise invalid("--config - needs a JSON object.", "Pass a JSON object on stdin.")
-        ctx.stdin_json = data
 
 
 def emit(ctx: Context, outcome: Outcome) -> None:

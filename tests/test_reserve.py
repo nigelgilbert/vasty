@@ -182,6 +182,15 @@ def test_offers_filtered_by_gpu_vram_and_count(h: Harness) -> None:
     assert (query.gpu, query.vram_min_gb, query.gpus, query.disk_gb) == ("4090", 24.0, 1, 50)
 
 
+@pytest.mark.parametrize("value", ["any", ""])
+def test_gpu_any_clears_a_configured_pin(h: Harness, value: str) -> None:
+    write_user(h, '[defaults]\ngpu = "A100"\nregion = "US"\n')
+    code, data = run_json(h, "reserve", "--gpu", value, "--region", value)
+    assert code == 0, data
+    query = calls(h, "search_offers")[0]
+    assert (query.gpu, query.region) == (None, None)
+
+
 def test_no_offers_names_constraints_and_hint(h: Harness) -> None:
     code, data = run_json(h, "reserve", "--gpu", "4090", "--max-price", "0.30")
     assert code == 1
@@ -347,6 +356,18 @@ def test_onstart_has_startup_script(h: Harness) -> None:
     run_json(h, "reserve", "--startup", str(script))
     request = h.provider.created[0]
     assert "pip install -U peft" in decode_onstart(request.onstart)
+
+
+def test_onstart_has_startup_script_from_stdin(h: Harness) -> None:
+    code, out, _ = h.run("reserve", "--startup", "-", stdin="echo from stdin\n")
+    assert code == 0, out
+    assert "echo from stdin" in decode_onstart(h.provider.created[0].onstart)
+
+
+def test_startup_key_in_config_is_script_text(h: Harness) -> None:
+    write_user(h, '[defaults]\nstartup = "echo from config"\n')
+    run_json(h, "reserve")
+    assert "echo from config" in decode_onstart(h.provider.created[0].onstart)
 
 
 def test_startup_failure_ends_wait_with_warning(h: Harness) -> None:

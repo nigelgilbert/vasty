@@ -123,7 +123,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
             raise invalid("--ttl applies to orphans only.", "vasty extend LEASE --by 30m")
         results = update(ctx, snap, resolved.leases, setters)
     warnings = (
-        views.warnings_for(results, snap.now, ctx.settings.warn_before_expiry)
+        views.warnings_for(results, snap.now)
         + list(snap.warnings)
     )
     if not_spawned is not None:

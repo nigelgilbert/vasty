@@ -44,7 +44,7 @@ def test_auto_reserved_run_releases_the_box(h: Harness) -> None:
     assert len(h.provider.created) == 1
     label = parse(h.provider.created[0].label)
     assert isinstance(label, Label)
-    assert label.ttl == 7200
+    assert label.ttl == 1800
 
 
 def test_auto_reserved_run_passes_remote_exit_code(h: Harness) -> None:
@@ -84,7 +84,7 @@ def idle(data: dict[str, Any]) -> list[tuple[str, str, str]]:
 
 def test_auto_reserved_run_warns_idle_box_available(h: Harness) -> None:
     add_lease(h, "l-0000a001", gpu_name="RTX 3060", gpu_ram_gb=12.0)
-    code, data = run_json(h, "run", "--", "python", "train.py")
+    code, data = run_json(h, "run", "--ttl", "2h", "--", "python", "train.py")
     assert code == 0, data
     assert idle(data) == [(
         "l-0000a001",

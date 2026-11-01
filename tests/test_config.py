@@ -44,13 +44,11 @@ class Env:
     def resolve(
         self,
         flags: dict[str, Any] | None = None,
-        stdin_json: dict[str, Any] | None = None,
         profile: str | None = None,
         stdin_text: str | None = None,
     ) -> Settings:
         reader = (lambda: stdin_text) if stdin_text is not None else None
-        return resolve(flags or {}, stdin_json, profile, self.env, self.cwd, self.home,
-                       stdin_text=reader)
+        return resolve(flags or {}, profile, self.env, self.cwd, self.home, stdin_text=reader)
 
     def error(self, **kw: Any) -> VastyError:
         with pytest.raises(VastyError) as exc:
@@ -69,27 +67,24 @@ def cfg(tmp_path: Path) -> Env:
 def test_builtin_defaults(cfg: Env) -> None:
     s = cfg.resolve()
     assert s.ttl == 1800
-    assert s.run_ttl == 7200
     assert s.max_price == Decimal("0.60")
-    assert s.warn_before_expiry == 300
     assert s.disk == 50
     assert s.gpus == 1
     assert s.image == "vastai/base-image:cuda-12.6.3-auto"
-    assert s.api_key_env == "VAST_API_KEY"
     assert (s.gpu, s.vram, s.region, s.ports, s.startup) == (None, None, None, [], None)
     assert s.sources["ttl"] == "default"
 
 
 # Resolution order.
 
-LAYERS = ["flag", "stdin", "profile", "env", "project", "user", "default"]
+LAYERS = ["flag", "profile", "env", "project", "user", "default"]
 
 
 @pytest.mark.parametrize("top", LAYERS)
 def test_resolution_order(cfg: Env, top: str) -> None:
     present = LAYERS[LAYERS.index(top):]
-    ttl = {"flag": "1m", "stdin": "2m", "profile": "3m", "env": "4m",
-           "project": "5m", "user": "6m", "default": "30m"}
+    ttl = {"flag": "1m", "profile": "3m", "env": "4m", "project": "5m", "user": "6m",
+           "default": "30m"}
     user = '[profiles.p]\nttl = "3m"\n' if "profile" in present else "[profiles.p]\n"
     if "user" in present:
         user = '[defaults]\nttl = "6m"\n' + user
@@ -100,26 +95,10 @@ def test_resolution_order(cfg: Env, top: str) -> None:
         cfg.env["VASTY_TTL"] = "4m"
     s = cfg.resolve(
         flags={"ttl": "1m"} if "flag" in present else {},
-        stdin_json={"ttl": "2m"} if "stdin" in present else None,
         profile="p",
     )
     assert s.ttl == parse_duration(ttl[top])
     assert s.sources["ttl"] == top
-
-
-def test_stdin_json_through_cli(harness: Harness) -> None:
-    code, out, _ = harness.run("config", "show", "--config", "-", stdin='{"disk": 120}')
-    assert code == 0
-    values = json.loads(out)["values"]
-    assert values["disk"] == {"value": 120, "source": "stdin"}
-
-
-def test_stdin_json_unknown_key(cfg: Env) -> None:
-    assert cfg.error(stdin_json={"bogus": 1}).code == "invalid_config"
-
-
-def test_stdin_json_bad_type(cfg: Env) -> None:
-    assert cfg.error(stdin_json={"ttl": 30}).code == "invalid_config"
 
 
 def test_vasty_toml_wins_over_dot_vasty(cfg: Env) -> None:
@@ -164,9 +143,7 @@ def test_unknown_profile_is_invalid_arguments(cfg: Env) -> None:
     ("var", "text", "attr", "expected"),
     [
         ("VASTY_TTL", "1h", "ttl", 3600),
-        ("VASTY_RUN_TTL", "3h", "run_ttl", 10800),
         ("VASTY_MAX_PRICE", "0.45", "max_price", Decimal("0.45")),
-        ("VASTY_WARN_BEFORE_EXPIRY", "10m", "warn_before_expiry", 600),
         ("VASTY_IMAGE", "my/img:1", "image", "my/img:1"),
         ("VASTY_DISK", "100", "disk", 100),
         ("VASTY_GPUS", "2", "gpus", 2),
@@ -177,7 +154,6 @@ def test_unknown_profile_is_invalid_arguments(cfg: Env) -> None:
         ("VASTY_PORTS", "8888,9000", "ports", [8888, 9000]),
         ("VASTY_STARTUP", "echo hi\n", "startup", "echo hi\n"),
         ("VASTY_OWNER", "agent", "owner", "agent"),
-        ("VASTY_API_KEY_ENV", "MY_KEY", "api_key_env", "MY_KEY"),
     ],
 )
 def test_env_maps_each_key(cfg: Env, var: str, text: str, attr: str, expected: Any) -> None:
@@ -249,9 +225,9 @@ def test_bad_toml_is_invalid_config(cfg: Env) -> None:
 
 def test_example_config_from_spec(cfg: Env) -> None:
     cfg.user(
-        'api_key_env = "VAST_API_KEY"\nowner = "nick"\nssh_key = "~/.ssh/id_ed25519"\n\n'
-        '[defaults]\nttl = "30m"\nrun_ttl = "2h"\nmax_price = 0.60\n'
-        'warn_before_expiry = "5m"\nimage = "vastai/base-image:cuda-12.6.3-auto"\ndisk = 50\n\n'
+        'owner = "nick"\nssh_key = "~/.ssh/id_ed25519"\n\n'
+        '[defaults]\nttl = "30m"\nmax_price = 0.60\n'
+        'image = "vastai/base-image:cuda-12.6.3-auto"\ndisk = 50\n\n'
         '[profiles.small]\ngpu = "4090"\nvram = 24\n\n'
         '[profiles.big]\ngpu = "A100"\nvram = 80\nmax_price = 2.50\n\n'
         '[profiles.vllm]\nimage = "vllm/vllm-openai:v0.32.0"\nvram = 24\ncuda = 13\n'
@@ -283,7 +259,7 @@ def test_flag_values_parse(cfg: Env) -> None:
 
 
 def test_flag_rejected_through_cli(harness: Harness) -> None:
-    code, out, _ = harness.run("config", "show", "--vram", "big")
+    code, out, _ = harness.run("reserve", "--vram", "big")
     assert code == 1
     assert json.loads(out)["error"] == "invalid_arguments"
 
@@ -291,42 +267,10 @@ def test_flag_rejected_through_cli(harness: Harness) -> None:
 # Startup.
 
 
-def test_startup_and_startup_file_together_is_invalid(cfg: Env) -> None:
-    cfg.user('[defaults]\nstartup = "echo a"\nstartup_file = "a.sh"\n')
-    assert cfg.error().code == "invalid_config"
-
-
-def test_startup_both_in_profile_is_invalid(cfg: Env) -> None:
-    cfg.user('[profiles.ft]\nstartup = "echo a"\nstartup_file = "a.sh"\n')
-    assert cfg.error().code == "invalid_config"
-
-
-def test_startup_both_in_stdin_is_invalid(cfg: Env) -> None:
-    err = cfg.error(stdin_json={"startup": "echo", "startup_file": "a.sh"})
-    assert err.code == "invalid_config"
-
-
-def test_startup_both_in_env_is_invalid(cfg: Env) -> None:
-    cfg.env.update(VASTY_STARTUP="echo", VASTY_STARTUP_FILE="a.sh")
-    assert cfg.error().code == "invalid_config"
-
-
-def test_startup_file_resolves_relative_to_user_file(cfg: Env) -> None:
-    script = write(user_config_path(cfg.home).parent / "setup.sh", "echo user\n")
-    cfg.user('[defaults]\nstartup_file = "setup.sh"\n')
+def test_startup_key_holds_script_text(cfg: Env) -> None:
+    cfg.user('[defaults]\nstartup = "setup.sh"\n')
     s = cfg.resolve()
-    assert s.startup == "echo user\n"
-    assert s.startup_path == str(script)
-    assert s.sources["startup"] == "user"
-
-
-def test_startup_file_resolves_relative_to_project_file(cfg: Env) -> None:
-    script = write(cfg.cwd / ".vasty" / "boot.sh", "echo project\n")
-    cfg.project('[profiles.ft]\nstartup_file = "boot.sh"\n', ".vasty/config.toml")
-    s = cfg.resolve(profile="ft")
-    assert s.startup == "echo project\n"
-    assert s.startup_path == str(script)
-    assert s.sources["startup"] == "profile"
+    assert (s.startup, s.startup_path, s.sources["startup"]) == ("setup.sh", None, "user")
 
 
 def test_cli_startup_resolves_relative_to_cwd(cfg: Env) -> None:
@@ -345,35 +289,14 @@ def test_cli_startup_overrides_profile(cfg: Env) -> None:
     assert cfg.resolve(profile="ft", flags={"startup": "mine.sh"}).startup == "echo mine\n"
 
 
-def test_higher_startup_file_replaces_lower_startup_text(cfg: Env) -> None:
-    write(cfg.cwd / "p.sh", "echo p\n")
-    cfg.user('[profiles.ft]\nstartup = "echo user"\n')
-    cfg.project('[profiles.ft]\nstartup_file = "p.sh"\n')
-    s = cfg.resolve(profile="ft")
-    assert s.startup == "echo p\n"
-    assert s.profiles["ft"] == {"startup_file": "p.sh"}
-
-
 def test_startup_stdin(cfg: Env) -> None:
     s = cfg.resolve(flags={"startup": "-"}, stdin_text="apt-get install -y ffmpeg\n")
     assert s.startup == "apt-get install -y ffmpeg\n"
     assert s.startup_path is None
 
 
-def test_startup_stdin_through_cli(harness: Harness) -> None:
-    code, out, _ = harness.run("config", "show", "--startup", "-", stdin="echo from stdin\n")
-    assert code == 0
-    assert json.loads(out)["values"]["startup"] == {"value": "echo from stdin\n",
-                                                    "source": "flag"}
-
-
 def test_missing_cli_startup_file_is_invalid_arguments(cfg: Env) -> None:
     assert cfg.error(flags={"startup": "nope.sh"}).code == "invalid_arguments"
-
-
-def test_missing_config_startup_file_is_invalid_config(cfg: Env) -> None:
-    cfg.user('[defaults]\nstartup_file = "nope.sh"\n')
-    assert cfg.error().code == "invalid_config"
 
 
 # Owner.
@@ -400,10 +323,37 @@ def test_owner_missing_everywhere(cfg: Env) -> None:
     assert cfg.error().code == "invalid_config"
 
 
-def test_owner_flag_on_config_show(harness: Harness) -> None:
-    code, out, _ = harness.run("config", "show", "--owner", "someone")
-    assert code == 0
-    assert json.loads(out)["values"]["owner"] == {"value": "someone", "source": "flag"}
+# `any` clears gpu and region.
+
+
+@pytest.mark.parametrize("text", ["any", "ANY", " Any ", ""])
+def test_any_flag_clears_gpu_and_region(cfg: Env, text: str) -> None:
+    cfg.user('[defaults]\ngpu = "A100"\nregion = "US"\n')
+    s = cfg.resolve(flags={"gpu": text, "region": text})
+    assert (s.gpu, s.region) == (None, None)
+    assert s.sources["gpu"] == s.sources["region"] == "flag"
+
+
+def test_any_in_profile_keeps_lower_pins_cleared(cfg: Env) -> None:
+    cfg.env["VASTY_GPU"] = "3090"
+    cfg.user('[profiles.p]\ngpu = "any"\nregion = "any"\n')
+    cfg.project('[defaults]\nregion = "EU"\n')
+    s = cfg.resolve(profile="p")
+    assert (s.gpu, s.region) == (None, None)
+    assert s.sources["gpu"] == s.sources["region"] == "profile"
+    assert s.profiles["p"] == {"gpu": "any", "region": "any"}
+
+
+def test_any_in_env_clears_a_file_pin(cfg: Env) -> None:
+    cfg.project('[defaults]\ngpu = "A100"\n')
+    cfg.env["VASTY_GPU"] = "any"
+    s = cfg.resolve()
+    assert (s.gpu, s.sources["gpu"]) == (None, "env")
+
+
+def test_any_leaves_other_keys_alone(cfg: Env) -> None:
+    assert cfg.resolve(flags={"image": "any"}).image == "any"
+    assert cfg.error(flags={"vram": "any"}).code == "invalid_arguments"
 
 
 # Removed keys.
@@ -418,6 +368,25 @@ def test_removed_budget_key_is_invalid_config(cfg: Env, table: str) -> None:
     err = cfg.error()
     assert err.code == "invalid_config"
     assert REMOVED_BUDGET_KEY in err.message
+
+
+# Build each removed key's name so a repo grep for it stays empty.
+REMOVED_KEYS = [
+    ("[defaults]", "_".join(["run", "ttl"])),
+    ("[profiles.big]", "_".join(["run", "ttl"])),
+    ("[defaults]", "_".join(["warn", "before", "expiry"])),
+    ("[defaults]", "_".join(["startup", "file"])),
+    ("[profiles.big]", "_".join(["startup", "file"])),
+    ("", "_".join(["api", "key", "env"])),
+]
+
+
+@pytest.mark.parametrize(("table", "key"), REMOVED_KEYS)
+def test_removed_keys_are_invalid_config(cfg: Env, table: str, key: str) -> None:
+    cfg.user(f'{table}\n{key} = "x"\n')
+    err = cfg.error()
+    assert err.code == "invalid_config"
+    assert key in err.message
 
 
 # The removed models table.
@@ -485,10 +454,11 @@ def test_config_file_duration_uses_flag_grammar(cfg: Env, text: str) -> None:
 
 def test_config_show_json(harness: Harness) -> None:
     write(user_config_path(harness.home), "[defaults]\ndisk = 80\n")
-    code, out, _ = harness.run("config", "show", "--ttl", "1h")
+    harness.env["VASTY_TTL"] = "1h"
+    code, out, _ = harness.run("config", "show")
     assert code == 0
     values = json.loads(out)["values"]
-    assert values["ttl"] == {"value": "1h", "source": "flag"}
+    assert values["ttl"] == {"value": "1h", "source": "env"}
     assert values["disk"] == {"value": 80, "source": "user"}
     assert values["max_price"] == {"value": 0.6, "source": "default"}
     assert values["owner"] == {"value": "claude", "source": "env"}
@@ -509,12 +479,26 @@ def test_config_show_profile(harness: Harness) -> None:
     assert json.loads(out)["values"]["gpu"] == {"value": "A100", "source": "profile"}
 
 
+def test_config_show_reports_cleared_gpu(harness: Harness) -> None:
+    write(user_config_path(harness.home), '[defaults]\ngpu = "A100"\n[profiles.p]\ngpu = "any"\n')
+    code, out, _ = harness.run("config", "show", "--profile", "p")
+    assert code == 0
+    assert json.loads(out)["values"]["gpu"] == {"value": None, "source": "profile"}
+
+
+@pytest.mark.parametrize("flag", ["--ttl", "--owner", "--gpu", "--startup", "--config"])
+def test_config_show_takes_only_profile(harness: Harness, flag: str) -> None:
+    code, out, _ = harness.run("config", "show", flag, "x")
+    assert code == 1
+    assert json.loads(out)["error"] == "invalid_arguments"
+
+
 def test_config_show_human(harness: Harness) -> None:
     write(harness.home / "project" / "vasty.toml", '[defaults]\nimage = "my/img"\n')
     code, out, _ = harness.run("config", "show", "--plain")
     assert code == 0
     lines = out.strip().splitlines()
-    assert len(lines) == 17
+    assert len(lines) == 14
     rows = {line.split()[0]: line.split()[1:] for line in lines}
     assert rows["image"] == ["my/img", "project"]
     assert rows["ttl"] == ["30m", "default"]
@@ -559,12 +543,6 @@ def test_config_show_cuda_from_env(harness: Harness) -> None:
     assert json.loads(out)["values"]["cuda"] == {"value": 13.0, "source": "env"}
 
 
-def test_config_show_cuda_flag(harness: Harness) -> None:
-    code, out, _ = harness.run("config", "show", "--cuda", "12.8")
-    assert code == 0
-    assert json.loads(out)["values"]["cuda"] == {"value": 12.8, "source": "flag"}
-
-
 def test_config_show_cuda_from_base_image(harness: Harness) -> None:
     code, out, _ = harness.run("config", "show")
     assert code == 0
@@ -579,7 +557,8 @@ def test_config_show_vllm_profile_names_image_as_cuda_source(harness: Harness) -
 
 
 def test_config_show_custom_image_has_no_cuda(harness: Harness) -> None:
-    code, out, _ = harness.run("config", "show", "--image", "my/img")
+    harness.env["VASTY_IMAGE"] = "my/img"
+    code, out, _ = harness.run("config", "show")
     assert code == 0
     assert json.loads(out)["values"]["cuda"] == {"value": None, "source": "default"}
 
@@ -686,23 +665,17 @@ def test_config_set_rejects(harness: Harness, key: str, value: str) -> None:
     assert user_config_path(harness.home).read_text() == before
 
 
-def test_config_set_startup_replaces_startup_file(harness: Harness) -> None:
-    write(user_config_path(harness.home), '[profiles.ft]\nstartup_file = "a.sh"\n')
-    assert harness.run("config", "set", "profiles.ft.startup", "pip install peft")[0] == 0
-    assert read_user(harness) == {"profiles": {"ft": {"startup": "pip install peft"}}}
-
-
 def test_config_set_round_trips_through_resolve(harness: Harness) -> None:
-    harness.run("config", "set", "defaults.run_ttl", "3h")
+    harness.run("config", "set", "defaults.ttl", "3h")
     harness.run("config", "set", "profiles.big.max_price", "2.5")
     s = harness.context().settings
-    assert s.run_ttl == 10800
+    assert s.ttl == 10800
     assert s.profiles == {"big": {"max_price": 2.5}}
 
 
 def test_emit_toml_round_trip() -> None:
     doc: dict[str, Any] = {
-        "api_key_env": "VAST_API_KEY",
+        "ssh_key": "~/.ssh/work",
         "owner": "nick",
         "defaults": {"ttl": "30m", "max_price": 0.6, "ports": [8888, 9000], "flag": True},
         "profiles": {

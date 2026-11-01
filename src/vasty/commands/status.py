@@ -84,7 +84,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     ]
     lease_views += [views.orphan_view(inst, verbose, snap.charges) for inst in rows]
 
-    warnings = views.warnings_for(leases, now, settings.warn_before_expiry)
+    warnings = views.warnings_for(leases, now)
     unreadable_ids = {inst.id for inst in snap.unreadable}
     warnings += [views.orphan_warning(inst) for inst in rows if inst.id not in unreadable_ids]
     warnings += snap.warnings

@@ -26,7 +26,7 @@ from vasty.config import (
 from vasty.context import Context
 from vasty.timeutil import format_duration_exact
 
-DURATION_KEYS = ("ttl", "run_ttl", "warn_before_expiry")
+DURATION_KEYS = ("ttl",)
 
 
 @dataclass
@@ -79,11 +79,9 @@ def _human_value(key: str, value: Any, settings: Settings) -> str:
 
 
 def _show(ctx: Context, args: argparse.Namespace) -> Outcome:
-    if getattr(args, "owner", None) is not None:
-        ctx.flags["owner"] = args.owner
     settings = ctx.settings
     values = show_values(settings)
-    found = api_key(ctx.env, ctx.home, settings.api_key_env)
+    found = api_key(ctx.env, ctx.home)
     key_source = found[1] if found is not None else None
     rows = [(k, _human_value(k, v.value, settings), v.source) for k, v in values.items()]
     rows.append(("api_key_source", key_source or "-", ""))
