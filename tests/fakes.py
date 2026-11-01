@@ -487,7 +487,7 @@ class Harness:
         return Context(
             env=self.env, cwd=self.home / "project", home=self.home,
             stdin=io.StringIO(stdin), stdout=io.StringIO(), stderr=io.StringIO(),
-            stdin_tty=tty, stdout_tty=tty,
+            stdout_tty=tty,
             wall=self.time.wall, mono=self.time.mono, sleep=self.time.sleep,
             random_hex=self.random_hex,
             which=lambda name: None if name in self.missing_tools else f"/usr/bin/{name}",

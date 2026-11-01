@@ -78,7 +78,6 @@ class Context:
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
     stdout: TextIO = field(default_factory=lambda: sys.stdout)
     stderr: TextIO = field(default_factory=lambda: sys.stderr)
-    stdin_tty: bool = False
     stdout_tty: bool = False
     wall: Callable[[], float] = time.time
     mono: Callable[[], float] = time.monotonic

@@ -301,7 +301,6 @@ def build_context(ns: argparse.Namespace) -> Context:
 
     ctx = Context()
     ctx.stdout_tty = sys.stdout.isatty()
-    ctx.stdin_tty = sys.stdin.isatty()
     configure(ctx, ns)
     return ctx
 

@@ -334,7 +334,7 @@ The API key comes from `VAST_API_KEY`. When that is unset, vasty reads `~/.confi
 Done:
 
 - Every verb above, in `src/vasty/`.
-- 1392 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
+- 1427 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
 - Funded live runs on Vast from 2026-10-29 to 2026-11-01, `serve` end to end included.
 
 Not done:
