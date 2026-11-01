@@ -71,6 +71,7 @@ def resolve_target(ctx: Context, snap: Snapshot, ns: argparse.Namespace, write: 
     value is invalid. A selector that matches nothing returns empty lists.
     """
     ref = getattr(ns, "target", None)
+    check_selector(ns)
     if ref is not None:
         found = resolve_lease(ctx, snap, ref)
         if isinstance(found, Instance):
@@ -91,6 +92,14 @@ def resolve_target(ctx: Context, snap: Snapshot, ns: argparse.Namespace, write: 
         and (owner is None or lease.label.owner == owner)
     ]
     return Resolved(leases, [], bulk=True)
+
+
+def check_selector(ns: argparse.Namespace) -> None:
+    """Raise `invalid_arguments` when a LEASE comes with `--group` or `--owner`."""
+    if getattr(ns, "target", None) is not None and (
+        getattr(ns, "group", None) or getattr(ns, "owner", None)
+    ):
+        raise invalid("A LEASE takes no selector.", "Pass a LEASE or a selector.")
 
 
 def resolve_lease(ctx: Context, snap: Snapshot, ref: str) -> CachedLease | Instance:

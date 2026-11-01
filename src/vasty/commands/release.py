@@ -48,13 +48,14 @@ from vasty.models import (
     WarningItem,
 )
 from vasty.output import money
-from vasty.targeting import resolve_lease, resolve_target
+from vasty.targeting import check_selector, resolve_lease, resolve_target
 from vasty.timeutil import format_duration
 
 
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     snap = engine.refresh(ctx)
     engine.read_charges(ctx, snap)
+    check_selector(args)
     if args.target is not None:
         return _release_one(ctx, snap, args.target)
     resolved = resolve_target(ctx, snap, args, write=True)

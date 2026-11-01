@@ -139,6 +139,17 @@ def test_no_selector_is_invalid(fleet: Harness) -> None:
     assert exc.value.code == "invalid_arguments"
 
 
+def test_lease_with_selector_is_invalid(fleet: Harness) -> None:
+    ctx = fleet.context()
+    snap = engine.refresh(ctx)
+    for argv in (["release", "l-7f3a", "--group", "g"], ["status", "l-7f3a", "--owner", "claude"]):
+        with pytest.raises(VastyError) as exc:
+            resolve_target(ctx, snap, parse(argv), write=True)
+        assert exc.value.code == "invalid_arguments"
+    code, out, _ = fleet.run("release", "l-7f3a", "--owner", "claude")
+    assert code == 1 and "invalid_arguments" in out
+
+
 def test_other_owners_name_lists_matches(fleet: Harness) -> None:
     with pytest.raises(VastyError) as exc:
         lookup(fleet, "scratch")
