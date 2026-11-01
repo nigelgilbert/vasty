@@ -1121,6 +1121,7 @@ def test_every_error_after_create_names_lease_and_destroyed(
 
 def test_wait_writes_each_milestone_once(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     h.provider.start_status = "loading"
+    h.provider.offers = [make_offer(1, dph_total=Decimal("0.06296296296296297"))]
     real_sleep = h.time.sleep
     sleeps: list[float] = []
 
@@ -1137,6 +1138,7 @@ def test_wait_writes_each_milestone_once(h: Harness, monkeypatch: pytest.MonkeyP
     prefix = "vasty: l-abababab "
     said = [line.removeprefix(prefix) for line in err.splitlines() if line.startswith(prefix)]
     assert said[0].startswith("created on instance ")
+    assert said[0].endswith("RTX 4090 at $0.063/hr")
     assert said[1:] == [
         "running on Vast; waiting for SSH",
         "answers SSH; waiting for startup",

@@ -48,6 +48,7 @@ from vasty.models import (
     SweptEntry,
     WarningItem,
 )
+from vasty.output import json_money
 from vasty.state import (
     GUARD_LAYERS,
     SSH_WAIT_S,
@@ -150,7 +151,7 @@ def reserve_lease(
     reused = not created
     if created:
         _say(ctx, lease, f"created on instance {lease.instance_id}, {lease.gpu or '?'} at "
-             f"${lease.price_per_hr}/hr")
+             f"${json_money(lease.price_per_hr)}/hr")
     not_spawned = spawn_follow(ctx, lease.lease)
 
     if lease.state == "pending":
