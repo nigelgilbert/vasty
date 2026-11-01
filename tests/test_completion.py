@@ -265,7 +265,7 @@ def test_zsh_completes_from_cache(
         "_vasty\n"
     )
     result = subprocess.run([zsh, "-f", "-c", program], env=env,
-                            capture_output=True, text=True)
+                            capture_output=True, text=True, check=False)
     assert sorted(result.stdout.split()) == sorted(expected)
 
 

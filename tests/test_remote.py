@@ -38,7 +38,7 @@ TARGET = SshTarget(instance_id=4242, host="198.51.100.7", port=41022)
 
 
 def bash_n(script: str) -> None:
-    done = subprocess.run(["bash", "-n"], input=script, capture_output=True, text=True)
+    done = subprocess.run(["bash", "-n"], input=script, capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
 
 
@@ -85,7 +85,7 @@ class LocalRunner:
         if mode == "stream":
             return subprocess_runner(remote, mode="stream", out=out)
         done = subprocess.run(remote, input=input, capture_output=True, text=True,
-                              timeout=timeout or 30, env=self.env)
+                              timeout=timeout or 30, env=self.env, check=False)
         return ExecResult(done.returncode, done.stdout, done.stderr)
 
 
@@ -372,7 +372,7 @@ def test_rsync_push_delete_runs_against_a_path_with_a_space(tmp_path: Path) -> N
     )
     argv = box.rsync_argv(TARGET, True, f"{src}/", f"{workspace}/", True, [".git"])
     argv[argv.index("-e") + 1] = str(stub)
-    done = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    done = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
     assert done.returncode == 0, done.stderr
     assert (workspace / "pkg" / "a.py").read_text() == "print(1)\n"
     assert not (workspace / "stale").exists()

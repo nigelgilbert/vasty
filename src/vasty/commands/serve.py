@@ -234,7 +234,7 @@ def _wait_ready(
         status = ctx.box.job_status(target, job_id)
         if status.exit is not None or status.state == "exited":
             code = status.exit
-            save_lease(ctx, lease, lambda record: finish_job(record, job_id, code, status.finished_at))
+            save_lease(ctx, lease, lambda record: finish_job(record, job_id, code, status.finished_at))  # noqa: B023
             message = f"vLLM exited {code} before /v1/models answered."
             raise _serve_failed(ctx, target, lease, job_id, key, message, log_hint, code, plan)
         if ctx.mono() >= deadline:

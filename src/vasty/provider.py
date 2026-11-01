@@ -40,13 +40,22 @@ import json
 import math
 import re
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
-from typing import Any, Callable, Iterator, Protocol
+from typing import Any, Protocol
 
 from vasty import timeutil
 from vasty.errors import VastyError
-from vasty.models import Balance, Charges, CreateRequest, Instance, Offer, OfferQuery, SshKey
+from vasty.models import (
+    Balance,
+    Charges,
+    CreateRequest,
+    Instance,
+    Offer,
+    OfferQuery,
+    SshKey,
+)
 
 
 class ProviderTimeout(VastyError):
@@ -256,7 +265,7 @@ def normalize_instance(row: dict[str, Any]) -> Instance | None:
         gpu_name=_to_str(row.get("gpu_name")),
         num_gpus=_to_int(row.get("num_gpus")) or 0,
         gpu_ram_gb=_gb(row.get("gpu_ram")),
-        dph_total=_to_decimal(row.get("dph_total")) or Decimal("0"),
+        dph_total=_to_decimal(row.get("dph_total")) or Decimal(0),
         public_ipaddr=_to_str(row.get("public_ipaddr")),
         ssh_host=_to_str(row.get("ssh_host")),
         ssh_port=_to_int(row.get("ssh_port")),
@@ -276,7 +285,7 @@ def parse_charges(rows: list[Any], end: int) -> Charges:
     """
     today_start = timeutil.day_start(int(end))
     per_instance: dict[int, Decimal] = {}
-    today = Decimal("0")
+    today = Decimal(0)
     for row in rows:
         if not isinstance(row, dict) or row.get("type", "instance") != "instance":
             continue
@@ -285,7 +294,7 @@ def parse_charges(rows: list[Any], end: int) -> Charges:
             continue
         instance_id = _charge_instance_id(row)
         if instance_id is not None:
-            per_instance[instance_id] = per_instance.get(instance_id, Decimal("0")) + amount
+            per_instance[instance_id] = per_instance.get(instance_id, Decimal(0)) + amount
         at = _to_int(row.get("start"))
         if at is None:
             at = _to_int(row.get("end"))

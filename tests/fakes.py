@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import io
 import itertools
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Callable, Mapping, TextIO
+from typing import Any, TextIO
 
 from vasty.context import Context
 from vasty.errors import VastyError
@@ -66,10 +67,10 @@ class FakeTime:
 
 
 def make_offer(offer_id: int = 1, **kw: Any) -> Offer:
-    base: dict[str, Any] = dict(
-        id=offer_id, gpu_name="RTX 4090", num_gpus=1, gpu_ram_gb=24.0,
-        dph_total=Decimal("0.38"), reliability=0.99, inet_down=500.0, direct_port_count=10,
-    )
+    base: dict[str, Any] = {
+        "id": offer_id, "gpu_name": "RTX 4090", "num_gpus": 1, "gpu_ram_gb": 24.0,
+        "dph_total": Decimal("0.38"), "reliability": 0.99, "inet_down": 500.0, "direct_port_count": 10,
+    }
     base.update(kw)
     return Offer(**base)
 
@@ -85,8 +86,8 @@ class FakeProvider:
     """Billed amount per instance in rows dated today."""
     charge_rows: list[tuple[int, Decimal, int]] = field(default_factory=list)
     """Extra `(instance_id, amount, start)` charge rows."""
-    account_balance: Decimal = Decimal("0")
-    account_credit: Decimal = Decimal("20")
+    account_balance: Decimal = Decimal(0)
+    account_credit: Decimal = Decimal(20)
     ssh_keys: list[SshKey] = field(default_factory=list)
     attached: list[tuple[str, int | None]] = field(default_factory=list)
     destroyed: list[int] = field(default_factory=list)
@@ -121,11 +122,11 @@ class FakeProvider:
 
     def add_instance(self, **kw: Any) -> Instance:
         iid = kw.pop("id", None) or next(self._ids)
-        base: dict[str, Any] = dict(
-            id=iid, label=None, actual_status="running", gpu_name="RTX 3090", num_gpus=1,
-            gpu_ram_gb=24.0, dph_total=Decimal("0.22"), public_ipaddr="198.51.100.9",
-            ssh_host=None, ssh_port=None, ports={22: 40022, 8000: 40080, 8080: 40081},
-        )
+        base: dict[str, Any] = {
+            "id": iid, "label": None, "actual_status": "running", "gpu_name": "RTX 3090", "num_gpus": 1,
+            "gpu_ram_gb": 24.0, "dph_total": Decimal("0.22"), "public_ipaddr": "198.51.100.9",
+            "ssh_host": None, "ssh_port": None, "ports": {22: 40022, 8000: 40080, 8080: 40081},
+        }
         base.update(kw)
         inst = Instance(**base)
         self.instances[inst.id] = inst
@@ -303,9 +304,9 @@ class FakeBox:
                 box.clock = target_clock
                 box.clock_readable = True
         missing = list(box.guard_missing)
-        if box.alive_mtime is not None and self.time.wall_now - box.alive_mtime > 180:
-            if "watchdog" not in missing:
-                missing.append("watchdog")
+        stale = box.alive_mtime is not None and self.time.wall_now - box.alive_mtime > 180
+        if stale and "watchdog" not in missing:
+            missing.append("watchdog")
         off = box.clock is None or (
             target_clock is not None and abs(box.clock - target_clock) > CLOCK_TOLERANCE_S
         )

@@ -170,8 +170,7 @@ def gpu_text(gpu: str | None, gpus: int, vram_gb: float | None) -> str:
         return "?"
     name = gpu
     for prefix in ("RTX ", "GTX "):
-        if name.startswith(prefix):
-            name = name[len(prefix):]
+        name = name.removeprefix(prefix)
     vram = "?" if vram_gb is None else str(int(vram_gb))
     return f"{gpus}x{vram} {name}"
 
@@ -280,9 +279,9 @@ def group_lines(
         if ttls:
             low, high = format_duration(min(ttls)), format_duration(max(ttls))
             head.append(f"expiries {low}" if low == high else f"expiries {low}–{high}")
-        cost = sum((view.cost for view in managed if view.cost is not None), Decimal("0"))
+        cost = sum((view.cost for view in managed if view.cost is not None), Decimal(0))
         burn = sum((view.price_per_hr for view in managed if view.state not in HISTORY_STATES),
-                   Decimal("0"))
+                   Decimal(0))
         head.append(f"${money(cost):.2f} so far")
         head.append(f"${money(burn):.2f}/hr")
     lines = [" · ".join(head)]

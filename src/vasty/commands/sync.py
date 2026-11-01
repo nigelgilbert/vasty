@@ -13,7 +13,12 @@ import argparse
 
 from vasty import engine
 from vasty.cli import Outcome
-from vasty.commands._common import DEFAULT_EXCLUDES, lease_warnings, pick_lease, require_tools
+from vasty.commands._common import (
+    DEFAULT_EXCLUDES,
+    lease_warnings,
+    pick_lease,
+    require_tools,
+)
 from vasty.context import Context
 from vasty.errors import VastyError
 from vasty.models import SyncResult

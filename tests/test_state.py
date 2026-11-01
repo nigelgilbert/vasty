@@ -37,7 +37,7 @@ def probe(started: bool = False, exit: int | None = None, interrupted: bool = Fa
 
 
 def label(**kw: Any) -> Label:
-    base: dict[str, Any] = dict(lease="l-8b12", owner="claude", created=NOW - 600, ttl=1800)
+    base: dict[str, Any] = {"lease": "l-8b12", "owner": "claude", "created": NOW - 600, "ttl": 1800}
     base.update(kw)
     return Label(**base)
 
@@ -365,20 +365,20 @@ def test_busy(state: LeaseState, jobs: list[str], expected: bool | None) -> None
 
 
 def settings(**kw: Any) -> Settings:
-    base: dict[str, Any] = dict(
-        owner="claude", api_key_env="VAST_API_KEY", ssh_key=None, ttl=1800, run_ttl=1800,
-        max_price=Decimal("1.00"), warn_before_expiry=WARN, disk=50, gpus=1, image="img:1",
-    )
+    base: dict[str, Any] = {
+        "owner": "claude", "api_key_env": "VAST_API_KEY", "ssh_key": None, "ttl": 1800, "run_ttl": 1800,
+        "max_price": Decimal("1.00"), "warn_before_expiry": WARN, "disk": 50, "gpus": 1, "image": "img:1",
+    }
     base.update(kw)
     return Settings(**base)
 
 
 def box(lease_id: str = "l-8b12", instance_id: int = 1001, expires: int = NOW + 3600,
         **kw: Any) -> CachedLease:
-    base: dict[str, Any] = dict(
-        gpu="RTX 3060", gpus=1, vram_gb=12.0, price_per_hr=Decimal("0.10"), image="img:1",
-        ports={22: 40022, 8000: 40080}, reachable_at=NOW - 60, startup_exit=0,
-    )
+    base: dict[str, Any] = {
+        "gpu": "RTX 3060", "gpus": 1, "vram_gb": 12.0, "price_per_hr": Decimal("0.10"), "image": "img:1",
+        "ports": {22: 40022, 8000: 40080}, "reachable_at": NOW - 60, "startup_exit": 0,
+    }
     base.update(kw)
     lab = label(lease=lease_id, expires=expires)
     return CachedLease(lease=lease_id, instance_id=instance_id, label=lab, state="running", **base)

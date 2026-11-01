@@ -44,7 +44,7 @@ def h(harness: Harness) -> Harness:
 
 
 def run_json(harness: Harness, *argv: str) -> tuple[int, dict[str, Any]]:
-    code, out, err = harness.run(*argv)
+    code, out, _err = harness.run(*argv)
     data: dict[str, Any] = json.loads(out)
     return code, data
 
@@ -164,7 +164,7 @@ def test_offers_sorted_by_reliability_bandwidth_price_id(h: Harness) -> None:
     ranked = reserve.rank_offers(
         h.provider.offers,
         reserve.OfferQuery(gpu=None, vram_min_gb=None, gpus=1, disk_gb=50,
-                           max_price=Decimal("1"), region=None),
+                           max_price=Decimal(1), region=None),
     )
     assert [o.id for o in ranked] == [1, 2, 3, 4, 5]
 
@@ -540,7 +540,7 @@ def test_give_up_marks_released_when_row_already_gone(
         return False
 
     monkeypatch.setattr("vasty.engine.destroy_checked", vanish)
-    code, out, err = h.run("reserve", "--image", "alpine:3")
+    code, _out, err = h.run("reserve", "--image", "alpine:3")
     assert code == 1
     assert "changed before" not in err
     lease = cached_lease(h)

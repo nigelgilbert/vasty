@@ -68,7 +68,7 @@ def lease_cost(instance_id: int, charges: Charges | None) -> Decimal | None:
 
 def burn_per_hr(live: Iterable[Instance]) -> Decimal:
     """Return the sum of `dph_total` over live leases and orphans."""
-    return sum((inst.dph_total for inst in live), Decimal("0"))
+    return sum((inst.dph_total for inst in live), Decimal(0))
 
 
 def show_jobs_unknown(state: str) -> bool:

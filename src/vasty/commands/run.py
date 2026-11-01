@@ -26,6 +26,7 @@ the lost-attach or release refresh.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import shlex
 from collections.abc import Iterator
@@ -215,7 +216,7 @@ def _attach(
         code = ctx.box.attach_job(target, job.id, out)
     except KeyboardInterrupt:
         return _interrupted(ctx, lease, target, job, release_on_exit, warnings, swept, started_at)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         _warn_attach_lost(ctx, lease, job)
         if isinstance(exc, BrokenPipeError):
             discard_stream(out)
@@ -265,10 +266,8 @@ def _warn_attach_lost(ctx: Context, lease: CachedLease, job: Job) -> None:
 
 def _warn_quietly(ctx: Context, message: str) -> None:
     """Write a warning to stderr and ignore a broken stderr."""
-    try:
+    with contextlib.suppress(Exception):
         ctx.warn(message)
-    except Exception:
-        pass
 
 
 def _lost(

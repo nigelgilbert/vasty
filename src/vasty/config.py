@@ -27,10 +27,11 @@ import os
 import re
 import tempfile
 import tomllib
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from vasty import timeutil
 from vasty.errors import VastyError

@@ -149,13 +149,17 @@ def subprocess_runner(
 ) -> ExecResult:
     """Run a local process with `subprocess`."""
     if mode == "capture":
-        done = subprocess.run(argv, input=input, capture_output=True, text=True, timeout=timeout)
+        done = subprocess.run(
+            argv, input=input, capture_output=True, text=True, timeout=timeout, check=False
+        )
         return ExecResult(done.returncode, done.stdout, done.stderr)
     if mode == "inherit":
-        code = subprocess.run(argv, input=input, text=True, timeout=timeout).returncode
+        code = subprocess.run(argv, input=input, text=True, timeout=timeout, check=False).returncode
         return ExecResult(code, "", "")
     if mode == "stderr":
-        done = subprocess.run(argv, input=input, text=True, timeout=timeout, stdout=2)
+        done = subprocess.run(
+            argv, input=input, text=True, timeout=timeout, stdout=2, check=False
+        )
         return ExecResult(done.returncode, "", "")
     with tempfile.TemporaryFile() as err:
         proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err)
@@ -571,8 +575,10 @@ class SshBox:
         lines += [
             ': >"$J/log"',
             'date +%s >"$J/started"',
-            f"{self.tmux} new-session -d -s {session} -c {w} {tmux_cmd}"
-            " || { echo vasty_job=tmux_failed; exit 0; }",
+            (
+                f"{self.tmux} new-session -d -s {session} -c {w} {tmux_cmd}"
+                " || { echo vasty_job=tmux_failed; exit 0; }"
+            ),
             'i=0; while [ ! -s "$J/pid" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done',
             'echo "started=$(cat "$J/started")"',
             'echo "pid=$(cat "$J/pid" 2>/dev/null)"',

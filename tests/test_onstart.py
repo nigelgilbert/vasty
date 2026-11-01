@@ -29,7 +29,7 @@ from vasty.onstart import (
 
 
 def bash_n(script: str) -> None:
-    done = subprocess.run(["bash", "-n"], input=script, capture_output=True, text=True)
+    done = subprocess.run(["bash", "-n"], input=script, capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
 
 
@@ -113,7 +113,7 @@ class Watchdog:
     def run(self, max_loops: int) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["bash", str(self.script)], env=self.env(max_loops), capture_output=True,
-            text=True, timeout=30,
+            text=True, timeout=30, check=False,
         )
 
     def start(self, max_loops: int = 0, stub_sleep: float = 0.05) -> subprocess.Popen[str]:
@@ -376,7 +376,7 @@ def test_missing_curl_marks_watchdog_each_loop(wd: Watchdog) -> None:
     env = wd.env(1)
     env["VASTY_CURL"] = "vasty-no-such-curl"
     done = subprocess.run(["bash", str(wd.script)], env=env, capture_output=True, text=True,
-                          timeout=30)
+                          timeout=30, check=False)
     assert done.returncode == 0, done.stderr
     assert wd.guard() == ["watchdog"]
     wd.run(max_loops=1)
@@ -409,10 +409,10 @@ class Box:
         self.environ.write_bytes(b"PATH=/bin\0")
 
     def payload(self, ttl: int = 600, startup: str | None = None, **kw: object) -> str:
-        args: dict[str, object] = dict(
-            root=str(self.root), workdir=str(self.workdir), services=False,
-            proc_environ=str(self.environ), alive_wait=5.0, essentials=(),
-        )
+        args: dict[str, object] = {
+            "root": str(self.root), "workdir": str(self.workdir), "services": False,
+            "proc_environ": str(self.environ), "alive_wait": 5.0, "essentials": (),
+        }
         args.update(kw)
         return build_payload(ttl, startup, **args)  # type: ignore[arg-type]
 
@@ -429,7 +429,7 @@ class Box:
             base.update(env)
         base = {k: v for k, v in base.items() if v}
         done = subprocess.run(["bash"], input=payload, env=base, capture_output=True, text=True,
-                              timeout=60)
+                              timeout=60, check=False)
         assert done.returncode == 0, done.stderr
         return done
 

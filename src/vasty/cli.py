@@ -8,11 +8,13 @@ module exposes `execute(ctx, args) -> Outcome`.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
 import json
 import sys
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, NoReturn, Sequence
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from vasty.errors import VastyError, invalid
 
@@ -321,9 +323,11 @@ def setting_flags(ns: argparse.Namespace) -> dict[str, Any]:
         if value is not None:
             out[key] = value
     owner = getattr(ns, "owner", None)
-    if ns.verb == "reserve" or (ns.verb in ("run", "serve") and getattr(ns, "on", None) is None):
-        if owner is not None:
-            out["owner"] = owner
+    on_new_box = ns.verb == "reserve" or (
+        ns.verb in ("run", "serve") and getattr(ns, "on", None) is None
+    )
+    if on_new_box and owner is not None:
+        out["owner"] = owner
     return out
 
 
@@ -382,11 +386,9 @@ def _report_swept(ctx: Context) -> None:
     from vasty.commands._common import merge_swept
     from vasty.commands.status import swept_lines
 
-    try:
+    with contextlib.suppress(Exception):
         for line in swept_lines(merge_swept(ctx.swept)):
             print(f"vasty: {line}", file=ctx.stderr)
-    except Exception:
-        pass
 
 
 def _guess_mode(argv: Sequence[str], tty: bool) -> str:

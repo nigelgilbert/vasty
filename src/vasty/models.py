@@ -92,7 +92,7 @@ class Charges:
     """
 
     per_instance: dict[int, Decimal]
-    today: Decimal = Decimal("0")
+    today: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True)
@@ -180,7 +180,7 @@ class CachedLease:
     gpu: str | None = None
     gpus: int = 1
     vram_gb: float | None = None
-    price_per_hr: Decimal = Decimal("0")
+    price_per_hr: Decimal = Decimal(0)
     image: str | None = None
     actual_status: str | None = None
     ssh_host: str | None = None

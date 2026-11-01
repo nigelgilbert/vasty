@@ -14,9 +14,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Mapping, TextIO
+from typing import TYPE_CHECKING, Any, TextIO
 
 from vasty.errors import VastyError
 

@@ -409,7 +409,7 @@ def test_owner_flag_on_config_show(harness: Harness) -> None:
 # Removed keys.
 
 # Build the removed key's name so a repo grep for it stays empty.
-REMOVED_BUDGET_KEY = "_".join(["daily", "budget"])
+REMOVED_BUDGET_KEY = "_".join(["daily", "budget"])  # noqa: FLY002
 
 
 @pytest.mark.parametrize("table", ["[defaults]", "[profiles.big]"])

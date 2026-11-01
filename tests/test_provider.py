@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 import requests
@@ -144,7 +145,7 @@ def test_offer_query_dict() -> None:
 
 def test_offer_query_omits_unset_and_country_region() -> None:
     q = build_offer_query(OfferQuery(
-        gpu=None, vram_min_gb=None, gpus=1, disk_gb=50, max_price=Decimal("1"), region="de",
+        gpu=None, vram_min_gb=None, gpus=1, disk_gb=50, max_price=Decimal(1), region="de",
     ))
     assert "gpu_name" not in q and "gpu_ram" not in q
     assert "cuda_max_good" not in q
@@ -153,10 +154,10 @@ def test_offer_query_omits_unset_and_country_region() -> None:
 
 def test_offer_query_cuda_floor() -> None:
     base = OfferQuery(
-        gpu=None, vram_min_gb=None, gpus=1, disk_gb=50, max_price=Decimal("1"), region=None,
+        gpu=None, vram_min_gb=None, gpus=1, disk_gb=50, max_price=Decimal(1), region=None,
     )
     floored = build_offer_query(OfferQuery(
-        gpu=None, vram_min_gb=None, gpus=1, disk_gb=50, max_price=Decimal("1"), region=None,
+        gpu=None, vram_min_gb=None, gpus=1, disk_gb=50, max_price=Decimal(1), region=None,
         cuda=13.0,
     ))
     assert floored["cuda_max_good"] == {"gte": 13.0}
@@ -196,7 +197,7 @@ def test_search_posts_bundles_and_normalizes() -> None:
 def test_search_quota_error_is_surfaced() -> None:
     provider, http, _ = make(always(resp(429, {"error": "search_quota_exceeded", "msg": "quota"})))
     with pytest.raises(VastyError) as exc:
-        provider.search_offers(OfferQuery(None, None, 1, 50, Decimal("1"), None))
+        provider.search_offers(OfferQuery(None, None, 1, 50, Decimal(1), None))
     assert exc.value.code == "provider_error"
     assert exc.value.details is not None
     assert exc.value.details["reason"] == "search_quota_exceeded"
@@ -398,7 +399,7 @@ def test_sdk_other_calls_keep_retries(session: Callable[[list[Any]], SessionStub
 def test_sdk_search_quota_is_not_retried(session: Callable[[list[Any]], SessionStub]) -> None:
     stub = session([resp(429, {"error": "search_quota_exceeded"})])
     with pytest.raises(VastyError):
-        VastProvider("test-key").search_offers(OfferQuery(None, None, 1, 50, Decimal("1"), None))
+        VastProvider("test-key").search_offers(OfferQuery(None, None, 1, 50, Decimal(1), None))
     assert len(stub.sent) == 1
 
 
@@ -527,12 +528,12 @@ def test_parse_charges_splits_today_from_earlier_days() -> None:
 
 def test_parse_charges_skips_other_types() -> None:
     volume = parse_charges([{"type": "volume", "source": "volume-5", "amount": 1, "end": 150}], 200)
-    assert volume.per_instance == {} and volume.today == Decimal("0")
+    assert volume.per_instance == {} and volume.today == Decimal(0)
 
 
 def test_balance_reads_balance_and_credit() -> None:
     provider, http, _ = make(always(resp(body={"balance": 12.5, "credit": 40})))
-    assert provider.balance() == Balance(balance=Decimal("12.5"), credit=Decimal("40"))
+    assert provider.balance() == Balance(balance=Decimal("12.5"), credit=Decimal(40))
     assert http.calls[0][:2] == ("GET", "/users/current")
 
 

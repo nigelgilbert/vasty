@@ -283,7 +283,7 @@ def test_adopt_writes_the_clock_in_box_time(h: Harness) -> None:
 
 def test_adopt_orphan_with_setters(h: Harness) -> None:
     iid = orphan(h)
-    code, data = run_json(h, "tag", "i-55120", "--ttl", "1h", "--set-owner", "nick",
+    code, _data = run_json(h, "tag", "i-55120", "--ttl", "1h", "--set-owner", "nick",
                           "--set-name", "found", "--set-group", "g")
     assert code == 0
     label = label_of(h, iid)
