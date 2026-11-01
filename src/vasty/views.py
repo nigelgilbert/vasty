@@ -2,7 +2,9 @@
 
 Lease cost is the sum of Vast's charge rows for the instance, or None before
 Vast posts a row. Uptime runs from the first `running` sample and is None
-before it.
+before it. A `pending` lease has null `expires_at` and `ttl_remaining_s`. A
+history lease has null `ttl_remaining_s` and no `actual_status` in its
+`--verbose` extras.
 
 This module imports only the standard library and vasty modules that do.
 """
@@ -130,9 +132,12 @@ def _full_label(lease: CachedLease) -> str | None:
 
 
 def lease_verbose(lease: CachedLease) -> dict[str, Any]:
-    """Return the `--verbose` extras: label, guard layers, instance id, image, ports, skew, last error."""
+    """Return the `--verbose` extras: label, guard layers, instance id, image, ports, skew, last error.
+
+    `actual_status` is included for active leases only.
+    """
     _, missing = guard(lease)
-    return {
+    out: dict[str, Any] = {
         "label": _full_label(lease),
         "guard_layers": {
             layer: "missing" if layer in missing else "ok" for layer in GUARD_LAYERS
@@ -146,6 +151,9 @@ def lease_verbose(lease: CachedLease) -> dict[str, Any]:
         "running_at": iso(lease.running_at),
         "last_provider_error": lease.last_provider_error,
     }
+    if lease.state in HISTORY_STATES:
+        del out["actual_status"]
+    return out
 
 
 def lease_view(
@@ -157,6 +165,7 @@ def lease_view(
 ) -> LeaseView:
     """Build one `status.leases` entry for a managed lease."""
     expiry = effective_expiry(lease.label)
+    pending = lease.state == "pending"
     return LeaseView(
         lease=lease.lease,
         name=lease.label.name,
@@ -169,8 +178,8 @@ def lease_view(
         price_per_hr=lease.price_per_hr,
         cost=lease_cost(lease.instance_id, charges),
         uptime_s=uptime_s(lease, now),
-        expires_at=iso(expiry),
-        ttl_remaining_s=max(0, expiry - now),
+        expires_at=None if pending else iso(expiry),
+        ttl_remaining_s=None if pending or lease.state in HISTORY_STATES else max(0, expiry - now),
         busy=busy(lease),
         jobs=[job_view(job, now, lease.state) for job in lease.jobs],
         log_tail=log_tail,

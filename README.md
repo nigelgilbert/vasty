@@ -136,7 +136,7 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 | `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending` |
 | bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error` |
 | `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s` |
-| `status` | `leases`, `totals`, `cached_at`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`; a single-lease target adds `log_tail` |
+| `status` | `leases`, `totals`, `cached_at`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
 | attached `run` | `lease`, `job`, `exit`, `duration_s`, `released` |
 | `run --detach` | `lease`, `job`, `log_path`, `expires_at` |
 | `serve` | `lease`, `job`, `url`, `api_key`, `expires_at` |

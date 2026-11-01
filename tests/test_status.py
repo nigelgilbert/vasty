@@ -210,9 +210,9 @@ def test_status_single_target_log_tail(account: Harness) -> None:
     assert data["totals"]["live"] == 5
 
 
-def test_status_unreachable_target_skips_log_tail(account: Harness) -> None:
+def test_status_unreachable_target_returns_empty_log_tail(account: Harness) -> None:
     data = status(account, "eval-1")
-    assert "log_tail" not in data["leases"][0]
+    assert data["leases"][0]["log_tail"] == []
 
 
 def test_status_group_and_owner_filters(account: Harness) -> None:
@@ -322,7 +322,7 @@ def test_status_cached_makes_no_network_call(account: Harness) -> None:
     assert by_lease(data)["l-7f3a"]["cost"] == 6.0
     assert ("expiring_soon", "l-8b12") in codes(data)
     assert ("orphan", "i-55120") in codes(data)
-    assert "log_tail" not in status(account, "--cached", "trainer")["leases"][0]
+    assert status(account, "--cached", "trainer")["leases"][0]["log_tail"] == []
 
 
 def test_status_cached_without_cache(harness: Harness) -> None:
@@ -413,3 +413,56 @@ def test_status_cached_imports_stdlib_only(account: Harness) -> None:
     report = json.loads(result.stderr.strip().splitlines()[-1])
     assert report == {"code": 0, "vastai": False, "provider": False, "third": []}
     assert len(json.loads(result.stdout)["leases"]) == 6
+
+
+def _history_lease(harness: Harness, state: str) -> None:
+    row = add_lease(harness, label={"name": "ft", "expires": NOW + 30})
+    harness.run("status")
+    if state == "released":
+        harness.run("release", "ft")
+    elif state == "expired":
+        harness.time.advance(60)
+        harness.run("status")
+    else:
+        del harness.provider.instances[row.id]
+        harness.run("status")
+
+
+@pytest.mark.parametrize("state", ["released", "expired", "gone"])
+def test_history_lease_drops_live_fields(harness: Harness, state: str) -> None:
+    _history_lease(harness, state)
+    row = status(harness, "ft", "--verbose")["leases"][0]
+    assert row["state"] == state
+    assert row["ttl_remaining_s"] is None
+    assert row["expires_at"] is not None
+    assert "actual_status" not in row["verbose"]
+    assert row["log_tail"] == []
+    _, out, _ = harness.run("status", "ft", "--plain", "--verbose")
+    assert "actual_status" not in out
+
+
+def test_active_lease_verbose_keeps_actual_status(harness: Harness) -> None:
+    add_lease(harness)
+    row = by_lease(status(harness, "--verbose"))["l-0000a001"]
+    assert row["verbose"]["actual_status"] == "running"
+
+
+def test_pending_lease_has_no_clock(harness: Harness) -> None:
+    add_lease(harness, label={"name": "ft"}, actual_status="loading")
+    row = status(harness, "ft")["leases"][0]
+    assert row["state"] == "pending"
+    assert (row["expires_at"], row["ttl_remaining_s"]) == (None, None)
+    assert row["log_tail"] == []
+    assert by_lease(status(harness))["l-0000a001"]["expires_at"] is None
+    _, out, _ = harness.run("status", "--plain")
+    header, line = out.splitlines()[:2]
+    assert line[header.index("EXPIRES"):].split()[0] == "—"
+
+
+def test_pending_clock_starts_at_running(harness: Harness) -> None:
+    row = add_lease(harness, label={"name": "ft", "expires": NOW + 600},
+                    actual_status="loading")
+    harness.run("status")
+    harness.provider.instances[row.id].actual_status = "running"
+    lease = status(harness, "ft")["leases"][0]
+    assert (lease["state"], lease["ttl_remaining_s"]) == ("running", 600)

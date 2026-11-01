@@ -2,14 +2,15 @@
 
 With no target, `status` lists every active lease, then orphans and
 unreadable rows. `--verbose` also lists history leases; a named lease in
-history always shows. Warnings cover the shown leases, `expired_with_running_jobs`
-for every history lease when no target is given, the account warnings from
-the refresh, `orphan` per shown orphan, and `spend_unavailable` when the
-balance or charges are unavailable. `totals` covers the whole account with Vast's
+history always shows. A single LEASE carries `log_tail` in every state,
+`[]` when the log is empty or unread. Warnings cover the shown leases,
+`expired_with_running_jobs` for every history lease when no target is
+given, the account warnings from the refresh, `orphan` per shown orphan,
+and `spend_unavailable` when the balance or charges are unavailable. `totals` covers the whole account with Vast's
 own `balance`, `credit` and today's billed charges.
 
 `--cached` reads `leases.json` only. It uses the local clock, returns
-`swept: []`, sets `cached_at` and skips the log tail. That path imports only
+`swept: []`, sets `cached_at` and skips the log read. That path imports only
 the standard library.
 """
 
@@ -70,7 +71,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         leases = snap.active() + (snap.history() if verbose else [])
         rows = sorted(snap.orphans + snap.unreadable, key=lambda inst: inst.id)
 
-    tail = None
+    tail: list[str] = []
     if single and leases and not cached:
         tail = _log_tail(ctx, leases[0])
     lease_views = [
@@ -120,13 +121,13 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     return Outcome(result, human=human)
 
 
-def _log_tail(ctx: Context, lease: CachedLease) -> list[str] | None:
+def _log_tail(ctx: Context, lease: CachedLease) -> list[str]:
     if lease.state in HISTORY_STATES or lease.state in ("unreachable", "stopped"):
-        return None
+        return []
     try:
         return ctx.box.log_tail(engine.ssh_target(lease), None, LOG_LINES)
     except (VastyError, OSError):
-        return None
+        return []
 
 
 # Human rendering.
