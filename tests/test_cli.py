@@ -69,9 +69,9 @@ def test_removed_flags_are_invalid(argv: list[str]) -> None:
          "--no-wait was removed: drop it. --plain was removed: drop it."),
         (["status", "--everyone", "--cached"],
          "--everyone was removed: use plain vasty status. --cached was removed: drop it."),
-        (["extend", "l-1", "--until", "19:44"], "--until was removed: use --by or --to."),
+        (["extend", "l-1", "--until", "19:44"], "--until was removed: use --by D to add D to the clock, or --to D to end it D from now."),
         (["release", "--all", "--yes"],
-         "--all was removed: use --owner O. --yes was removed: drop it."),
+         '--all was removed: use --owner "$VASTY_OWNER". --yes was removed: drop it.'),
         (["release", "l-1", "--yes=1"], "--yes was removed: drop it."),
     ],
 )

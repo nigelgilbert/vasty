@@ -56,8 +56,8 @@ REMOVED_FLAGS = {
     "--cached": "drop it",
     "--yes": "drop it",
     "--everyone": "use plain vasty status",
-    "--until": "use --by or --to",
-    "--all": "use --owner O",
+    "--until": "use --by D to add D to the clock, or --to D to end it D from now",
+    "--all": 'use --owner "$VASTY_OWNER"',
 }
 
 
