@@ -6,8 +6,8 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-
 from fakes import NOW, Harness, add_lease, make_offer
+
 from vasty.cli import parse
 from vasty.context import Context
 from vasty.errors import EXIT_CODES, VastyError

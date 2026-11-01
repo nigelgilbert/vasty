@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from fakes import Harness, add_lease
+
 from vasty.remote import SshTarget
 
 

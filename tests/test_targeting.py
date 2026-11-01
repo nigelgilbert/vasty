@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import pytest
-
 from fakes import Harness, add_lease
+
 from vasty import engine
 from vasty.cli import parse
 from vasty.errors import VastyError

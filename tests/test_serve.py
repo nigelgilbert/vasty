@@ -4,8 +4,8 @@ import json
 from typing import Any
 
 import pytest
-
 from fakes import NOW, FakeReserve, Harness, add_lease
+
 from vasty.commands import serve
 from vasty.errors import VastyError
 from vasty.models import Job
