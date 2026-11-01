@@ -56,7 +56,7 @@ ROWS: dict[str, Row] = {
         # Keys from the entry data in extend.py and from `_entry_data` and the failure entry in release.py.
         data_keys=frozenset({
             "previous_expires_at", "expires_at",
-            "name", "uptime_s", "cost", "jobs", "destroy_pending", "message",
+            "name", "uptime_s", "cost", "jobs", "destroy_pending", "already_absent", "message",
         }),
         prose=frozenset({"extend", "release"}),
     ),
