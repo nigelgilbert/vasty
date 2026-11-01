@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import argparse
 import io
 import json
 from dataclasses import replace
+from importlib.metadata import version
 from typing import Any
 
 import pytest
 
 from fakes import NOW, Harness, add_lease, make_offer
-from vasty.cli import parse
+from vasty.cli import build_parser, main, parse
 from vasty.context import Context
 from vasty.errors import EXIT_CODES, VastyError
 
@@ -198,3 +200,80 @@ def test_failing_run_with_closed_stderr_keeps_json_error(harness: Harness) -> No
     assert isinstance(out, io.StringIO)
     assert code == 1
     assert json.loads(out.getvalue())["error"] == "lease_not_found"
+
+
+def _walk(parser: argparse.ArgumentParser, path: str) -> list[tuple[str, argparse.Action]]:
+    """Return every action under `parser`, recursing into subparsers, with its command path."""
+    found: list[tuple[str, argparse.Action]] = []
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for word, child in action.choices.items():
+                found += _walk(child, f"{path} {word}")
+            continue
+        found.append((path, action))
+    return found
+
+
+def test_every_flag_and_positional_has_help() -> None:
+    actions = _walk(build_parser(), "vasty")
+    paths = {path for path, _ in actions}
+    assert {"vasty sync push", "vasty sync pull", "vasty config show", "vasty ssh"} <= paths
+    missing = [
+        f"{path} {'/'.join(action.option_strings) or action.dest}"
+        for path, action in actions
+        if not isinstance(action, argparse._HelpAction)
+        and action.help != argparse.SUPPRESS
+        and not (action.help or "").strip()
+    ]
+    assert missing == []
+
+
+def _verb_action(verb: str, flag: str) -> argparse.Action:
+    sub = next(a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction))
+    return next(a for a in sub.choices[verb]._actions if flag in a.option_strings)
+
+
+@pytest.mark.parametrize(
+    ("verb", "flag", "words"),
+    [
+        ("reserve", "--ttl", ["duration", "default: 30m"]),
+        ("run", "--ttl", ["duration", "default: run_ttl, 2h"]),
+        ("serve", "--ttl", ["duration", "default: run_ttl, 2h"]),
+        ("reserve", "--cuda", ["CUDA version", "12.6", "default: none"]),
+        ("reserve", "--max-price", ["dollars per hour", "default: 0.60"]),
+        ("reserve", "--image", ["default: vastai/base-image:cuda-12.6.3-auto"]),
+        ("reserve", "--disk", ["GB", "default: 50"]),
+        ("reserve", "--vram", ["GB", "default: any"]),
+        ("extend", "--by", ["duration", "default: none"]),
+        ("extend", "--until", ["ISO time"]),
+    ],
+)
+def test_help_names_unit_and_default(verb: str, flag: str, words: list[str]) -> None:
+    text = _verb_action(verb, flag).help or ""
+    for word in words:
+        assert word in text
+
+
+def _help(capsys: pytest.CaptureFixture[str], *argv: str) -> str:
+    with pytest.raises(SystemExit) as exc:
+        main([*argv, "--help"])
+    assert exc.value.code == 0
+    return capsys.readouterr().out
+
+
+def test_ssh_help_shows_command(capsys: pytest.CaptureFixture[str]) -> None:
+    assert "LEASE [-- COMMAND...]" in _help(capsys, "ssh")
+
+
+def test_sync_help_shows_direction_and_delete(capsys: pytest.CaptureFixture[str]) -> None:
+    text = _help(capsys, "sync")
+    assert "push|pull" in text
+    assert "SRC DEST" in text
+    assert "--delete" in text
+
+
+def test_version_prints_package_version(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out == f"vasty {version('vasty')}\n"

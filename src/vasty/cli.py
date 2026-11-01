@@ -54,125 +54,194 @@ class Parser(argparse.ArgumentParser):
         raise invalid(message, f"Run {self.prog} --help.")
 
 
+class _Version(argparse.Action):
+    """Print the installed package version from its metadata and exit 0."""
+
+    def __init__(self, option_strings: list[str], dest: str, help: str | None = None) -> None:
+        super().__init__(option_strings, dest=argparse.SUPPRESS, default=argparse.SUPPRESS,
+                         nargs=0, help=help)
+
+    def __call__(self, parser: argparse.ArgumentParser, namespace: argparse.Namespace,
+                 values: Any, option_string: str | None = None) -> None:
+        from importlib.metadata import version
+
+        print(f"vasty {version('vasty')}")
+        parser.exit()
+
+
 def _output_flags() -> Parser:
     parent = Parser(add_help=False)
-    parent.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
-    parent.add_argument("--plain", action="store_true", default=argparse.SUPPRESS)
-    parent.add_argument("--verbose", action="store_true", default=argparse.SUPPRESS)
+    parent.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                        help="print JSON; default when stdout is not a terminal")
+    parent.add_argument("--plain", action="store_true", default=argparse.SUPPRESS,
+                        help="print human text; default when stdout is a terminal")
+    parent.add_argument("--verbose", action="store_true", default=argparse.SUPPRESS,
+                        help="include extra fields in the output")
     return parent
 
 
+def _setting_help(ttl_default: str) -> dict[str, str]:
+    """Return help lines for the setting flags, with defaults read from `config.BUILTIN`."""
+    from vasty.config import BUILTIN
+
+    return {
+        "owner": "owner label for a new lease; default: VASTY_OWNER, config, then $USER",
+        "ttl": f"lease clock as a duration such as 45m or 2h; default: {ttl_default}",
+        "profile": "config profile to apply; default: none",
+        "startup": "script that runs once on the box after setup, or - for stdin; default: none",
+        "config_stdin": "pass - to read config JSON from stdin",
+        "gpu": "GPU model name such as 4090 or A100; default: any",
+        "vram": "minimum GPU memory in GB; default: any",
+        "cuda": "minimum CUDA version the host driver supports, such as 12.6; default: none",
+        "gpus": f"number of GPUs; default: {BUILTIN['gpus']}",
+        "disk": f"disk size in GB; default: {BUILTIN['disk']}",
+        "image": f"Docker image; default: {BUILTIN['image']}",
+        "max_price": f"offer price cap in dollars per hour; default: {BUILTIN['max_price']}",
+        "region": "region code or name such as US or Europe; default: any",
+        "ports": "comma-separated ports to open such as 8000,8080; default: none",
+    }
+
+
 def _target_flags(p: argparse.ArgumentParser, lease_optional: bool = True) -> None:
-    p.add_argument("target", nargs="?" if lease_optional else None, metavar="LEASE")
-    p.add_argument("--group")
-    p.add_argument("--owner")
-    p.add_argument("--all", action="store_true")
-    p.add_argument("--everyone", action="store_true")
+    p.add_argument("target", nargs="?" if lease_optional else None, metavar="LEASE",
+                   help="lease id or name")
+    p.add_argument("--group", help="select the leases in group G")
+    p.add_argument("--owner", help="select the leases of owner O")
+    p.add_argument("--all", action="store_true", help="select every lease of the current owner")
+    p.add_argument("--everyone", action="store_true",
+                   help="with --all or --group, select the leases of every owner")
 
 
-def _reserve_flags(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--name")
-    p.add_argument("--group")
-    p.add_argument("--owner")
-    p.add_argument("--ttl")
-    p.add_argument("--profile")
-    p.add_argument("--startup", metavar="FILE|-")
-    p.add_argument("--no-wait", action="store_true", dest="no_wait")
-    p.add_argument("--config", dest="config_stdin", metavar="-")
-    p.add_argument("--gpu")
-    p.add_argument("--vram")
-    p.add_argument("--cuda", metavar="FLOOR")
-    p.add_argument("--gpus")
-    p.add_argument("--disk")
-    p.add_argument("--image")
-    p.add_argument("--max-price", dest="max_price")
-    p.add_argument("--region")
-    p.add_argument("--ports")
+def _hardware_flags(p: argparse.ArgumentParser, h: dict[str, str]) -> None:
+    p.add_argument("--gpu", help=h["gpu"])
+    p.add_argument("--vram", metavar="GB", help=h["vram"])
+    p.add_argument("--cuda", metavar="FLOOR", help=h["cuda"])
+    p.add_argument("--gpus", metavar="N", help=h["gpus"])
+    p.add_argument("--disk", metavar="GB", help=h["disk"])
+    p.add_argument("--image", help=h["image"])
+    p.add_argument("--max-price", dest="max_price", metavar="USD_PER_HR", help=h["max_price"])
+    p.add_argument("--region", help=h["region"])
+    p.add_argument("--ports", metavar="N[,N...]", help=h["ports"])
+
+
+def _reserve_flags(p: argparse.ArgumentParser, h: dict[str, str]) -> None:
+    p.add_argument("--name", help="lease name, unique per owner; default: none")
+    p.add_argument("--group", help="group label for the lease; default: none")
+    p.add_argument("--owner", help=h["owner"])
+    p.add_argument("--ttl", metavar="DURATION", help=h["ttl"])
+    p.add_argument("--profile", help=h["profile"])
+    p.add_argument("--startup", metavar="FILE|-", help=h["startup"])
+    p.add_argument("--no-wait", action="store_true", dest="no_wait",
+                   help="return once the box is created without waiting for it to run")
+    p.add_argument("--config", dest="config_stdin", metavar="-", help=h["config_stdin"])
+    _hardware_flags(p, h)
 
 
 def build_parser() -> Parser:
     out = _output_flags()
+    from vasty.config import BUILTIN
+    from vasty.timeutil import format_duration_exact
+
+    out = _output_flags()
     root = Parser(prog="vasty", description="Leased GPU compute for agents.", parents=[out])
+    root.add_argument("--version", action=_Version, help="print the vasty version and exit")
     sub = root.add_subparsers(dest="verb", parser_class=Parser, metavar="VERB")
+    reserve_help = _setting_help(format_duration_exact(BUILTIN["ttl"]))
+    run_help = _setting_help(f"run_ttl, {format_duration_exact(BUILTIN['run_ttl'])}")
 
     p = sub.add_parser("reserve", parents=[out], help="rent a box with a clock")
-    _reserve_flags(p)
+    _reserve_flags(p, reserve_help)
 
     p = sub.add_parser("extend", parents=[out], help="move a lease's clock")
     _target_flags(p)
-    p.add_argument("--by")
-    p.add_argument("--to")
-    p.add_argument("--until")
+    p.add_argument("--by", metavar="DURATION",
+                   help="add a duration such as 30m to the clock; default: none")
+    p.add_argument("--to", metavar="DURATION",
+                   help="set the clock to a duration from now such as 2h; default: none")
+    p.add_argument("--until", metavar="TIME",
+                   help="set the clock to an ISO time such as 2026-11-01T18:00Z; default: none")
 
     p = sub.add_parser("release", parents=[out], help="destroy a box now")
     _target_flags(p)
-    p.add_argument("--yes", action="store_true")
+    p.add_argument("--yes", action="store_true",
+                   help="skip the confirmation for an orphan instance id")
 
     p = sub.add_parser("status", parents=[out], help="show leases, spend and warnings")
     _target_flags(p)
-    p.add_argument("--cached", action="store_true")
+    p.add_argument("--cached", action="store_true",
+                   help="read the local cache and skip provider calls")
 
-    p = sub.add_parser("run", parents=[out], help="run a command on a box")
-    p.add_argument("--on")
-    p.add_argument("--detach", action="store_true")
-    p.add_argument("--sync", dest="sync_dir", metavar="DIR")
-    _reserve_flags(p)
+    p = sub.add_parser("run", parents=[out], help="run a command on a box",
+                       usage="%(prog)s [options] -- COMMAND...")
+    p.add_argument("--on", metavar="LEASE", help="run on this lease; default: reserve a new box")
+    p.add_argument("--detach", action="store_true",
+                   help="return once the job starts and leave the box up")
+    p.add_argument("--sync", dest="sync_dir", metavar="DIR",
+                   help="push DIR to the box before the command; default: none")
+    _reserve_flags(p, run_help)
 
-    p = sub.add_parser("serve", parents=[out], help="serve a model behind an OpenAI endpoint")
-    p.add_argument("--on")
-    p.add_argument("--model", required=True)
-    p.add_argument("--bind-local", action="store_true", dest="bind_local")
-    _reserve_flags(p)
+    p = sub.add_parser("serve", parents=[out], help="serve a model behind an OpenAI endpoint",
+                       usage="%(prog)s [options] --model MODEL [-- VLLM_ARGS...]")
+    p.add_argument("--on", metavar="LEASE",
+                   help="serve on this lease; default: reserve a new box")
+    p.add_argument("--model", required=True, help="model name or box path for vllm serve")
+    p.add_argument("--bind-local", action="store_true", dest="bind_local",
+                   help="bind vLLM to 127.0.0.1 for use through vasty ssh -L")
+    _reserve_flags(p, run_help)
 
-    p = sub.add_parser("sync", parents=[out], help="rsync files to or from a box")
-    p.add_argument("lease", metavar="LEASE")
-    direction = p.add_subparsers(dest="direction", parser_class=Parser, required=True)
-    push = direction.add_parser("push", parents=[out])
-    push.add_argument("--delete", action="store_true")
-    push.add_argument("src")
-    push.add_argument("dest")
-    pull = direction.add_parser("pull", parents=[out])
-    pull.add_argument("src")
-    pull.add_argument("dest")
+    p = sub.add_parser("sync", parents=[out], help="rsync files to or from a box",
+                       usage="%(prog)s [options] LEASE push|pull [--delete] SRC DEST")
+    p.add_argument("lease", metavar="LEASE", help="lease id or name")
+    direction = p.add_subparsers(dest="direction", parser_class=Parser, required=True,
+                                 metavar="push|pull SRC DEST")
+    push = direction.add_parser("push", parents=[out],
+                                help="copy local SRC to box DEST; --delete mirrors SRC")
+    push.add_argument("--delete", action="store_true",
+                      help="delete box files missing from SRC; keeps /workspace/.vasty")
+    push.add_argument("src", metavar="SRC", help="local path")
+    push.add_argument("dest", metavar="DEST",
+                      help="box path; a relative path resolves under /workspace")
+    pull = direction.add_parser("pull", parents=[out], help="copy box SRC to local DEST")
+    pull.add_argument("src", metavar="SRC",
+                      help="box path; a relative path resolves under /workspace")
+    pull.add_argument("dest", metavar="DEST", help="local path")
 
-    p = sub.add_parser("ssh", parents=[out], help="open a shell or run one command")
-    p.add_argument("lease", metavar="LEASE")
-    p.add_argument("-L", action="append", dest="forwards", default=[], metavar="SPEC")
+    p = sub.add_parser("ssh", parents=[out], help="open a shell or run one command",
+                       usage="%(prog)s [options] LEASE [-- COMMAND...]")
+    p.add_argument("lease", metavar="LEASE",
+                   help="lease id or name; add -- COMMAND to run one command")
+    p.add_argument("-L", action="append", dest="forwards", default=[], metavar="SPEC",
+                   help="forward a port as ssh -L SPEC; repeatable")
 
     p = sub.add_parser("tag", parents=[out], help="set labels or adopt an orphan")
     _target_flags(p)
-    p.add_argument("--set-name", dest="set_name")
-    p.add_argument("--set-group", dest="set_group")
-    p.add_argument("--set-owner", dest="set_owner")
-    p.add_argument("--ttl")
+    p.add_argument("--set-name", dest="set_name", metavar="NAME", help="set the lease name")
+    p.add_argument("--set-group", dest="set_group", metavar="G", help="set the group label")
+    p.add_argument("--set-owner", dest="set_owner", metavar="O", help="set the owner label")
+    p.add_argument("--ttl", metavar="DURATION",
+                   help="clock for an adopted orphan as a duration such as 30m; default: none")
 
     p = sub.add_parser("sweep", parents=[out], help="destroy boxes past their clock")
-    p.add_argument("--follow", metavar="LEASE")
+    p.add_argument("--follow", metavar="LEASE",
+                   help="sleep to the lease's expiry and sweep until it is gone")
 
     p = sub.add_parser("config", parents=[out], help="show or change configuration")
     action = p.add_subparsers(dest="action", parser_class=Parser, required=True)
-    show = action.add_parser("show", parents=[out])
-    show.add_argument("--profile")
-    show.add_argument("--config", dest="config_stdin", metavar="-")
-    show.add_argument("--owner")
-    show.add_argument("--ttl")
-    show.add_argument("--startup", metavar="FILE|-")
-    show.add_argument("--gpu")
-    show.add_argument("--vram")
-    show.add_argument("--cuda", metavar="FLOOR")
-    show.add_argument("--gpus")
-    show.add_argument("--disk")
-    show.add_argument("--image")
-    show.add_argument("--max-price", dest="max_price")
-    show.add_argument("--region")
-    show.add_argument("--ports")
-    cset = action.add_parser("set", parents=[out])
-    cset.add_argument("key")
-    cset.add_argument("value")
-    action.add_parser("profiles", parents=[out])
+    show = action.add_parser("show", parents=[out], help="print the effective settings")
+    show.add_argument("--profile", help=reserve_help["profile"])
+    show.add_argument("--config", dest="config_stdin", metavar="-",
+                      help=reserve_help["config_stdin"])
+    show.add_argument("--owner", help=reserve_help["owner"])
+    show.add_argument("--ttl", metavar="DURATION", help=reserve_help["ttl"])
+    show.add_argument("--startup", metavar="FILE|-", help=reserve_help["startup"])
+    _hardware_flags(show, reserve_help)
+    cset = action.add_parser("set", parents=[out], help="write one key to the user config")
+    cset.add_argument("key", metavar="KEY", help="dotted key such as defaults.ttl or owner")
+    cset.add_argument("value", metavar="VALUE", help="value in the key's unit, such as 45m")
+    action.add_parser("profiles", parents=[out], help="list the configured profiles")
 
     p = sub.add_parser("completion", parents=[out], help="print a shell completion script")
-    p.add_argument("shell", nargs="?", choices=["bash", "zsh", "fish"])
+    p.add_argument("shell", nargs="?", choices=["bash", "zsh", "fish"], help="target shell")
     p.add_argument("--list", dest="list_kind", choices=["leases", "groups", "profiles"],
                    help=argparse.SUPPRESS)
     return root
