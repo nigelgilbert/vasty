@@ -507,9 +507,10 @@ def _milestones(lease: CachedLease) -> set[str]:
 
 
 def _not_ready(lease: CachedLease) -> VastyError:
+    status = f"; Vast last reported it {lease.actual_status}" if lease.actual_status else ""
     return VastyError(
         "box_unreachable",
-        f"Lease {lease.lease} did not become ready before its clock ran out.",
+        f"Lease {lease.lease} did not become ready before its clock ran out{status}.",
         "Run vasty reserve again, or pick another offer with --gpu or --region.",
     )
 
@@ -552,6 +553,8 @@ def wait_ready(
         swept = merge_swept(swept, snap.swept)
         now = snap.now
         fresh = snap.leases.get(lease.lease)
+        if (fresh is None or fresh.state in HISTORY_STATES) and lease.running_at is None:
+            raise _name_lease(_not_ready(fresh or lease), lease, _box_gone(fresh))
         if fresh is None or fresh.state in HISTORY_STATES:
             raise _name_lease(VastyError(
                 "box_unreachable",

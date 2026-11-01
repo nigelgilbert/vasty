@@ -1154,5 +1154,7 @@ def test_lease_swept_by_the_follower_during_wait_reports_destroyed(
     monkeypatch.setattr(h.time, "sleep", sleep)
     code, data = run_json(h, "reserve", "--ttl", "2m")
     assert code == 2
-    assert data["message"] == "Lease l-abababab ended before it became ready."
+    assert data["message"] == (
+        "Lease l-abababab did not become ready before its clock ran out; Vast last reported it loading."
+    )
     assert data["details"] == {"lease": "l-abababab", "destroyed": destroyed}
