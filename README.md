@@ -60,9 +60,9 @@ Once the package is on PyPI the first line becomes `uvx vasty reserve`.
 
 ```
 vasty reserve   [--name NAME] [--group G] [--owner O] [--ttl 30m] [--profile P] [--startup FILE|-] [hardware flags]
-vasty extend    TARGET  (--by 30m | --to 2h | --until TIME)
+vasty extend    TARGET  (--by 30m | --to 2h)
 vasty release   TARGET
-vasty status    [TARGET] [--cached]
+vasty status    [TARGET]
 vasty run       [--on LEASE | reserve flags] [--detach] [--sync DIR] -- COMMAND...
 vasty serve     [--on LEASE | reserve flags] --model MODEL [--bind-local] [-- VLLM_ARGS...]
 vasty stop      LEASE [JOB]
@@ -82,13 +82,13 @@ A new box comes from the matching offer with the highest reliability, then the h
 
 Every verb takes `--json` and `--verbose`.
 
-A `TARGET` is a lease id or name, or a selector: `--group G`, `--owner O`, `--all`, or `--all --everyone` for every lease on the account. Bulk writes act on the current owner's leases. `--owner O` selects another owner's; `--everyone` selects all.
+A `TARGET` is a lease id or name, or a selector: `--group G`, `--owner O` or both. Bulk writes act on the current owner's leases unless `--owner O` names another. On `status` the selectors filter the account view.
 
 ## For agents
 
 Run `vasty status` before reserving. Reuse a lease with `--on` when it is yours, `state` is `running`, `busy` is false, `gpu`, `vram_gb` and `gpus` cover the job, and `ttl_remaining_s` covers the job or `extend` can. `run --on` leaves the lease up after the job. Auto-reserved attached `run` releases it.
 
-Owner comes from `--owner`, then `VASTY_OWNER`, then config, then `$USER`. An agent running under the human's login shares their owner unless it sets `VASTY_OWNER`. Each swarm worker sets its own `VASTY_OWNER`. With its own owner, `release --all` from an agent leaves other owners' boxes alone. `status --verbose` lists the current owner's history, or `--owner O`'s, and `--everyone` widens it to the account. `status --everyone` alone reads as `--all --everyone`; `release` and `extend` need `--all` or `--group` with it. A name resolves under the current owner. When other owners hold it, `lease_not_found` lists their lease ids in `details.matches`.
+Owner comes from `--owner`, then `VASTY_OWNER`, then config, then `$USER`. An agent running under the human's login shares their owner unless it sets `VASTY_OWNER`. Each swarm worker sets its own `VASTY_OWNER` and cleans up with `release --owner "$VASTY_OWNER"`, which leaves other owners' boxes alone. A released box is gone; reserve a new one. A name resolves under the current owner. When other owners hold it, `lease_not_found` lists their lease ids in `details.matches`.
 
 In JSON mode stdout is one object per command. Remote output from `run` and `sync` goes to stderr. `ssh` passes remote output through and prints no object. Selected fields from `reserve`:
 
@@ -146,7 +146,7 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 | `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending`, and `already_absent` when the lease was already gone. `destroy_pending` is true from the destroy call until a refresh sees the instance gone from the provider listing |
 | bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error`; `extend` adds `previous_expires_at` and `expires_at`; `release` adds `name`, `uptime_s`, `cost`, `jobs`, `destroy_pending` and `already_absent`, or `name` and `message` when it fails |
 | `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s` |
-| `status` | `leases`, `totals`, `cached_at`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
+| `status` | `leases`, `totals`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
 | job entry in `status` and `release` `jobs` | `job`, `cmd`, `state`, `exit`, `duration_s`. `state` is `running`, `serving`, `exited`, `killed` or `unknown`. `release` marks live jobs `killed` with a null `exit` and freezes `duration_s`. A job on a history lease stops its `duration_s` at the lease's end. `stop` marks its job `killed` with the job's exit code |
 | attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `error`. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
 | `run --detach` | `lease`, `job`, `gpu`, `price_per_hr`, `log_path`, `expires_at`, `ttl_remaining_s` |
@@ -295,7 +295,7 @@ Any machine with the API key sees the same leases, owners and groups. An instanc
 | `gone` | Vanished with time left on its clock. Kept in history for 24h. |
 | `orphan` | An instance vasty did not create. No clock until `tag` gives it one. |
 
-`status` with no target lists every owner's active leases, then orphans. `totals.live` counts the active leases and `totals.live_mine` the caller's. `--verbose` adds the current owner's history, or `--owner O`'s, or every owner's with `--everyone`. A named lease shows in any state. A lease with the watchdog running, its destroy key present and the clock file matching the label has no `guard_partial` warning. Otherwise the warning names `watchdog`, `destroy_key` or `clock_file`.
+`status` with no target is the account view: every owner's active leases, then orphans. `--owner O` and `--group G` filter the active leases. `totals.live` counts the active leases and `totals.live_mine` the caller's. `--verbose` adds fields to each row. A named lease shows in any state. A lease with the watchdog running, its destroy key present and the clock file matching the label has no `guard_partial` warning. Otherwise the warning names `watchdog`, `destroy_key` or `clock_file`.
 
 ## Configuration
 

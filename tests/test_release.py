@@ -366,7 +366,7 @@ def test_bulk_release_reports_failed_entries(harness: Harness) -> None:
     add_lease(harness, "l-0000a001")
     b = add_lease(harness, "l-0000a002")
     harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
-    code, data, _ = release(harness, "--all")
+    code, data, _ = release(harness, "--owner", "claude")
     assert code == 2
     first, second = data["results"]
     assert (first["ok"], first["error"]) == (False, "provider_error")
@@ -376,6 +376,6 @@ def test_bulk_release_reports_failed_entries(harness: Harness) -> None:
 
 def test_bulk_release_human(harness: Harness) -> None:
     add_lease(harness, label={"name": "ft"})
-    code, out, _ = harness.run("release", "--all", tty=True)
+    code, out, _ = harness.run("release", "--owner", "claude", tty=True)
     assert code == 0
     assert "l-0000a001 (ft) released" in out

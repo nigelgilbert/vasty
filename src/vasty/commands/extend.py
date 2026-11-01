@@ -45,7 +45,7 @@ from vasty.models import (
 )
 from vasty.state import effective_expiry
 from vasty.targeting import resolve_target
-from vasty.timeutil import format_duration, iso, parse_duration, parse_time
+from vasty.timeutil import format_duration, iso, parse_duration
 
 
 @dataclasses.dataclass(frozen=True)
@@ -67,20 +67,13 @@ class Change:
 
 
 def parse_change(args: argparse.Namespace) -> Change:
-    """Read exactly one of `--by`, `--to` and `--until`. Raise `invalid_arguments` otherwise."""
-    given = [flag for flag in ("by", "to", "until") if getattr(args, flag, None) is not None]
+    """Read exactly one of `--by` and `--to`. Raise `invalid_arguments` otherwise."""
+    given = [flag for flag in ("by", "to") if getattr(args, flag, None) is not None]
     if len(given) != 1:
-        raise invalid(
-            "extend takes exactly one of --by, --to or --until.",
-            "vasty extend LEASE --by 30m",
-        )
-    flag = given[0]
-    value = getattr(args, flag)
-    if flag == "by":
-        return Change(by=parse_duration(value))
-    if flag == "to":
-        return Change(after=parse_duration(value))
-    return Change(to=parse_time(value))
+        raise invalid("extend takes exactly one of --by or --to.", "vasty extend LEASE --by 30m")
+    if given[0] == "by":
+        return Change(by=parse_duration(args.by))
+    return Change(after=parse_duration(args.to))
 
 
 def new_expiry(lease: CachedLease, change: Change) -> int:
@@ -91,19 +84,8 @@ def new_expiry(lease: CachedLease, change: Change) -> int:
     return effective_expiry(lease.label) + change.by
 
 
-def _release_hint(args: argparse.Namespace | None, lease: str | None) -> str:
-    if lease is not None or args is None:
-        return shlex.join(["vasty", "release", lease or "LEASE"])
-    argv = ["vasty", "release"]
-    for flag in ("group", "owner"):
-        value = getattr(args, flag, None)
-        if value:
-            argv += [f"--{flag}", value]
-    if getattr(args, "all", False):
-        argv.append("--all")
-    if getattr(args, "everyone", False):
-        argv.append("--everyone")
-    return shlex.join(argv)
+def _past(lease: str) -> VastyError:
+    return invalid("The new expiry is at or before now.", shlex.join(["vasty", "release", lease]))
 
 
 def _expired(lease: CachedLease) -> VastyError:
@@ -267,12 +249,9 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
             f"{orphan_id(inst.id)} is not a vasty lease.",
             shlex.join(["vasty", "tag", orphan_id(inst.id), "--ttl", "30m"]),
         )
-    if change.to is not None and change.to <= now:
-        single = resolved.leases[0].lease if not resolved.bulk and resolved.leases else None
-        raise invalid("The new expiry is at or before now.", _release_hint(args, single))
     if not resolved.bulk:
         return _single(ctx, snap, resolved.leases[0], change)
-    return _bulk(ctx, snap, args, resolved.leases, change)
+    return _bulk(ctx, snap, resolved.leases, change)
 
 
 def _single(
@@ -285,7 +264,7 @@ def _single(
         previous = effective_expiry(lease.label)
         expires = new_expiry(lease, change)
         if expires <= now:
-            raise invalid("The new expiry is at or before now.", _release_hint(None, lease.lease))
+            raise _past(lease.lease)
         apply(ctx, lease, expires)
     warnings = views.warnings_for([lease], now, ctx.settings.warn_before_expiry)
     warnings += snap.warnings
@@ -308,7 +287,6 @@ def _single(
 def _bulk(
     ctx: Context,
     snap: engine.Snapshot,
-    args: argparse.Namespace,
     leases: list[CachedLease],
     change: Change,
 ) -> Outcome:
@@ -331,9 +309,7 @@ def _bulk(
                 leases[index] = lease = _reload(cached, lease)
                 expires = new_expiry(lease, change)
                 if expires <= now:
-                    raise invalid(
-                        "The new expiry is at or before now.", _release_hint(args, lease.lease)
-                    )
+                    raise _past(lease.lease)
                 targets[lease.lease] = expires
             except VastyError as err:
                 errors[lease.lease] = err
