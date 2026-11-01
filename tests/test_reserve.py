@@ -134,7 +134,7 @@ def test_reserve_owner_flag_sets_owner(h: Harness) -> None:
 
 
 def test_reserve_human_summary(h: Harness) -> None:
-    code, out, _ = h.run("reserve", "--name", "trainer", "--plain")
+    code, out, _ = h.run("reserve", "--name", "trainer", tty=True)
     assert code == 0
     lines = out.splitlines()
     assert lines[0].startswith("l-abababab  trainer  running  RTX 4090  $0.38/hr")
@@ -187,7 +187,7 @@ def test_no_offers_names_constraints_and_hint(h: Harness) -> None:
     assert code == 1
     assert data["error"] == "no_offers"
     assert data["message"] == "No offers match gpu=4090 cuda>=12.6 under $0.30/hr."
-    assert "--max-price 0.45" in data["hint"]
+    assert data["hint"] == "Try a higher --max-price, another --gpu, or a lower --cuda."
     assert calls(h, "create") == []
 
 
@@ -453,31 +453,6 @@ def test_image_unsupported_destroys_box(h: Harness) -> None:
 
 
 # Waiting.
-
-
-def test_no_wait_returns_pending_with_nulls(h: Harness) -> None:
-    code, data = run_json(h, "reserve", "--no-wait")
-    assert code == 0
-    assert data["state"] == "pending"
-    for key in ("expires_at", "ttl_remaining_s", "ssh", "ssh_port", "rsync_target", "ports"):
-        assert data[key] is None, key
-    (iid,) = h.provider.instances
-    assert label_of(h, iid).expires is None
-
-
-def test_no_wait_lease_is_partial_with_every_layer_and_no_warning(h: Harness) -> None:
-    _, data = run_json(h, "reserve", "--no-wait")
-    assert "guard_partial" not in [w["code"] for w in data["warnings"]]
-    cached = h.context().cache.load().leases[data["lease"]]
-    assert cached.guard_missing == ["watchdog", "destroy_key", "clock_file"]
-
-
-def test_no_wait_lease_turns_full_once_the_probe_answers(h: Harness) -> None:
-    _, data = run_json(h, "reserve", "--no-wait")
-    _, status = run_json(h, "status", data["lease"])
-    (entry,) = status["leases"]
-    assert "guard" not in entry
-    assert status["warnings"] == []
 
 
 def test_wait_timeout_destroys_box(h: Harness) -> None:
@@ -911,7 +886,7 @@ def test_create_timeout_failed_duplicate_destroy_names_release_fix(h: Harness) -
     kept = min(h.provider.instances)
     assert (
         f"vasty: could not destroy duplicate instance {kept + 1}: boom"
-        f" Run vasty release i-{kept + 1} --yes."
+        f" Run vasty release i-{kept + 1}."
     ) in err
 
 
@@ -962,7 +937,7 @@ def test_create_rejected_failed_destroy_names_release_fix(h: Harness) -> None:
     data = json.loads(out)
     assert code == 2
     assert (data["details"]["instance_id"], data["details"]["destroyed"]) == (1001, False)
-    assert "vasty: could not destroy instance 1001 for l-abababab: boom. Run vasty release i-1001 --yes." in err
+    assert "vasty: could not destroy instance 1001 for l-abababab: boom. Run vasty release i-1001." in err
 
 
 def test_create_error_other_than_timeout_is_not_retried(h: Harness) -> None:
@@ -983,7 +958,7 @@ def test_reserve_lease_accepts_sparse_args(h: Harness) -> None:
 
     ctx = h.context()
     snap = engine.refresh(ctx)
-    reserved = reserve.reserve_lease(ctx, argparse.Namespace(), snap, ttl=7200, wait=True)
+    reserved = reserve.reserve_lease(ctx, argparse.Namespace(), snap, ttl=7200)
     assert reserved.result.state == "running"
     assert reserved.lease.label.ttl == 7200
     assert reserved.result.ttl_remaining_s == 7200

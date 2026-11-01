@@ -89,7 +89,7 @@ def test_stop_job_that_survives_kill_stays_running(harness: Harness, box: int) -
     state.signal_exits = {}
     state.jobs["j-1"] = live_job("j-1", NOW - 300)
     start = harness.time.mono_now
-    code, out, _ = harness.run("stop", "ft", "--plain")
+    code, out, _ = harness.run("stop", "ft", tty=True)
     assert code == stop.RUNNING_EXIT == 2
     assert out.startswith("j-1 on l-0000a001 still runs 5s after KILL.")
     assert harness.time.mono_now - start >= stop.STOP_WAIT_S + stop.KILL_WAIT_S
@@ -118,7 +118,7 @@ def test_stop_unknown_lease_is_not_found(harness: Harness, box: int) -> None:
 
 def test_stop_human_output(harness: Harness, box: int) -> None:
     harness.box.state(box).jobs["j-1"] = live_job("j-1", NOW - 300)
-    code, out, _ = harness.run("stop", "ft", "--plain")
+    code, out, _ = harness.run("stop", "ft", tty=True)
     assert code == 0
     assert out == "Stopped j-1 on l-0000a001: exit 143 after 5m\n"
 

@@ -340,7 +340,7 @@ def test_serve_port_mapping_missing(harness: Harness) -> None:
 
 
 def test_serve_human_mode_notes_key_once(harness: Harness, box: int) -> None:
-    code, out, _ = harness.run("serve", "--on", "ft", "--model", QWEN, "--plain")
+    code, out, _ = harness.run("serve", "--on", "ft", "--model", QWEN, tty=True)
     assert code == 0
     assert KEY in out
     assert "will not be shown again" in out
@@ -485,9 +485,9 @@ def test_serve_failure_keeps_reused_box(harness: Harness, reserve: FakeReserve, 
 def test_serve_reports_reserve_wait_sweep(
     harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch, ok: bool
 ) -> None:
-    def wait(ctx: Any, args: Any, snap: Any, *, ttl: int, wait: bool = True, **kw: Any) -> Any:
+    def wait(ctx: Any, args: Any, snap: Any, *, ttl: int, **kw: Any) -> Any:
         add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
-        return reserve(ctx, args, snap, ttl=ttl, wait=wait, **kw)
+        return reserve(ctx, args, snap, ttl=ttl, **kw)
 
     monkeypatch.setattr("vasty.commands.reserve.reserve_lease", wait)
     if not ok:

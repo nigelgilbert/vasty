@@ -564,7 +564,7 @@ class FakeReserve:
     Each call adds a running lease to the fake provider and box with
     `add_lease`, refreshes, and returns `Reserved`. A `--name` that matches an
     active lease of the current owner returns that lease with `reused`.
-    `calls` records `ttl`, `wait`, `name` and the resolved `vram`, `gpu` and
+    `calls` records `ttl`, `name` and the resolved `vram`, `gpu` and
     `image`. Set `fail` to raise that error instead. `row` adds instance fields.
     """
 
@@ -579,7 +579,7 @@ class FakeReserve:
         return self
 
     def __call__(
-        self, ctx: Context, args: Any, snap: Any, *, ttl: int, wait: bool = True,
+        self, ctx: Context, args: Any, snap: Any, *, ttl: int,
     ) -> Any:
         from vasty import engine
         from vasty.commands.reserve import Reserved
@@ -587,7 +587,7 @@ class FakeReserve:
         settings = ctx.settings
         name = getattr(args, "name", None)
         self.calls.append({
-            "ttl": ttl, "wait": wait, "name": name,
+            "ttl": ttl, "name": name,
             "vram": settings.vram, "gpu": settings.gpu, "image": settings.image,
         })
         if self.fail is not None:

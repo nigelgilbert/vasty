@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import TYPE_CHECKING, TypeVar
 
 from vasty import engine, ids, labels, onstart, views
@@ -81,7 +80,6 @@ def reserve_lease(
     snap: Snapshot,
     *,
     ttl: int,
-    wait: bool,
 ) -> Reserved:
     """Reserve a box from the creation flags in `args` and `ctx.settings`.
 
@@ -146,7 +144,7 @@ def reserve_lease(
     reused = not created
     not_spawned = spawn_follow(ctx, lease.lease)
 
-    if wait and lease.state == "pending":
+    if lease.state == "pending":
         lease, more_swept, account = wait_ready(ctx, lease, required, created)
         swept = merge_swept(swept, more_swept)
         warnings = account + warnings
@@ -270,8 +268,7 @@ def _no_offers(query: OfferQuery) -> VastyError:
     if query.cuda is not None:
         parts.append(f"cuda>={query.cuda:g}")
     what = " ".join(parts) or "the request"
-    higher = (query.max_price * Decimal("1.5")).quantize(Decimal("0.01"))
-    tips = [f"--max-price {higher}"]
+    tips = ["a higher --max-price"]
     if query.gpu:
         tips.append("another --gpu")
     if query.vram_min_gb is not None:
@@ -350,7 +347,7 @@ def create_with_recovery(ctx: Context, request: CreateRequest, lease_id: str) ->
                 except VastyError as err:
                     ctx.warn(
                         f"vasty: could not destroy duplicate instance {inst.id}: {err.message}"
-                        f" Run vasty release i-{inst.id} --yes."
+                        f" Run vasty release i-{inst.id}."
                     )
             return keep
         if waited >= RECOVER_WINDOW_S:
@@ -391,7 +388,7 @@ def _clear_rejected(ctx: Context, lease_id: str, err: VastyError) -> VastyError:
             destroyed = False
             ctx.warn(
                 f"vasty: could not destroy instance {inst.id} for {lease_id}: {failure.message}"
-                f" Run vasty release i-{inst.id} --yes."
+                f" Run vasty release i-{inst.id}."
             )
     instance_id = rows[0].id if rows else None
     if instance_id is None:
@@ -607,8 +604,6 @@ def render(result: ReserveResult) -> str:
 
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     snap = engine.refresh(ctx)
-    reserved = reserve_lease(
-        ctx, args, snap, ttl=ctx.settings.ttl, wait=not getattr(args, "no_wait", False)
-    )
+    reserved = reserve_lease(ctx, args, snap, ttl=ctx.settings.ttl)
     human = render(reserved.result) if ctx.mode == "human" else None
     return Outcome(reserved.result, human=human)

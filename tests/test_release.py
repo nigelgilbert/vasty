@@ -275,9 +275,9 @@ def test_release_reports_unreadable_label_on_reread(harness: Harness) -> None:
     assert code == 2
     assert data["error"] == "provider_error"
     assert data["message"] == "Lease l-0000a001's label is unreadable."
-    assert data["hint"] == f"vasty release i-{row.id} --yes"
+    assert data["hint"] == f"vasty release i-{row.id}"
     assert harness.provider.destroyed == []
-    code, data, _ = release(harness, f"i-{row.id}", "--yes")
+    code, data, _ = release(harness, f"i-{row.id}")
     assert code == 0
     assert harness.provider.destroyed == [row.id]
 
@@ -293,19 +293,10 @@ def test_release_by_instance_id_of_managed_lease(harness: Harness) -> None:
 # Orphans.
 
 
-def test_orphan_release_non_tty_needs_yes(harness: Harness) -> None:
-    harness.provider.add_instance(id=55120)
-    code, data, _ = release(harness, "i-55120")
-    assert code == 1
-    assert data["error"] == "confirmation_required"
-    assert "--yes" in data["hint"]
-    assert harness.provider.destroyed == []
-
-
-def test_orphan_release_with_yes(harness: Harness) -> None:
+def test_orphan_release_by_instance_id(harness: Harness) -> None:
     harness.provider.add_instance(id=55120)
     harness.provider.billed = {55120: Decimal("0.44")}
-    code, data, _ = release(harness, "i-55120", "--yes")
+    code, data, _ = release(harness, "i-55120")
     assert code == 0
     assert harness.provider.destroyed == [55120]
     assert data["lease"] == "i-55120"
@@ -314,34 +305,18 @@ def test_orphan_release_with_yes(harness: Harness) -> None:
     assert data["jobs"] == []
 
 
-def test_orphan_release_tty_prompts(harness: Harness) -> None:
+def test_orphan_release_tty_destroys_without_a_prompt(harness: Harness) -> None:
     harness.provider.add_instance(id=55120)
-    code, out, err = release(harness, "i-55120", tty=True, stdin="y\n")
+    code, out, err = release(harness, "i-55120", tty=True)
     assert code == 0
-    assert "Destroy i-55120" in err
+    assert err == ""
     assert harness.provider.destroyed == [55120]
     assert "i-55120 released" in out
 
 
-def test_orphan_release_tty_declined(harness: Harness) -> None:
-    harness.provider.add_instance(id=55120)
-    code, _, err = release(harness, "i-55120", tty=True, stdin="n\n")
-    assert code == 1
-    assert "confirmation_required" in err
-    assert harness.provider.destroyed == []
-
-
-def test_orphan_release_tty_with_yes_skips_prompt(harness: Harness) -> None:
-    harness.provider.add_instance(id=55120)
-    code, _, err = release(harness, "i-55120", "--yes", tty=True)
-    assert code == 0
-    assert "Destroy" not in err
-    assert harness.provider.destroyed == [55120]
-
-
 def test_unreadable_label_releases_by_instance_id(harness: Harness) -> None:
     harness.provider.add_instance(id=777, label="vasty:v9;lease=l-1")
-    code, data, _ = release(harness, "i-777", "--yes")
+    code, data, _ = release(harness, "i-777")
     assert code == 0
     assert harness.provider.destroyed == [777]
     assert data["lease"] == "i-777"
@@ -391,6 +366,6 @@ def test_bulk_release_reports_failed_entries(harness: Harness) -> None:
 
 def test_bulk_release_human(harness: Harness) -> None:
     add_lease(harness, label={"name": "ft"})
-    code, out, _ = harness.run("release", "--all", "--plain")
+    code, out, _ = harness.run("release", "--all", tty=True)
     assert code == 0
     assert "l-0000a001 (ft) released" in out

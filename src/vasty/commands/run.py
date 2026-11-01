@@ -162,7 +162,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     if auto:
         from vasty.commands import reserve
 
-        reserved = reserve.reserve_lease(ctx, args, snap, ttl=ttl, wait=True)
+        reserved = reserve.reserve_lease(ctx, args, snap, ttl=ttl)
         lease = reserved.lease
         warnings = list(reserved.result.warnings)
         swept = merge_swept(list(snap.swept), reserved.result.swept)
@@ -185,11 +185,15 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
 
     if detach:
         log_path = started.log_path or f"{WORKDIR}/.vasty/jobs/{started.id}/log"
+        expiry = effective_expiry(lease.label)
         detached = RunDetachedResult(
             lease=lease.lease,
             job=started.id,
+            gpu=lease.gpu,
+            price_per_hr=lease.price_per_hr,
             log_path=log_path,
-            expires_at=iso(effective_expiry(lease.label)),
+            expires_at=iso(expiry),
+            ttl_remaining_s=max(0, expiry - ctx.clock.now()),
             warnings=warnings,
             swept=swept,
         )

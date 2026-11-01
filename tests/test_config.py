@@ -511,7 +511,7 @@ def test_config_show_profile(harness: Harness) -> None:
 
 def test_config_show_human(harness: Harness) -> None:
     write(harness.home / "project" / "vasty.toml", '[defaults]\nimage = "my/img"\n')
-    code, out, _ = harness.run("config", "show", "--plain")
+    code, out, _ = harness.run("config", "show", tty=True)
     assert code == 0
     lines = out.strip().splitlines()
     assert len(lines) == 17
@@ -543,7 +543,7 @@ def test_config_show_names_api_key_source(
     code, out, _ = harness.run("config", "show")
     assert code == 0
     assert json.loads(out)["api_key_source"] == expected
-    code, plain, _ = harness.run("config", "show", "--plain")
+    code, plain, _ = harness.run("config", "show", tty=True)
     assert code == 0
     row = next(line for line in plain.splitlines() if line.startswith("api_key_source"))
     assert row.split()[1:] == [expected or "-"]
@@ -734,5 +734,5 @@ def test_config_profiles(harness: Harness) -> None:
     assert code == 0
     assert json.loads(out) == {"profiles": {"small": {"gpu": "4090", "vram": 24},
                                             "big": {"gpu": "A100"}}}
-    code, out, _ = harness.run("config", "profiles", "--plain")
+    code, out, _ = harness.run("config", "profiles", tty=True)
     assert out.splitlines() == ['big  gpu="A100"', 'small  gpu="4090" vram=24']

@@ -29,7 +29,7 @@ VERBS = (
 # Flags that set up a new lease; `--on` rejects them.
 CREATION_FLAGS = (
     "name", "group", "owner", "profile", "ttl", "gpu", "vram", "cuda", "gpus", "disk",
-    "image", "max_price", "region", "ports", "startup", "no_wait",
+    "image", "max_price", "region", "ports", "startup",
 )
 
 # Flags that feed config resolution as the `flag` layer.
@@ -75,8 +75,6 @@ def _output_flags() -> Parser:
     parent = Parser(add_help=False)
     parent.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
                         help="print JSON; default when stdout is not a terminal")
-    parent.add_argument("--plain", action="store_true", default=argparse.SUPPRESS,
-                        help="print human text; default when stdout is a terminal")
     parent.add_argument("--verbose", action="store_true", default=argparse.SUPPRESS,
                         help="include extra fields in the output")
     return parent
@@ -135,8 +133,6 @@ def _reserve_flags(p: argparse.ArgumentParser, h: dict[str, str]) -> None:
     p.add_argument("--ttl", metavar="DURATION", help=h["ttl"])
     p.add_argument("--profile", help=h["profile"])
     p.add_argument("--startup", metavar="FILE|-", help=h["startup"])
-    p.add_argument("--no-wait", action="store_true", dest="no_wait",
-                   help="return once the box is created without waiting for it to run")
     p.add_argument("--config", dest="config_stdin", metavar="-", help=h["config_stdin"])
     _hardware_flags(p, h)
 
@@ -166,8 +162,6 @@ def build_parser() -> Parser:
 
     p = sub.add_parser("release", parents=[out], help="destroy a box now")
     _target_flags(p)
-    p.add_argument("--yes", action="store_true",
-                   help="skip the confirmation for an orphan instance id")
 
     p = sub.add_parser("status", parents=[out], help="show leases, spend and warnings")
     _target_flags(p)
@@ -221,10 +215,10 @@ def build_parser() -> Parser:
                    help="forward a port as ssh -L SPEC; repeatable")
 
     p = sub.add_parser("tag", parents=[out], help="set labels or adopt an orphan")
-    _target_flags(p)
-    p.add_argument("--set-name", dest="set_name", metavar="NAME", help="set the lease name")
-    p.add_argument("--set-group", dest="set_group", metavar="G", help="set the group label")
-    p.add_argument("--set-owner", dest="set_owner", metavar="O", help="set the owner label")
+    p.add_argument("target", metavar="LEASE", help="lease id or name, or an orphan's i- id")
+    p.add_argument("--name", metavar="NAME", help="set the lease name; empty clears it")
+    p.add_argument("--group", metavar="G", help="set the group label; empty clears it")
+    p.add_argument("--owner", metavar="O", help="set the owner label")
     p.add_argument("--ttl", metavar="DURATION",
                    help="clock for an adopted orphan as a duration such as 30m; default: none")
 
@@ -269,7 +263,7 @@ def parse(argv: Sequence[str]) -> argparse.Namespace:
     if ns.verb is None:
         raise invalid("No verb given.", "Run vasty --help.")
     ns.command = command
-    for flag in ("json", "plain", "verbose"):
+    for flag in ("json", "verbose"):
         if not hasattr(ns, flag):
             setattr(ns, flag, False)
     check_combinations(ns)
@@ -278,8 +272,6 @@ def parse(argv: Sequence[str]) -> argparse.Namespace:
 
 def check_combinations(ns: argparse.Namespace) -> None:
     """Apply the flag-combination rules."""
-    if ns.json and ns.plain:
-        raise invalid("--json and --plain conflict.", "Pass one of --json or --plain.")
     verb = ns.verb
     if verb == "run" and not ns.command:
         raise invalid("run needs a command after --.", "vasty run -- COMMAND")
@@ -298,8 +290,6 @@ def check_combinations(ns: argparse.Namespace) -> None:
             if given:
                 flags = ", ".join("--" + f.replace("_", "-") for f in given)
                 raise invalid(f"--on takes no creation flags: {flags}.", f"Drop {flags}.")
-        elif ns.no_wait:
-            raise invalid(f"{verb} without --on waits for the box.", "Drop --no-wait.")
     if hasattr(ns, "everyone"):
         _check_target(ns)
 
@@ -345,12 +335,7 @@ def configure(ctx: Context, ns: argparse.Namespace) -> None:
     """Fill the parsed flags, output mode and stdin JSON into a context."""
     ctx.flags = setting_flags(ns)
     ctx.profile = getattr(ns, "profile", None)
-    if ns.json:
-        ctx.mode = "json"
-    elif ns.plain:
-        ctx.mode = "human"
-    else:
-        ctx.mode = "human" if ctx.stdout_tty else "json"
+    ctx.mode = "json" if ns.json or not ctx.stdout_tty else "human"
     if getattr(ns, "config_stdin", None) == "-":
         try:
             data = json.loads(ctx.stdin.read())
@@ -393,11 +378,7 @@ def _report_swept(ctx: Context) -> None:
 
 def _guess_mode(argv: Sequence[str], tty: bool) -> str:
     head, _ = split_command(argv)
-    if "--json" in head:
-        return "json"
-    if "--plain" in head:
-        return "human"
-    return "human" if tty else "json"
+    return "json" if "--json" in head or not tty else "human"
 
 
 def run(

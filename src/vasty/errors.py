@@ -21,7 +21,6 @@ EXIT_CODES: dict[str, int] = {
     "lease_expired": 1,
     "lease_pending": 1,
     "name_conflict": 1,
-    "confirmation_required": 1,
     "image_unsupported": 1,
     "startup_too_large": 1,
     "vllm_missing": 1,

@@ -108,7 +108,7 @@ def test_status_orphan_hardware_from_instance_row(harness: Harness) -> None:
     harness.provider.add_instance(id=55120, label=None, num_gpus=2, gpu_ram_gb=12.288)
     row = by_lease(status(harness))["i-55120"]
     assert (row["gpus"], row["vram_gb"], row["busy"]) == (2, 12.288, None)
-    _, out, _ = harness.run("status", "--plain")
+    _, out, _ = harness.run("status", tty=True)
     assert "2x12 3090" in out.splitlines()[1]
 
 
@@ -131,7 +131,7 @@ def test_status_busy_null_while_pending(harness: Harness) -> None:
     add_lease(harness, actual_status="loading")
     row = by_lease(status(harness))["l-0000a001"]
     assert (row["state"], row["busy"]) == ("pending", None)
-    _, out, _ = harness.run("status", "--plain")
+    _, out, _ = harness.run("status", tty=True)
     assert out.splitlines()[1].split()[-1] == "—"
 
 
@@ -141,7 +141,7 @@ def test_status_busy_null_while_unreachable(harness: Harness) -> None:
     harness.box.state(lease.id).reachable = False
     row = by_lease(status(harness))["l-0000a001"]
     assert (row["state"], row["busy"], row["jobs"]) == ("unreachable", None, [])
-    _, out, _ = harness.run("status", "--plain")
+    _, out, _ = harness.run("status", tty=True)
     assert out.splitlines()[1].split()[-1] == "—"
 
 
@@ -185,10 +185,10 @@ def test_status_money_is_four_places_in_json_and_cents_for_humans(harness: Harne
     row = add_lease(harness, label={"group": "g"})
     harness.provider.billed = {row.id: Decimal("0.003")}
     assert status(harness)["leases"][0]["cost"] == 0.003
-    _, out, _ = harness.run("status", "--plain")
+    _, out, _ = harness.run("status", tty=True)
     cells = out.splitlines()[1].split()
     assert cells[cells.index("running") + 4] == "0.00"
-    _, out, _ = harness.run("status", "--group", "g", "--plain")
+    _, out, _ = harness.run("status", "--group", "g", tty=True)
     assert " · $0.00 so far · " in out.splitlines()[0]
 
 
@@ -279,14 +279,14 @@ def test_uptime_counts_from_first_running_sample(harness: Harness) -> None:
     row = by_lease(status(harness, "--verbose"))["l-0000a001"]
     assert row["uptime_s"] == 600
     assert row["verbose"]["running_at"] == iso(NOW)
-    _, out, _ = harness.run("status", "--plain")
+    _, out, _ = harness.run("status", tty=True)
     assert "10m" in out.splitlines()[1].split()
 
 
 def test_uptime_null_before_running(harness: Harness) -> None:
     add_lease(harness, label={"name": "ft", "created": NOW - 1200}, actual_status="loading")
     assert by_lease(status(harness))["l-0000a001"]["uptime_s"] is None
-    _, out, _ = harness.run("status", "--plain")
+    _, out, _ = harness.run("status", tty=True)
     header, line = out.splitlines()[:2]
     assert line[header.index("UPTIME"):].split()[0] == "—"
 
@@ -320,7 +320,7 @@ def test_swept_lease_in_status(harness: Harness) -> None:
 
 def test_swept_line_in_human_mode(harness: Harness) -> None:
     add_lease(harness, label={"name": "ft", "expires": NOW - 30})
-    _, out, _ = harness.run("status", "--plain")
+    _, out, _ = harness.run("status", tty=True)
     assert out.splitlines()[0] == "SWEPT  l-0000a001 ft  expired 2026-10-29T00:59:30Z  destroyed"
 
 
@@ -369,7 +369,7 @@ def test_status_cached_reads_legacy_unprobed_entry_as_partial(harness: Harness) 
 
 
 def test_status_human_table(account: Harness) -> None:
-    code, out, _ = account.run("status", "--plain")
+    code, out, _ = account.run("status", tty=True)
     assert code == 0
     lines = out.splitlines()
     assert lines[0].split() == ["LEASE", "NAME", "GROUP", "OWNER", "GPU", "STATE", "EXPIRES",
@@ -391,7 +391,7 @@ def test_status_human_table(account: Harness) -> None:
 
 
 def test_status_human_group_view(account: Harness) -> None:
-    code, out, _ = account.run("status", "--group", "exp42", "--plain")
+    code, out, _ = account.run("status", "--group", "exp42", tty=True)
     assert code == 0
     lines = out.splitlines()
     assert lines[0].startswith(
@@ -405,7 +405,7 @@ def test_status_human_group_view(account: Harness) -> None:
 
 
 def test_status_human_cached_header(account: Harness) -> None:
-    _, out, _ = account.run("status", "--cached", "--plain")
+    _, out, _ = account.run("status", "--cached", tty=True)
     assert out.splitlines()[0] == "CACHED  as of 2026-10-29T01:00:00Z"
 
 
@@ -452,7 +452,7 @@ def test_history_lease_drops_live_fields(harness: Harness, state: str) -> None:
     assert row["expires_at"] is not None
     assert "actual_status" not in row["verbose"]
     assert row["log_tail"] == []
-    _, out, _ = harness.run("status", "ft", "--plain", "--verbose")
+    _, out, _ = harness.run("status", "ft", "--verbose", tty=True)
     assert "actual_status" not in out
 
 
@@ -469,7 +469,7 @@ def test_pending_lease_has_no_clock(harness: Harness) -> None:
     assert (row["expires_at"], row["ttl_remaining_s"]) == (None, None)
     assert row["log_tail"] == []
     assert by_lease(status(harness))["l-0000a001"]["expires_at"] is None
-    _, out, _ = harness.run("status", "--plain")
+    _, out, _ = harness.run("status", tty=True)
     header, line = out.splitlines()[:2]
     assert line[header.index("EXPIRES"):].split()[0] == "—"
 

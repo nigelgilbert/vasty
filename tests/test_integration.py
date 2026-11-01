@@ -135,7 +135,7 @@ def test_spending_commands_make_no_balance_or_charges_call(h: Harness) -> None:
         ["run", "--on", "ft", "--", "true"],
         ["run", "--", "true"],
         ["serve", "--on", "ft", "--model", "Qwen/Qwen3-14B-AWQ"],
-        ["tag", "ft", "--set-group", "exp"],
+        ["tag", "ft", "--group", "exp"],
         ["tag", "i-55120", "--ttl", "30m"],
     ]
     for argv in steps:

@@ -59,28 +59,28 @@ Once the package is on PyPI the first line becomes `uvx vasty reserve`.
 ## Commands
 
 ```
-vasty reserve   [--name NAME] [--group G] [--owner O] [--ttl 30m] [--profile P] [--startup FILE|-] [--no-wait] [hardware flags]
+vasty reserve   [--name NAME] [--group G] [--owner O] [--ttl 30m] [--profile P] [--startup FILE|-] [hardware flags]
 vasty extend    TARGET  (--by 30m | --to 2h | --until TIME)
-vasty release   TARGET [--yes]
+vasty release   TARGET
 vasty status    [TARGET] [--cached]
 vasty run       [--on LEASE | reserve flags] [--detach] [--sync DIR] -- COMMAND...
 vasty serve     [--on LEASE | reserve flags] --model MODEL [--bind-local] [-- VLLM_ARGS...]
 vasty stop      LEASE [JOB]
 vasty sync      LEASE (push [--delete] SRC DEST | pull SRC DEST)
 vasty ssh       LEASE [-- COMMAND...]
-vasty tag       TARGET [--set-name NAME] [--set-group G] [--set-owner O] [--ttl 30m]
+vasty tag       LEASE [--name NAME] [--group G] [--owner O] [--ttl 30m]
 vasty sweep     [--follow LEASE]
 vasty config    (show | set KEY VALUE | profiles)
 vasty completion (bash | zsh | fish)
 ```
 
-Hardware flags on `reserve`, `run` and `serve`: `--gpu NAME`, `--vram MIN_GB`, `--cuda FLOOR`, `--gpus N`, `--disk GB`, `--image IMAGE`, `--max-price $/HR`, `--region R`, `--ports N[,N...]`. A profile or config file supplies defaults for any of them. `--cuda` is the minimum CUDA version the host driver supports. With no `cuda` set, Vasty applies the floor of an image it names: 13 for `vllm/vllm-openai:v0.32.0`, 12.6 for `vastai/base-image:cuda-12.6.3-auto`. For any other image, read its floor from `NVIDIA_REQUIRE_CUDA` in `docker inspect IMAGE`. `run --on` and `serve --on` reuse a box and reject creation flags. Auto-reserved `run` and `serve` reject `--no-wait`.
+Hardware flags on `reserve`, `run` and `serve`: `--gpu NAME`, `--vram MIN_GB`, `--cuda FLOOR`, `--gpus N`, `--disk GB`, `--image IMAGE`, `--max-price $/HR`, `--region R`, `--ports N[,N...]`. A profile or config file supplies defaults for any of them. `--cuda` is the minimum CUDA version the host driver supports. With no `cuda` set, Vasty applies the floor of an image it names: 13 for `vllm/vllm-openai:v0.32.0`, 12.6 for `vastai/base-image:cuda-12.6.3-auto`. For any other image, read its floor from `NVIDIA_REQUIRE_CUDA` in `docker inspect IMAGE`. `run --on` and `serve --on` reuse a box and reject creation flags.
 
 A new box comes from the matching offer with the highest reliability, then the highest download bandwidth, then the lowest price, then the lowest offer id.
 
 `run --sync DIR` pushes the contents of DIR into `/workspace/` before the command starts. Every `run` job starts in `/workspace`.
 
-Every verb takes `--json`, `--plain` and `--verbose`.
+Every verb takes `--json` and `--verbose`.
 
 A `TARGET` is a lease id or name, or a selector: `--group G`, `--owner O`, `--all`, or `--all --everyone` for every lease on the account. Bulk writes act on the current owner's leases. `--owner O` selects another owner's; `--everyone` selects all.
 
@@ -118,7 +118,7 @@ Errors are one object:
 {
   "error": "no_offers",
   "message": "No offers match gpu=4090 under $0.40/hr.",
-  "hint": "Try --max-price 0.60, --gpu 3090, or relax --region."
+  "hint": "Try a higher --max-price, another --gpu, or relax --region."
 }
 ```
 
@@ -149,14 +149,14 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 | `status` | `leases`, `totals`, `cached_at`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
 | job entry in `status` and `release` `jobs` | `job`, `cmd`, `state`, `exit`, `duration_s`. `state` is `running`, `serving`, `exited`, `killed` or `unknown`. `release` marks live jobs `killed` with a null `exit` and freezes `duration_s`. `stop` marks its job `killed` with the job's exit code |
 | attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `error`. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
-| `run --detach` | `lease`, `job`, `log_path`, `expires_at` |
+| `run --detach` | `lease`, `job`, `gpu`, `price_per_hr`, `log_path`, `expires_at`, `ttl_remaining_s` |
 | `serve` | `lease`, `job`, `model`, `url`, `api_key`, `expires_at` |
 | `stop` | `lease`, `job`, `cmd`, `state`, `exit`, `duration_s`. `stop` sends TERM to the job's process group, waits up to 10s, then KILL and waits up to 5s. JOB is required when several jobs run. A job still live after KILL keeps its `state` and `stop` exits 2 |
 | `sync` | `lease`, `direction`, `src`, `dest` |
 | `sweep` | `swept`, `warnings` |
 | `config` | `values`, `{key, value}` or `profiles` |
 
-A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fields null. `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at` and `ttl_remaining_s`.
+`reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at` and `ttl_remaining_s`.
 
 `busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. `uptime_s` counts from vasty's first `running` sample and is null before it. `--verbose` shows that sample as `running_at`.
 
@@ -175,7 +175,6 @@ A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fie
 | `lease_expired` | 1 | the lease is in history |
 | `lease_pending` | 1 | `extend`, `run --on`, `serve --on`, `sync`, `ssh` or `stop` on a lease SSH cannot reach yet |
 | `name_conflict` | 1 | a new name matches another active lease of the same owner |
-| `confirmation_required` | 1 | orphan `release` without `--yes` in non-TTY mode |
 | `image_unsupported` | 1 | the image lacks bash, root or apt-get |
 | `startup_too_large` | 1 | the encoded `onstart` exceeds 4048 characters |
 | `vllm_missing` | 1 | `serve` finds no `vllm` on the box's PATH |
@@ -271,7 +270,7 @@ Per-box spend is `max_price` times `ttl`, since the clock ends the box. Storage 
 
 For runway, read `credit` over `burn_per_hr`. When the balance or charges are unavailable, those totals are null and `status` warns with `spend_unavailable`.
 
-A lease's `cost` sums the Vast charge rows available for its instance. A box adopted with `tag`, or an orphan, can show partial history. `release` reports the same figure. `cost` is null when no charge row is available, and `status` warns `spend_unavailable` when the read failed. `price_per_hr` times `uptime_s` approximates it.
+A lease's `cost` sums the Vast charge rows available for its instance. A box adopted with `tag`, or an orphan, can show partial history. On `release`, `cost` sums the charge rows posted so far. Vast posts charges in arrears, so `status <id>` later reads the rows posted since. Charges are cached 60 s. `cost` is null when no charge row is available, and `status` warns `spend_unavailable` when the read failed. `price_per_hr` times `uptime_s` approximates it.
 
 ## State
 
@@ -281,7 +280,7 @@ The lease lives on the provider, in the instance's label:
 vasty:v1;lease=l-7f3a2b1c;name=ft;owner=claude-code;created=1793235840;ttl=10800;expires=1793247000
 ```
 
-Any machine with the API key sees the same leases, owners and groups. An instance without a `vasty:` label is an **orphan**: shown in `status`, left alone until `tag ID --ttl 30m` adopts it or `release ID` destroys it. One local file, `~/.local/state/vasty/leases.json`, caches label data plus job records. Losing it loses job history for destroyed boxes and nothing else.
+Any machine with the API key sees the same leases, owners and groups. An instance without a `vasty:` label is an **orphan**: shown in `status`, left alone until `tag ID --ttl 30m` adopts it or `release ID` destroys it. `release` takes the typed `i-` id as the confirmation and destroys the box without a prompt. One local file, `~/.local/state/vasty/leases.json`, caches label data plus job records. Losing it loses job history for destroyed boxes and nothing else.
 
 ### Lease states
 

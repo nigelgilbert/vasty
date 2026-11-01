@@ -28,10 +28,49 @@ def test_parser_error_is_invalid_arguments(harness: Harness) -> None:
     assert json.loads(out)["error"] == "invalid_arguments"
 
 
-def test_json_and_plain_conflict() -> None:
+@pytest.mark.parametrize(
+    ("argv", "tty", "mode"),
+    [
+        (["sweep"], True, "human"),
+        (["sweep"], False, "json"),
+        (["sweep", "--json"], True, "json"),
+        (["sweep", "--json"], False, "json"),
+    ],
+)
+def test_json_forces_json_and_stdout_type_picks_the_rest(
+    harness: Harness, argv: list[str], tty: bool, mode: str
+) -> None:
+    harness.run(*argv, tty=tty)
+    assert harness.last_ctx is not None
+    assert harness.last_ctx.mode == mode
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["status", "--plain"],
+        ["reserve", "--no-wait"],
+        ["run", "--no-wait", "--", "true"],
+        ["serve", "--model", "m", "--no-wait"],
+        ["release", "i-1", "--yes"],
+        ["tag", "ft", "--set-group", "g"],
+    ],
+)
+def test_removed_flags_are_invalid(argv: list[str]) -> None:
     with pytest.raises(VastyError) as exc:
-        parse(["status", "--json", "--plain"])
+        parse(argv)
     assert exc.value.code == "invalid_arguments"
+
+
+def test_tag_needs_a_lease() -> None:
+    with pytest.raises(VastyError) as exc:
+        parse(["tag", "--group", "g"])
+    assert exc.value.code == "invalid_arguments"
+
+
+def test_tag_parses_setters() -> None:
+    ns = parse(["tag", "ft", "--name", "n", "--group", "g", "--owner", "o", "--ttl", "30m"])
+    assert (ns.target, ns.name, ns.group, ns.owner, ns.ttl) == ("ft", "n", "g", "o", "30m")
 
 
 def test_on_rejects_creation_flags() -> None:
@@ -71,11 +110,6 @@ def test_cuda_flag_rejects_text(harness: Harness, verb: list[str]) -> None:
     assert data["error"] == "invalid_arguments"
     assert "--cuda" in data["message"]
     assert "search_offers" not in [name for name, _ in harness.provider.calls]
-
-
-def test_auto_reserve_rejects_no_wait() -> None:
-    with pytest.raises(VastyError):
-        parse(["serve", "--model", "m", "--no-wait"])
 
 
 def test_config_and_startup_stdin_conflict() -> None:

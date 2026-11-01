@@ -12,7 +12,8 @@ A LEASE that matches nothing returns `{lease, already_absent: true}`. A lease
 already in history returns its summary with `already_absent: true` once Vast
 no longer lists its row. While the row is listed, `release` sends the destroy
 again and keeps the history state. An orphan or unreadable row released by
-instance id needs `--yes` or a TTY confirmation. Before destroying, `release`
+its `i-` id is destroyed without a prompt; the typed id is the confirmation.
+Before destroying, `release`
 re-reads the row and aborts with `provider_error` when its `expires` moved
 or its label became unreadable. After a destroy, or when the lease is
 already absent, `release` sends TERM to the lease's recorded follower
@@ -55,7 +56,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     snap = engine.refresh(ctx)
     engine.read_charges(ctx, snap)
     if args.target is not None:
-        return _release_one(ctx, snap, args.target, bool(args.yes))
+        return _release_one(ctx, snap, args.target)
     resolved = resolve_target(ctx, snap, args, write=True)
     entries: list[BulkEntry] = []
     worst = 0
@@ -72,7 +73,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     return Outcome(result, exit_code=worst, human=_render_bulk(result))
 
 
-def _release_one(ctx: Context, snap: Snapshot, ref: str, yes: bool) -> Outcome:
+def _release_one(ctx: Context, snap: Snapshot, ref: str) -> Outcome:
     try:
         found = resolve_lease(ctx, snap, ref)
     except VastyError as err:
@@ -82,7 +83,7 @@ def _release_one(ctx: Context, snap: Snapshot, ref: str, yes: bool) -> Outcome:
         absent = ReleaseAbsent(ref, True, list(snap.warnings), list(snap.swept))
         return Outcome(absent, human=f"{ref} is already absent.")
     if isinstance(found, Instance):
-        summary = _release_orphan(ctx, snap, found, yes)
+        summary = _release_orphan(ctx, snap, found)
     else:
         summary = release_lease(ctx, snap, found)
     summary.warnings = list(snap.warnings)
@@ -117,7 +118,7 @@ def _destroy(ctx: Context, snap: Snapshot, lease: CachedLease) -> ReleaseSummary
                 raise VastyError(
                     "provider_error",
                     f"Lease {lease.lease}'s label is unreadable.",
-                    f"vasty release {orphan_id(lease.instance_id)} --yes",
+                    f"vasty release {orphan_id(lease.instance_id)}",
                 )
             if row is not None:
                 raise VastyError(
@@ -156,28 +157,10 @@ def summarize(
     )
 
 
-def _release_orphan(ctx: Context, snap: Snapshot, inst: Instance, yes: bool) -> ReleaseSummary:
-    ref = orphan_id(inst.id)
-    if not yes:
-        if not ctx.stdin_tty:
-            raise VastyError(
-                "confirmation_required",
-                f"{ref} is an instance vasty did not create.",
-                f"Pass --yes to destroy it: vasty release {ref} --yes.",
-            )
-        gpu = inst.gpu_name or "unknown GPU"
-        ctx.stderr.write(f"Destroy {ref} ({gpu}, ${money(inst.dph_total):.2f}/hr)? [y/N] ")
-        ctx.stderr.flush()
-        answer = ctx.stdin.readline().strip().lower()
-        if answer not in ("y", "yes"):
-            raise VastyError(
-                "confirmation_required",
-                f"Release of {ref} cancelled.",
-                f"Pass --yes to destroy it: vasty release {ref} --yes.",
-            )
+def _release_orphan(ctx: Context, snap: Snapshot, inst: Instance) -> ReleaseSummary:
     ctx.provider.destroy(inst.id)
     cost = views.lease_cost(inst.id, snap.charges)
-    return ReleaseSummary(lease=ref, name=None, uptime_s=None, cost=cost, jobs=[])
+    return ReleaseSummary(lease=orphan_id(inst.id), name=None, uptime_s=None, cost=cost, jobs=[])
 
 
 def _entry_data(summary: ReleaseSummary) -> dict[str, Any]:

@@ -74,7 +74,7 @@ def test_run_shell_joins_command(harness: Harness, box: int) -> None:
 
 
 def test_run_human_mode_streams_to_stdout(harness: Harness, box: int) -> None:
-    code, out, err = harness.run("run", "--on", "ft", "--plain", "--", "ls")
+    code, out, err = harness.run("run", "--on", "ft", "--", "ls", tty=True)
     assert code == 0
     assert out.startswith("started ls\n")
     assert "j-1 on l-0000a001 exited 0" in out
@@ -96,8 +96,9 @@ def test_run_detach_returns_job_immediately(harness: Harness, box: int) -> None:
     code, data, _ = run(harness, "--on", "ft", "--detach", "--", "python", "train.py")
     assert code == 0
     assert data == {
-        "lease": "l-0000a001", "job": "j-1", "log_path": "/workspace/.vasty/jobs/j-1/log",
-        "expires_at": "2026-10-29T01:50:00Z", "warnings": [], "swept": [],
+        "lease": "l-0000a001", "job": "j-1", "gpu": "RTX 3090", "price_per_hr": 0.22,
+        "log_path": "/workspace/.vasty/jobs/j-1/log", "expires_at": "2026-10-29T01:50:00Z",
+        "ttl_remaining_s": 3000, "warnings": [], "swept": [],
     }
     assert attached == []
     assert cached(harness, "l-0000a001").jobs[0].state == "running"
@@ -321,7 +322,7 @@ def test_os_error_before_job_keeps_existing_box(harness: Harness, box: int) -> N
 def test_auto_run_uses_run_ttl_and_releases(harness: Harness, reserve: FakeReserve) -> None:
     code, data, _ = run(harness, "--", "python", "train.py")
     assert code == 0
-    assert reserve.calls[0]["ttl"] == 7200 and reserve.calls[0]["wait"] is True
+    assert reserve.calls[0]["ttl"] == 7200
     assert data["lease"] == "l-0000b001"
     assert data["released"] is True
     assert harness.provider.destroyed == [1001]
@@ -363,9 +364,9 @@ def test_sigint_reports_release_refresh_sweep(harness: Harness, reserve: FakeRes
 def _expire_other_lease_during_wait(
     harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def wait(ctx: Any, args: Any, snap: Any, *, ttl: int, wait: bool = True) -> Any:
+    def wait(ctx: Any, args: Any, snap: Any, *, ttl: int) -> Any:
         add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
-        return reserve(ctx, args, snap, ttl=ttl, wait=wait)
+        return reserve(ctx, args, snap, ttl=ttl)
 
     monkeypatch.setattr("vasty.commands.reserve.reserve_lease", wait)
 
@@ -474,12 +475,6 @@ def test_auto_run_reuses_named_box(harness: Harness, reserve: FakeReserve, box: 
     assert code == 0
     assert data["lease"] == "l-0000a001" and data["released"] is False
     assert harness.provider.destroyed == []
-
-
-def test_auto_run_rejects_no_wait(harness: Harness, reserve: FakeReserve) -> None:
-    code, data, _ = run(harness, "--no-wait", "--", "ls")
-    assert code == 1 and data["error"] == "invalid_arguments"
-    assert reserve.calls == []
 
 
 def test_auto_run_reserve_failure_propagates(harness: Harness, reserve: FakeReserve) -> None:

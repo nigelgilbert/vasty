@@ -54,7 +54,7 @@ def orphan(harness: Harness, reachable: bool = True) -> int:
 
 def test_set_group_rewrites_label_and_keeps_clock(h: Harness) -> None:
     row = add_lease(h, label={"name": "ft", "expires": NOW + 600, "extra": {"note": "x"}})
-    code, data = run_json(h, "tag", "ft", "--set-group", "exp42")
+    code, data = run_json(h, "tag", "ft", "--group", "exp42")
     assert code == 0, data
     assert set(data) == {"results", "warnings", "swept"}
     (entry,) = data["results"]
@@ -71,43 +71,31 @@ def test_set_group_rewrites_label_and_keeps_clock(h: Harness) -> None:
 
 def test_empty_value_clears_name_and_group(h: Harness) -> None:
     row = add_lease(h, label={"name": "ft", "group": "exp42"})
-    code, data = run_json(h, "tag", "l-0000a001", "--set-name", "", "--set-group", "")
+    code, data = run_json(h, "tag", "l-0000a001", "--name", "", "--group", "")
     assert code == 0
     assert (data["results"][0]["name"], data["results"][0]["group"]) == (None, None)
     label = label_of(h, row.id)
     assert (label.name, label.group) == (None, None)
 
 
-def test_group_rename_across_members(h: Harness) -> None:
-    a = add_lease(h, "l-0000a001", label={"group": "old"})
-    b = add_lease(h, "l-0000a002", label={"group": "old"})
-    c = add_lease(h, "l-0000a003", label={"group": "old", "owner": "nick"})
-    code, data = run_json(h, "tag", "--group", "old", "--set-group", "new")
-    assert code == 0
-    assert [r["lease"] for r in data["results"]] == ["l-0000a001", "l-0000a002"]
-    assert label_of(h, a.id).group == "new"
-    assert label_of(h, b.id).group == "new"
-    assert label_of(h, c.id).group == "old"
-
-
 def test_set_owner(h: Harness) -> None:
     row = add_lease(h, label={"name": "ft"})
-    code, data = run_json(h, "tag", "ft", "--set-owner", "agent-7")
+    code, data = run_json(h, "tag", "ft", "--owner", "agent-7")
     assert code == 0
     assert data["results"][0]["owner"] == "agent-7"
     assert label_of(h, row.id).owner == "agent-7"
 
 
-def test_set_name_on_bulk_target_is_invalid(h: Harness) -> None:
+def test_tag_without_lease_is_invalid(h: Harness) -> None:
     add_lease(h, label={"group": "exp"})
-    code, data = run_json(h, "tag", "--group", "exp", "--set-name", "ft")
+    code, data = run_json(h, "tag", "--group", "exp")
     assert (code, data["error"]) == (1, "invalid_arguments")
 
 
 def test_set_name_conflict(h: Harness) -> None:
     add_lease(h, "l-0000a001", label={"name": "ft"})
     row = add_lease(h, "l-0000a002")
-    code, data = run_json(h, "tag", "l-0000a002", "--set-name", "ft")
+    code, data = run_json(h, "tag", "l-0000a002", "--name", "ft")
     assert (code, data["error"]) == (1, "name_conflict")
     assert label_of(h, row.id).name is None
 
@@ -115,46 +103,30 @@ def test_set_name_conflict(h: Harness) -> None:
 def test_same_name_other_owner_is_fine(h: Harness) -> None:
     add_lease(h, "l-0000a001", label={"name": "ft", "owner": "nick"})
     add_lease(h, "l-0000a002")
-    code, _ = run_json(h, "tag", "l-0000a002", "--set-name", "ft")
+    code, _ = run_json(h, "tag", "l-0000a002", "--name", "ft")
     assert code == 0
 
 
 def test_set_owner_checks_new_owners_names(h: Harness) -> None:
     add_lease(h, "l-0000a001", label={"name": "ft", "owner": "nick"})
     row = add_lease(h, "l-0000a002", label={"name": "ft"})
-    code, data = run_json(h, "tag", "l-0000a002", "--set-owner", "nick")
+    code, data = run_json(h, "tag", "l-0000a002", "--owner", "nick")
     assert (code, data["error"]) == (1, "name_conflict")
     assert label_of(h, row.id).owner == "claude"
-
-
-def test_bulk_set_owner_conflict_writes_nothing(h: Harness) -> None:
-    a = add_lease(h, "l-0000a001", label={"name": "ft", "group": "g"})
-    add_lease(h, "l-0000a002", label={"name": "ft", "owner": "nick"})
-    code, data = run_json(h, "tag", "--group", "g", "--set-owner", "nick")
-    assert (code, data["error"]) == (1, "name_conflict")
-    assert label_of(h, a.id).owner == "claude"
 
 
 def test_unchanged_shared_name_is_not_a_conflict(h: Harness) -> None:
     a = add_lease(h, "l-0000a001", label={"name": "ft"})
     add_lease(h, "l-0000a002", label={"name": "ft"})
-    code, data = run_json(h, "tag", "l-0000a001", "--set-group", "g")
+    code, data = run_json(h, "tag", "l-0000a001", "--group", "g")
     assert code == 0, data
     assert label_of(h, a.id).group == "g"
-
-
-def test_bulk_group_change_keeps_shared_names(h: Harness) -> None:
-    a = add_lease(h, "l-0000a001", label={"name": "ft", "group": "old"})
-    b = add_lease(h, "l-0000a002", label={"name": "ft", "group": "old"})
-    code, data = run_json(h, "tag", "--group", "old", "--set-group", "new")
-    assert code == 0, data
-    assert (label_of(h, a.id).group, label_of(h, b.id).group) == ("new", "new")
 
 
 def test_rename_onto_an_unchanged_lease_name_conflicts(h: Harness) -> None:
     add_lease(h, "l-0000a001", label={"name": "ft", "group": "g"})
     row = add_lease(h, "l-0000a002", label={"name": "other", "group": "g"})
-    code, data = run_json(h, "tag", "l-0000a002", "--set-name", "ft")
+    code, data = run_json(h, "tag", "l-0000a002", "--name", "ft")
     assert (code, data["error"]) == (1, "name_conflict")
     assert label_of(h, row.id).name == "other"
 
@@ -166,13 +138,12 @@ def padded_label(length: int, lease: str, **label: Any) -> dict[str, Any]:
 
 
 def test_label_over_limit_is_invalid_and_writes_nothing(h: Harness) -> None:
-    a = add_lease(h, "l-0000a001", label=padded_label(1000, "l-0000a001", group="g1"))
-    b = add_lease(h, "l-0000a002", label=padded_label(1023, "l-0000a002", group="g1"))
-    assert len(h.provider.instances[b.id].label or "") == 1023
-    code, data = run_json(h, "tag", "--group", "g1", "--set-group", "g12345")
+    row = add_lease(h, "l-0000a001", label=padded_label(1023, "l-0000a001", group="g1"))
+    assert len(h.provider.instances[row.id].label or "") == 1023
+    code, data = run_json(h, "tag", "l-0000a001", "--group", "g12345")
     assert (code, data["error"]) == (1, "invalid_arguments")
     assert [c for c in h.provider.calls if c[0] == "set_label"] == []
-    assert (label_of(h, a.id).group, label_of(h, b.id).group) == ("g1", "g1")
+    assert label_of(h, row.id).group == "g1"
 
 
 def test_ttl_on_lease_points_at_extend(h: Harness) -> None:
@@ -190,20 +161,20 @@ def test_no_setter_and_no_ttl_is_invalid(h: Harness) -> None:
 
 def test_empty_owner_is_invalid(h: Harness) -> None:
     add_lease(h)
-    code, data = run_json(h, "tag", "l-0000a001", "--set-owner", "")
+    code, data = run_json(h, "tag", "l-0000a001", "--owner", "")
     assert (code, data["error"]) == (1, "invalid_arguments")
 
 
 def test_history_lease_is_expired(h: Harness) -> None:
     add_lease(h, label={"name": "ft", "expires": NOW - 5})
-    code, data = run_json(h, "tag", "ft", "--set-group", "g")
+    code, data = run_json(h, "tag", "ft", "--group", "g")
     assert (code, data["error"]) == (1, "lease_expired")
 
 
 def test_label_write_failure_is_provider_error(h: Harness) -> None:
     add_lease(h)
     h.provider.fail["set_label"] = VastyError("provider_error", "boom", "Run vasty status.")
-    code, data = run_json(h, "tag", "l-0000a001", "--set-group", "g")
+    code, data = run_json(h, "tag", "l-0000a001", "--group", "g")
     assert (code, data["error"]) == (2, "provider_error")
 
 
@@ -264,7 +235,7 @@ def test_adopt_with_a_failed_spawn_warns_and_succeeds(h: Harness) -> None:
 
 def test_set_group_spawns_nothing(h: Harness) -> None:
     add_lease(h, label={"name": "ft", "expires": NOW + 600})
-    code, _ = run_json(h, "tag", "ft", "--set-group", "exp42")
+    code, _ = run_json(h, "tag", "ft", "--group", "exp42")
     assert code == 0
     assert h.spawned == []
 
@@ -283,8 +254,8 @@ def test_adopt_writes_the_clock_in_box_time(h: Harness) -> None:
 
 def test_adopt_orphan_with_setters(h: Harness) -> None:
     iid = orphan(h)
-    code, _data = run_json(h, "tag", "i-55120", "--ttl", "1h", "--set-owner", "nick",
-                          "--set-name", "found", "--set-group", "g")
+    code, _data = run_json(h, "tag", "i-55120", "--ttl", "1h", "--owner", "nick",
+                          "--name", "found", "--group", "g")
     assert code == 0
     label = label_of(h, iid)
     assert (label.owner, label.name, label.group, label.ttl) == ("nick", "found", "g", 3600)
@@ -300,7 +271,7 @@ def test_adopted_lease_shows_in_status(h: Harness) -> None:
 
 def test_orphan_without_ttl_is_invalid(h: Harness) -> None:
     orphan(h)
-    code, data = run_json(h, "tag", "i-55120", "--set-group", "g")
+    code, data = run_json(h, "tag", "i-55120", "--group", "g")
     assert (code, data["error"]) == (1, "invalid_arguments")
     assert h.provider.instances[55120].label is None
 
@@ -387,7 +358,7 @@ def test_adopt_reads_no_billing(h: Harness) -> None:
 def test_adopt_name_conflict(h: Harness) -> None:
     add_lease(h, "l-0000a001", label={"name": "ft"})
     orphan(h)
-    code, data = run_json(h, "tag", "i-55120", "--ttl", "30m", "--set-name", "ft")
+    code, data = run_json(h, "tag", "i-55120", "--ttl", "30m", "--name", "ft")
     assert (code, data["error"]) == (1, "name_conflict")
     assert h.provider.instances[55120].label is None
 

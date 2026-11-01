@@ -387,8 +387,11 @@ class TagResult:
 class RunDetachedResult:
     lease: str
     job: str
+    gpu: str | None
+    price_per_hr: Decimal
     log_path: str
     expires_at: str | None
+    ttl_remaining_s: int | None
     warnings: list[WarningItem]
     swept: list[SweptEntry]
 

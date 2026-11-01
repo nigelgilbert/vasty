@@ -1,9 +1,9 @@
-"""`vasty tag`.
+"""`vasty tag LEASE`.
 
-On a lease, `tag` rewrites `name`, `group` and `owner` in the label and keeps
-unknown fields and the clock. Before the first write, `tag` checks every
-target whose name or owner changes for name conflicts and formats every new
-label. On an orphan, `tag` writes a new `vasty:` label with `expires = now + ttl`
+`tag` acts on one lease per call. On a lease, `tag` rewrites `name`, `group`
+and `owner` in the label and keeps unknown fields and the clock. Before the
+write, `tag` checks a changed name or owner for name conflicts and formats
+the new label. On an orphan, `tag` writes a new `vasty:` label with `expires = now + ttl`
 and `miss` listing every guard layer, then attaches the SSH key, runs the
 adoption script over SSH and starts a detached `vasty sweep --follow`. The label stays when a later step fails; the lease
 then carries a `guard_partial` warning and later networked commands retry the
@@ -42,11 +42,11 @@ class Setters:
 
 
 def parse_setters(args: argparse.Namespace) -> Setters:
-    """Read and validate `--set-name`, `--set-group` and `--set-owner`."""
+    """Read and validate `--name`, `--group` and `--owner`."""
     setters = Setters(
-        name=getattr(args, "set_name", None),
-        group=getattr(args, "set_group", None),
-        owner=getattr(args, "set_owner", None),
+        name=getattr(args, "name", None),
+        group=getattr(args, "group", None),
+        owner=getattr(args, "owner", None),
     )
     if setters.name:
         ids.validate_value("name", setters.name)
@@ -54,7 +54,7 @@ def parse_setters(args: argparse.Namespace) -> Setters:
         ids.validate_value("group", setters.group)
     if setters.owner is not None:
         if setters.owner == "":
-            raise invalid("--set-owner cannot be empty.", "Pass --set-owner NAME.")
+            raise invalid("--owner cannot be empty.", "Pass --owner NAME.")
         ids.validate_value("owner", setters.owner)
     return setters
 
@@ -75,7 +75,7 @@ def _name_conflict(name: str, owner: str, holder: str) -> VastyError:
     return VastyError(
         "name_conflict",
         f"Name {name!r} is already used by {holder} for owner {owner}.",
-        f"Pick another name, or vasty tag {holder} --set-name NEW.",
+        f"Pick another name, or vasty tag {holder} --name NEW.",
         details={"lease": holder},
     )
 
@@ -104,24 +104,23 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     ttl = parse_duration(ttl_text) if ttl_text is not None else None
     if not setters.any() and ttl is None:
         raise invalid(
-            "tag needs --set-name, --set-group, --set-owner or --ttl.",
-            "vasty tag LEASE --set-group G",
+            "tag needs --name, --group, --owner or --ttl.",
+            "vasty tag LEASE --group G",
         )
-    if setters.name is not None and getattr(args, "target", None) is None:
-        raise invalid("--set-name needs a single LEASE.", "vasty tag LEASE --set-name NAME")
 
-    from vasty.targeting import resolve_target
+    from vasty.targeting import resolve_lease
 
     snap = engine.refresh(ctx)
-    resolved = resolve_target(ctx, snap, args, write=True)
+    found = resolve_lease(ctx, snap, args.target)
     not_spawned = None
-    if resolved.orphans:
-        results = [adopt(ctx, snap, resolved.orphans[0], setters, ttl)]
-        not_spawned = spawn_follow(ctx, results[0].lease)
+    if isinstance(found, Instance):
+        lease = adopt(ctx, snap, found, setters, ttl)
+        not_spawned = spawn_follow(ctx, lease.lease)
     else:
         if ttl is not None:
             raise invalid("--ttl applies to orphans only.", "vasty extend LEASE --by 30m")
-        results = update(ctx, snap, resolved.leases, setters)
+        lease = update(ctx, snap, found, setters)
+    results = [lease]
     warnings = (
         views.warnings_for(results, snap.now, ctx.settings.warn_before_expiry)
         + list(snap.warnings)
@@ -137,49 +136,39 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
             f"expires {format_duration(e.ttl_remaining_s or 0)}"
             for e in entries
         ]
-        human = "\n".join(lines) if lines else "no leases matched"
+        human = "\n".join(lines)
     return Outcome(result, human=human)
 
 
 def update(
-    ctx: Context, snap: engine.Snapshot, leases: list[CachedLease], setters: Setters
-) -> list[CachedLease]:
-    """Rewrite each lease's label with the setters. Leave the clock alone."""
-    for lease in leases:
-        if lease.state in HISTORY_STATES:
-            raise VastyError(
-                "lease_expired", f"Lease {lease.lease} is {lease.state}.",
-                "Run vasty status to list active leases.",
-            )
-    planned = {lease.lease: relabel(lease.label, setters) for lease in leases}
-    current = {lease.lease: lease.label for lease in leases}
-    check_names(snap, {
-        lease_id: label for lease_id, label in planned.items()
-        if (label.name, label.owner) != (current[lease_id].name, current[lease_id].owner)
-    })
-    for label in planned.values():
-        labels.format_label(label)
-    written: list[str] = []
-    for lease in leases:
-        label = planned[lease.lease]
-        try:
-            ok = engine.write_label(ctx, lease.instance_id, lease.label.expires, label)
-        except VastyError as err:
-            raise _write_failed(lease, written, err.message) from err
-        if not ok:
-            raise _write_failed(lease, written, "the label changed since vasty read it.")
-        lease.label = label
-        engine.store_lease(ctx, lease)
-        written.append(lease.lease)
-    return leases
+    ctx: Context, snap: engine.Snapshot, lease: CachedLease, setters: Setters
+) -> CachedLease:
+    """Rewrite the lease's label with the setters. Leave the clock alone."""
+    if lease.state in HISTORY_STATES:
+        raise VastyError(
+            "lease_expired", f"Lease {lease.lease} is {lease.state}.",
+            "Run vasty status to list active leases.",
+        )
+    label = relabel(lease.label, setters)
+    if (label.name, label.owner) != (lease.label.name, lease.label.owner):
+        check_names(snap, {lease.lease: label})
+    labels.format_label(label)
+    try:
+        ok = engine.write_label(ctx, lease.instance_id, lease.label.expires, label)
+    except VastyError as err:
+        raise _write_failed(lease, err.message) from err
+    if not ok:
+        raise _write_failed(lease, "the label changed since vasty read it.")
+    lease.label = label
+    engine.store_lease(ctx, lease)
+    return lease
 
 
-def _write_failed(lease: CachedLease, written: list[str], why: str) -> VastyError:
+def _write_failed(lease: CachedLease, why: str) -> VastyError:
     return VastyError(
         "provider_error",
         f"Label write for {lease.lease} failed: {why}",
         f"Run vasty status {lease.lease}, then tag again.",
-        details={"written": list(written), "failed": lease.lease},
     )
 
 
