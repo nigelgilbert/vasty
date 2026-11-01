@@ -10,12 +10,16 @@ waits for the lease to leave `pending` by refreshing every `WAIT_POLL_S`
 seconds.
 
 A refresh error during the wait writes one stderr line and the wait goes on.
-The wait gives up at the lease's effective expiry with `box_unreachable`.
+The wait writes one stderr line at each milestone: created, Vast `running`,
+SSH answering and startup done. The wait gives up at the lease's effective
+expiry with `box_unreachable`.
 Once SSH answers, every required port has `PORT_GRACE_S` seconds to show a
 mapping before `port_mapping_missing`; on a direct offer the required ports
 are every requested port, and a proxy offer has none. A box this call created
 and then gave up on is destroyed before the error propagates. Every error
 raised after create carries `lease` and `destroyed` in its details.
+`destroyed` is true when Vast accepted a destroy for the box or no longer
+lists it.
 """
 
 from __future__ import annotations
@@ -142,6 +146,9 @@ def reserve_lease(
             required = ports if request.runtype == "ssh_direct" else []
     lease = hit
     reused = not created
+    if created:
+        _say(ctx, lease, f"created on instance {lease.instance_id}, {lease.gpu or '?'} at "
+             f"${lease.price_per_hr}/hr")
     not_spawned = spawn_follow(ctx, lease.lease)
 
     if lease.state == "pending":
@@ -468,6 +475,35 @@ def _name_lease(err: VastyError, lease: CachedLease, destroyed: bool) -> VastyEr
     return err
 
 
+def _box_gone(lease: CachedLease | None) -> bool:
+    """Return True when an ended lease's row left the listing or Vast accepted its destroy."""
+    if lease is None:
+        return False
+    return not lease.destroy_pending or lease.last_provider_error is None
+
+
+def _say(ctx: Context, lease: CachedLease, what: str) -> None:
+    ctx.warn(f"vasty: {lease.lease} {what}")
+
+
+_MILESTONES = (
+    ("running", "running on Vast; waiting for SSH"),
+    ("reachable", "answers SSH; waiting for startup"),
+    ("ready", "startup done"),
+)
+
+
+def _milestones(lease: CachedLease) -> set[str]:
+    reached = set()
+    if lease.running_at is not None:
+        reached.add("running")
+    if lease.reachable_at is not None:
+        reached.add("reachable")
+    if lease.state != "pending":
+        reached.add("ready")
+    return reached
+
+
 def _not_ready(lease: CachedLease) -> VastyError:
     return VastyError(
         "box_unreachable",
@@ -485,10 +521,12 @@ def wait_ready(
     warnings. Raise `box_unreachable`, `image_unsupported` or
     `port_mapping_missing`. A refresh error writes one stderr line and the
     wait goes on until the lease's effective expiry. Ctrl-C during the wait
-    destroys a box this call created and re-raises.
+    destroys a box this call created and re-raises. Each milestone writes one
+    stderr line when a refresh first shows it.
     """
     swept: list[SweptEntry] = []
     ready_at: int | None = None
+    said: set[str] = set()
     while True:
         try:
             snap = engine.refresh(ctx)
@@ -508,8 +546,13 @@ def wait_ready(
                 "box_unreachable",
                 f"Lease {lease.lease} ended before it became ready.",
                 f"Run vasty status {lease.lease}, then vasty reserve again.",
-            ), lease, False)
+            ), lease, _box_gone(fresh))
         lease = fresh
+        reached = _milestones(lease)
+        for key, what in _MILESTONES:
+            if key in reached and key not in said:
+                _say(ctx, lease, what)
+        said |= reached
         if lease.unsupported:
             missing = ", ".join(lease.unsupported)
             raise _give_up(ctx, lease, created, VastyError(

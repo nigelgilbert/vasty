@@ -57,8 +57,14 @@ def test_serve_on_box(harness: Harness, box: int, started: list[tuple[Job, str]]
     assert data == {
         "lease": "l-0000a001", "job": "j-1", "model": QWEN,
         "url": "http://198.51.100.9:40080/v1", "api_key": KEY,
-        "expires_at": "2026-10-29T01:50:00Z", "warnings": [], "swept": [],
+        "gpu": "RTX 3090", "price_per_hr": 0.22,
+        "expires_at": "2026-10-29T01:50:00Z", "ttl_remaining_s": 3000,
+        "warnings": [], "swept": [],
     }
+    assert list(data) == [
+        "lease", "job", "model", "url", "api_key", "gpu", "price_per_hr",
+        "expires_at", "ttl_remaining_s", "warnings", "swept",
+    ]
     assert harness.box.state(box).execs == ["command -v vllm"]
     job, command = started[0]
     assert (job.kind, job.port, job.state) == ("serve", 8000, "serving")
@@ -255,6 +261,7 @@ def test_serve_warnings_use_the_clock_after_bring_up(harness: Harness, box: int)
     code, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
     assert code == 0
     assert [w["code"] for w in data["warnings"]] == ["expiring_with_running_job"]
+    assert data["ttl_remaining_s"] == 200
 
 
 def test_serve_on_unknown_model_serves_path(

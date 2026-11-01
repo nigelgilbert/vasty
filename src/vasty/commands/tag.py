@@ -234,7 +234,9 @@ def _guard_steps(ctx: Context, lease: CachedLease) -> None:
         try:
             ctx.provider.attach_ssh_key(key, lease.instance_id)
         except VastyError as err:
-            ctx.warn(f"vasty: could not attach the SSH key to {lease.lease}: {err.message}")
+            # Skip the line when Vast reports the key already attached.
+            if "already associated" not in err.message:
+                ctx.warn(f"vasty: could not attach the SSH key to {lease.lease}: {err.message}")
     missing = ctx.box.adopt(
         engine.ssh_target(lease), effective_expiry(lease.label), engine.provider_now(ctx)
     )

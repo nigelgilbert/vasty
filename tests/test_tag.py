@@ -330,6 +330,25 @@ def test_failed_key_attach_is_retried_and_adoption_finishes(h: Harness) -> None:
     assert label_of(h, iid).miss == []
 
 
+def test_key_already_attached_writes_no_stderr_line(h: Harness) -> None:
+    add_key(h)
+    orphan(h)
+    h.provider.fail["attach_ssh_key"] = VastyError(
+        "provider_error", "SSH key already associated with instance.", "Run vasty status.")
+    code, out, err = h.run("tag", "i-55120", "--ttl", "30m")
+    assert code == 0, out
+    assert "could not attach" not in err
+    assert json.loads(out)["warnings"] == []
+
+
+def test_failed_key_attach_writes_a_stderr_line(h: Harness) -> None:
+    add_key(h)
+    orphan(h)
+    h.provider.fail["attach_ssh_key"] = VastyError("provider_error", "boom", "Run vasty status.")
+    _, _, err = h.run("tag", "i-55120", "--ttl", "30m")
+    assert "could not attach the SSH key to l-abababab: boom" in err
+
+
 def test_adoption_retry_survives_cache_loss(h: Harness) -> None:
     iid = orphan(h, reachable=False)
     run_json(h, "tag", "i-55120", "--ttl", "30m")

@@ -62,6 +62,31 @@ def test_removed_flags_are_invalid(argv: list[str]) -> None:
     assert exc.value.code == "invalid_arguments"
 
 
+@pytest.mark.parametrize(
+    ("argv", "hint"),
+    [
+        (["status", "--no-wait", "--plain"],
+         "--no-wait was removed: drop it. --plain was removed: drop it."),
+        (["status", "--everyone", "--cached"],
+         "--everyone was removed: use plain vasty status. --cached was removed: drop it."),
+        (["extend", "l-1", "--until", "19:44"], "--until was removed: use --by or --to."),
+        (["release", "--all", "--yes"],
+         "--all was removed: use --owner O. --yes was removed: drop it."),
+        (["release", "l-1", "--yes=1"], "--yes was removed: drop it."),
+    ],
+)
+def test_removed_flags_name_their_replacement(argv: list[str], hint: str) -> None:
+    with pytest.raises(VastyError) as exc:
+        parse(argv)
+    assert exc.value.hint == hint
+
+
+def test_unknown_flag_keeps_the_help_hint() -> None:
+    with pytest.raises(VastyError) as exc:
+        parse(["reserve", "--bogus"])
+    assert exc.value.hint == "Run vasty --help."
+
+
 def test_tag_needs_a_lease() -> None:
     with pytest.raises(VastyError) as exc:
         parse(["tag", "--group", "g"])

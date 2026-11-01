@@ -595,7 +595,9 @@ def read_user(harness: Harness) -> dict[str, Any]:
 def test_config_set_writes_user_file(harness: Harness) -> None:
     code, out, _ = harness.run("config", "set", "defaults.ttl", "45m")
     assert code == 0
-    assert json.loads(out) == {"key": "defaults.ttl", "value": "45m"}
+    assert json.loads(out) == {
+        "key": "defaults.ttl", "value": "45m", "path": str(user_config_path(harness.home)),
+    }
     assert read_user(harness) == {"defaults": {"ttl": "45m"}}
 
 

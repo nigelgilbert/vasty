@@ -49,11 +49,34 @@ class Outcome:
     emit: bool = True
 
 
+# Replacements for removed flags, shown in the hint when argparse rejects one.
+REMOVED_FLAGS = {
+    "--no-wait": "drop it",
+    "--plain": "drop it",
+    "--cached": "drop it",
+    "--yes": "drop it",
+    "--everyone": "use plain vasty status",
+    "--until": "use --by or --to",
+    "--all": "use --owner O",
+}
+
+
+def removed_flag_hint(message: str) -> str | None:
+    """Return the hint for removed flags named in an `unrecognized arguments:` message."""
+    prefix = "unrecognized arguments:"
+    if not message.startswith(prefix):
+        return None
+    flags = [token.split("=", 1)[0] for token in message[len(prefix):].split()]
+    hits = [f"{flag} was removed: {REMOVED_FLAGS[flag]}." for flag in flags
+            if flag in REMOVED_FLAGS]
+    return " ".join(hits) or None
+
+
 class Parser(argparse.ArgumentParser):
     """Raise `invalid_arguments` in place of printing usage and exiting."""
 
     def error(self, message: str) -> NoReturn:
-        raise invalid(message, f"Run {self.prog} --help.")
+        raise invalid(message, removed_flag_hint(message) or f"Run {self.prog} --help.")
 
 
 class _Version(argparse.Action):

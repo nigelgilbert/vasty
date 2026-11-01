@@ -226,11 +226,21 @@ def _attach(
         finished = _box_finished(ctx, target, job.id) or now
         save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, finished))
     released, swept = _released_swept(ctx, lease, release_on_exit, swept)
+    expires_at, ttl_remaining_s = _clock(ctx, lease, released)
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=code, duration_s=max(0, finished - started_at),
-        released=released, warnings=warnings, swept=swept,
+        released=released, expires_at=expires_at, ttl_remaining_s=ttl_remaining_s,
+        warnings=warnings, swept=swept,
     )
     return Outcome(result, exit_code=code, human=_human(result))
+
+
+def _clock(ctx: Context, lease: CachedLease, released: bool) -> tuple[str | None, int | None]:
+    """Return the lease's `expires_at` and `ttl_remaining_s`, or None for both when the box was released."""
+    if released:
+        return None, None
+    expiry = effective_expiry(lease.label)
+    return iso(expiry), max(0, expiry - ctx.clock.now())
 
 
 def _box_finished(ctx: Context, target: SshTarget, job_id: str) -> int | None:
@@ -289,8 +299,10 @@ def _lost(
     if error == "box_unreachable":
         _warn_quietly(ctx, f"vasty: lost the connection to {lease.lease}; the box stays up. "
                            f"Check it with vasty status {lease.lease}.")
+    expires_at, ttl_remaining_s = _clock(ctx, lease, False)
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=None, duration_s=duration, released=False,
+        expires_at=expires_at, ttl_remaining_s=ttl_remaining_s,
         warnings=warnings, swept=swept, error=error,
     )
     return Outcome(result, exit_code=LOST_EXIT, human=_human(result))
@@ -319,9 +331,11 @@ def _interrupted(
             end = status.finished_at or end
             save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, end))
     released, swept = _released_swept(ctx, lease, release_on_exit, swept)
+    expires_at, ttl_remaining_s = _clock(ctx, lease, released)
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=exit_code, duration_s=max(0, end - started_at),
-        released=released, warnings=warnings, swept=swept,
+        released=released, expires_at=expires_at, ttl_remaining_s=ttl_remaining_s,
+        warnings=warnings, swept=swept,
     )
     return Outcome(result, exit_code=INTERRUPT_EXIT, human=_human(result))
 

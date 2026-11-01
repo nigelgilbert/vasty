@@ -82,11 +82,14 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         ))
 
     active = snap.active()
+    live = snap.live_instances()
+    mine = {lease.instance_id for lease in active if lease.label.owner == settings.owner}
     totals = Totals(
         balance=snap.balance.balance if snap.balance is not None else None,
         credit=snap.balance.credit if snap.balance is not None else None,
         charges_today=snap.charges.today if snap.charges is not None else None,
-        burn_per_hr=views.burn_per_hr(snap.live_instances()),
+        burn_per_hr=views.burn_per_hr(live),
+        burn_per_hr_mine=views.burn_per_hr(inst for inst in live if inst.id in mine),
         live=len(active),
         live_mine=sum(1 for lease in active if lease.label.owner == settings.owner),
     )
@@ -286,7 +289,7 @@ def today_line(totals: Totals) -> str:
         f"TODAY  charged {_dollars(totals.charges_today)}  ·  "
         f"credit {_dollars(totals.credit)}  ·  balance {_dollars(totals.balance)}  ·  "
         f"{totals.live} {noun} live ({totals.live_mine} yours)  ·  "
-        f"burning ${money(totals.burn_per_hr):.2f}/hr"
+        f"burning ${money(totals.burn_per_hr):.2f}/hr (${money(totals.burn_per_hr_mine):.2f} yours)"
     )
 
 

@@ -171,13 +171,17 @@ def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Pl
     started = ctx.box.start_job(target, job, command)
     save_lease(ctx, lease, lambda record: put_job(record, started))
     _wait_ready(ctx, target, lease, started.id, url, key, plan)
+    expiry = effective_expiry(lease.label)
     return ServeResult(
         lease=lease.lease,
         job=started.id,
         model=plan.model,
         url=url,
         api_key=key,
-        expires_at=iso(effective_expiry(lease.label)),
+        gpu=lease.gpu,
+        price_per_hr=lease.price_per_hr,
+        expires_at=iso(expiry),
+        ttl_remaining_s=max(0, expiry - ctx.clock.now()),
         warnings=[],
         swept=[],
     )

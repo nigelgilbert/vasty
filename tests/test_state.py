@@ -181,6 +181,26 @@ def test_box_unreachable_never_answered() -> None:
     assert w.message == "no answer"
 
 
+def test_pending_box_without_ssh_after_running_is_unreachable() -> None:
+    item = lease("pending", label=label(), running_at=NOW - 420)
+    [w] = lease_warnings(item, NOW)
+    assert (w.code, w.message, w.fix) == (
+        "box_unreachable", "no SSH answer for 7m since Vast reported running", "vasty release l-8b12"
+    )
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"running_at": NOW - 299},
+        {"running_at": None},
+        {"running_at": NOW - 900, "reachable_at": NOW - 600},
+    ],
+)
+def test_pending_box_inside_ssh_wait_or_answered_has_no_warning(kw: dict[str, Any]) -> None:
+    assert lease_warnings(lease("pending", label=label(), **kw), NOW) == []
+
+
 def test_unreachable_lease_gets_no_expiring_soon() -> None:
     item = lease("unreachable", label=label(expires=NOW + 60), reachable_at=NOW - 60)
     assert codes(lease_warnings(item, NOW)) == ["box_unreachable"]

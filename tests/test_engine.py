@@ -112,6 +112,45 @@ def test_sweep_failed_destroy_reports_error(harness: Harness) -> None:
     assert (lease.state, lease.destroy_pending, lease.history_since) == ("expired", False, NOW + 6)
 
 
+@pytest.mark.parametrize("by", ["sweep", "follower"])
+def test_sweep_records_who_destroyed_and_when(harness: Harness, by: Any) -> None:
+    add_lease(harness, label={"expires": NOW - 10})
+    lease = engine.refresh(harness.context(), probe=False, by=by).leases["l-0000a001"]
+    assert (lease.destroyed_by, lease.destroyed_at) == (by, NOW)
+    harness.time.advance(5)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert (lease.state, lease.destroyed_by, lease.destroyed_at) == ("expired", by, NOW)
+
+
+def test_failed_sweep_destroy_records_the_accepted_retry(harness: Harness) -> None:
+    add_lease(harness, label={"expires": NOW - 10})
+    harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
+    lease = refresh(harness).leases["l-0000a001"]
+    assert (lease.destroyed_by, lease.destroyed_at) == (None, None)
+    harness.time.advance(5)
+    lease = engine.refresh(harness.context(), by="follower").leases["l-0000a001"]
+    assert (lease.destroyed_by, lease.destroyed_at) == ("follower", NOW + 5)
+
+
+def test_expired_row_gone_without_a_sweep_records_no_destroyer(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": NOW + 10})
+    refresh(harness)
+    del harness.provider.instances[row.id]
+    harness.time.advance(20)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert (lease.state, lease.destroyed_by, lease.destroyed_at) == ("expired", None, None)
+
+
+def test_swept_lease_extended_elsewhere_drops_the_destroy_record(harness: Harness) -> None:
+    harness.provider.keep_rows = True
+    row = add_lease(harness, label={"expires": NOW - 10})
+    refresh(harness)
+    harness.provider.instances[row.id].label = lease_label(expires=NOW + 1800)
+    harness.time.advance(5)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert (lease.state, lease.destroyed_by, lease.destroyed_at) == ("running", None, None)
+
+
 # Destroy lifecycle.
 
 

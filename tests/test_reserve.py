@@ -1049,7 +1049,7 @@ def _sleep_error(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     (_port_missing, "port_mapping_missing", True),
     (_never_ready, "box_unreachable", True),
     (_refresh_always_fails, "box_unreachable", True),
-    (_ended_before_ready, "box_unreachable", False),
+    (_ended_before_ready, "box_unreachable", True),
     (_sleep_error, "provider_error", True),
 ])
 def test_every_error_after_create_names_lease_and_destroyed(
@@ -1061,3 +1061,50 @@ def test_every_error_after_create_names_lease_and_destroyed(
     assert data["error"] == error
     assert data["details"]["lease"] == "l-abababab"
     assert data["details"]["destroyed"] is destroyed
+
+
+def test_wait_writes_each_milestone_once(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    h.provider.start_status = "loading"
+    real_sleep = h.time.sleep
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        real_sleep(seconds)
+        if len(sleeps) == 2:
+            for inst in h.provider.instances.values():
+                inst.actual_status = "running"
+
+    monkeypatch.setattr(h.time, "sleep", sleep)
+    code, _out, err = h.run("reserve", "--json")
+    assert code == 0
+    prefix = "vasty: l-abababab "
+    said = [line.removeprefix(prefix) for line in err.splitlines() if line.startswith(prefix)]
+    assert said[0].startswith("created on instance ")
+    assert said[1:] == [
+        "running on Vast; waiting for SSH",
+        "answers SSH; waiting for startup",
+        "startup done",
+    ]
+
+
+@pytest.mark.parametrize(("fail", "destroyed"), [(False, True), (True, False)])
+def test_lease_swept_by_the_follower_during_wait_reports_destroyed(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, fail: bool, destroyed: bool
+) -> None:
+    h.provider.start_status = "loading"
+    h.provider.keep_rows = fail
+    real_sleep = h.time.sleep
+
+    def sleep(seconds: float) -> None:
+        real_sleep(7)
+        if h.time.wall_now > NOW + 120 and not h.provider.destroyed:
+            if fail:
+                h.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
+            engine.refresh(h.context(), probe=False, by="follower")
+
+    monkeypatch.setattr(h.time, "sleep", sleep)
+    code, data = run_json(h, "reserve", "--ttl", "2m")
+    assert code == 2
+    assert data["message"] == "Lease l-abababab ended before it became ready."
+    assert data["details"] == {"lease": "l-abababab", "destroyed": destroyed}

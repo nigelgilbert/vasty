@@ -30,6 +30,8 @@ CLOCK_SKEW_WARN_S = 120
 """Box clock skew past this many seconds raises `clock_skew`."""
 EXPIRY_WARN_S = 5 * 60
 """A running lease with this many seconds or fewer left raises an `expiring_*` warning."""
+SSH_WAIT_WARN_S = 5 * 60
+"""A pending lease with no SSH answer this long after Vast reports `running` raises `box_unreachable`."""
 LIVE_JOB_STATES: frozenset[str] = frozenset({"running", "serving"})
 
 _PENDING_STATUSES = frozenset({"created", "loading"})
@@ -237,6 +239,9 @@ def lease_warnings(lease: CachedLease, now: int) -> list[WarningItem]:
     Codes: `expiring_soon` or `expiring_with_running_job`, `box_unreachable`,
     `guard_partial`, `clock_skew`, `clock_skew_unknown` and `startup_failed`
     on active leases.
+    `box_unreachable` fires on an `unreachable` lease with a `status` fix, and
+    on a `pending` lease that has not answered SSH within `SSH_WAIT_WARN_S` of
+    Vast reporting `running`, with a `release` fix.
     `guard_partial` needs observed layers: a probe answered (`reachable_at`),
     another machine's probe wrote `miss=` to the label, or `tag` adopted the
     box without a guard. `clock_skew` fires when the last probe measured the
@@ -263,6 +268,16 @@ def lease_warnings(lease: CachedLease, now: int) -> list[WarningItem]:
         else:
             message = f"no answer for {format_duration(now - lease.reachable_at)}"
         out.append(make_warning("box_unreachable", target, message))
+    if (
+        lease.state == "pending"
+        and lease.reachable_at is None
+        and lease.running_at is not None
+        and now - lease.running_at >= SSH_WAIT_WARN_S
+    ):
+        waited = format_duration(now - lease.running_at)
+        message = f"no SSH answer for {waited} since Vast reported running"
+        fix = shlex.join(["vasty", "release", target])
+        out.append(WarningItem("box_unreachable", target, message, fix))
     level, missing = guard(lease)
     observed = lease.reachable_at is not None or bool(lease.label.miss) or lease.adopted
     if level == "partial" and observed:

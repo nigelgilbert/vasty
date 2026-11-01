@@ -16,7 +16,9 @@ LEASE_KEYS = {
     "vram_gb", "price_per_hr", "cost", "uptime_s", "expires_at", "ttl_remaining_s", "busy",
     "jobs",
 }
-TOTALS_KEYS = {"balance", "credit", "charges_today", "burn_per_hr", "live", "live_mine"}
+TOTALS_KEYS = {
+    "balance", "credit", "charges_today", "burn_per_hr", "burn_per_hr_mine", "live", "live_mine",
+}
 
 
 def status(harness: Harness, *argv: str) -> dict[str, Any]:
@@ -147,8 +149,14 @@ def test_status_totals(account: Harness) -> None:
     totals = status(account)["totals"]
     assert totals == {
         "balance": 0.0, "credit": 20.0, "charges_today": 7.12,
-        "burn_per_hr": 5.46, "live": 5, "live_mine": 4,
+        "burn_per_hr": 5.46, "burn_per_hr_mine": 4.86, "live": 5, "live_mine": 4,
     }
+
+
+def test_status_burn_mine_stays_account_wide_under_filters(account: Harness) -> None:
+    for argv in (["--owner", "nick"], ["--group", "exp42"]):
+        totals = status(account, *argv)["totals"]
+        assert (totals["burn_per_hr"], totals["burn_per_hr_mine"]) == (5.46, 4.86)
 
 
 def test_status_cost_sums_charge_rows_across_two_days(account: Harness) -> None:
@@ -339,7 +347,7 @@ def test_status_human_table(account: Harness) -> None:
     warn = next(line for line in lines if "expiring_soon" in line)
     assert warn.split()[0] == "l-8b12" and warn.endswith("fix: vasty extend l-8b12 --by 1h")
     assert lines[-1] == ("TODAY  charged $7.12  ·  credit $20.00  ·  balance $0.00  ·  "
-                         "5 leases live (4 yours)  ·  burning $5.46/hr")
+                         "5 leases live (4 yours)  ·  burning $5.46/hr ($4.86 yours)")
 
 
 def test_status_human_group_view(account: Harness) -> None:
@@ -380,6 +388,30 @@ def test_history_lease_drops_live_fields(harness: Harness, state: str) -> None:
     assert row["log_tail"] == []
     _, out, _ = harness.run("status", "ft", "--verbose", tty=True)
     assert "actual_status" not in out
+
+
+def test_expired_lease_names_its_destroyer(harness: Harness) -> None:
+    _history_lease(harness, "expired")
+    row = status(harness, "ft")["leases"][0]
+    assert (row["destroyed_by"], row["destroyed_at"]) == ("sweep", iso(NOW + 60))
+
+
+def test_expired_lease_gone_on_its_own_has_first_seen_gone_time(harness: Harness) -> None:
+    row = add_lease(harness, label={"name": "ft", "expires": NOW + 30})
+    harness.run("status")
+    del harness.provider.instances[row.id]
+    harness.time.advance(60)
+    view = status(harness, "ft")["leases"][0]
+    assert view["state"] == "expired"
+    assert view["destroyed_at"] == iso(NOW + 60)
+    assert "destroyed_by" not in view
+
+
+@pytest.mark.parametrize("state", ["released", "gone"])
+def test_other_history_states_carry_no_destroy_fields(harness: Harness, state: str) -> None:
+    _history_lease(harness, state)
+    row = status(harness, "ft")["leases"][0]
+    assert "destroyed_at" not in row and "destroyed_by" not in row
 
 
 def test_active_lease_verbose_keeps_actual_status(harness: Harness) -> None:

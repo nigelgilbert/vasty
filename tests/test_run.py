@@ -44,6 +44,7 @@ def test_run_on_streams_to_stderr_in_json_and_passes_exit(harness: Harness, box:
     assert code == 3
     assert data == {
         "lease": "l-0000a001", "job": "j-1", "exit": 3, "duration_s": 0, "released": False,
+        "expires_at": "2026-10-29T01:50:00Z", "ttl_remaining_s": 3000,
         "warnings": [], "swept": [], "error": None,
     }
     assert "started python train.py --lr 1e-4" in err
@@ -476,6 +477,32 @@ def test_auto_run_named_leaves_box(harness: Harness, reserve: FakeReserve) -> No
     assert data["released"] is False
     assert harness.provider.destroyed == []
     assert reserve.calls[0]["name"] == "trainer"
+
+
+def test_auto_run_named_box_reports_its_clock(harness: Harness, reserve: FakeReserve) -> None:
+    code, data, _ = run(harness, "--name", "trainer", "--", "ls")
+    assert code == 0 and data["released"] is False
+    assert (data["expires_at"], data["ttl_remaining_s"]) == ("2026-10-29T01:30:00Z", 1800)
+
+
+def test_auto_run_released_box_reports_no_clock(harness: Harness, reserve: FakeReserve) -> None:
+    code, data, _ = run(harness, "--", "ls")
+    assert code == 0 and data["released"] is True
+    assert data["expires_at"] is None and data["ttl_remaining_s"] is None
+
+
+def test_lost_attach_reports_the_clock(harness: Harness, box: int) -> None:
+    harness.box.state(box).job_exit = None
+    code, data, _ = run(harness, "--on", "ft", "--", "ls")
+    assert code == 2 and data["released"] is False
+    assert (data["expires_at"], data["ttl_remaining_s"]) == ("2026-10-29T01:50:00Z", 3000)
+
+
+def test_sigint_on_kept_box_reports_the_clock(harness: Harness, box: int) -> None:
+    harness.box.attach_job = lambda t, j, o: (_ for _ in ()).throw(KeyboardInterrupt)  # type: ignore[method-assign,assignment,return-value]
+    code, data, _ = run(harness, "--on", "ft", "--", "ls")
+    assert code == 130 and data["released"] is False
+    assert (data["expires_at"], data["ttl_remaining_s"]) == ("2026-10-29T01:50:00Z", 2990)
 
 
 def test_auto_run_reuses_named_box(harness: Harness, reserve: FakeReserve, box: int) -> None:
