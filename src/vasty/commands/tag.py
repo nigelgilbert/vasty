@@ -122,7 +122,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         lease = update(ctx, snap, found, setters)
     results = [lease]
     warnings = (
-        views.warnings_for(results, snap.now, ctx.settings.warn_before_expiry)
+        views.warnings_for(results, snap.now)
         + list(snap.warnings)
     )
     if not_spawned is not None:

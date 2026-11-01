@@ -367,7 +367,7 @@ def test_serve_auto_reserves_with_profile_hardware(
     code, data, _ = run_serve(harness, "--profile", "vllm", "--model", QWEN)
     assert code == 0
     call = reserve.calls[0]
-    assert (call["ttl"], call["vram"], call["image"]) == (7200, 24.0, "vllm/vllm-openai:v0.32.0")
+    assert (call["ttl"], call["vram"], call["image"]) == (1800, 24.0, "vllm/vllm-openai:v0.32.0")
     assert data["lease"] == "l-0000b001"
     assert data["url"] == "http://198.51.100.7:41080/v1"
     assert harness.provider.destroyed == []
@@ -383,14 +383,24 @@ def test_serve_flags_beat_profile(harness: Harness, reserve: FakeReserve) -> Non
     )
 
 
-def test_serve_reads_stdin_json_like_reserve(harness: Harness, reserve: FakeReserve) -> None:
-    code, out, _ = harness.run(
-        "serve", "--model", QWEN, "--config", "-",
-        stdin='{"vram": 24, "image": "vllm/vllm-openai:v0.32.0"}',
-    )
-    assert code == 0, out
-    call = reserve.calls[0]
-    assert (call["vram"], call["image"]) == (24.0, "vllm/vllm-openai:v0.32.0")
+@pytest.mark.parametrize(
+    ("argv", "env_ttl", "expected"),
+    [
+        ([], None, 1200),
+        ([], "10m", 600),
+        (["--profile", "vllm"], "10m", 900),
+        (["--profile", "vllm", "--ttl", "45m"], "10m", 2700),
+    ],
+)
+def test_serve_auto_reserve_ttl_follows_config_order(
+    harness: Harness, reserve: FakeReserve, argv: list[str], env_ttl: str | None, expected: int
+) -> None:
+    write_user(harness, '[defaults]\nttl = "20m"\n' + VLLM_PROFILE + 'ttl = "15m"\n')
+    if env_ttl is not None:
+        harness.env["VASTY_TTL"] = env_ttl
+    code, _, _ = run_serve(harness, *argv, "--model", QWEN)
+    assert code == 0
+    assert reserve.calls[0]["ttl"] == expected
 
 
 def test_serve_name_reuse_checks_only_given_flags(harness: Harness, box: int) -> None:

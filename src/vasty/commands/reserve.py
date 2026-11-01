@@ -150,7 +150,7 @@ def reserve_lease(
         warnings = account + warnings
     else:
         warnings = list(snap.warnings) + warnings
-    warnings += lease_warnings(lease, ctx.clock.now(), settings.warn_before_expiry)
+    warnings += lease_warnings(lease, ctx.clock.now())
     if not_spawned is not None:
         warnings.append(not_spawned)
     result = reserve_result(lease, ctx.clock.now(), reused, warnings, swept)

@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 GUARD_LAYERS: tuple[str, ...] = ("watchdog", "destroy_key", "clock_file")
 CLOCK_SKEW_WARN_S = 120
 """Box clock skew past this many seconds raises `clock_skew`."""
+EXPIRY_WARN_S = 5 * 60
+"""A running lease with this many seconds or fewer left raises an `expiring_*` warning."""
 LIVE_JOB_STATES: frozenset[str] = frozenset({"running", "serving"})
 
 _PENDING_STATUSES = frozenset({"created", "loading"})
@@ -229,7 +231,7 @@ def startup_failed(lease: CachedLease) -> bool:
     return lease.startup_exit is None and lease.startup_interrupted
 
 
-def lease_warnings(lease: CachedLease, now: int, warn_before_expiry: int) -> list[WarningItem]:
+def lease_warnings(lease: CachedLease, now: int) -> list[WarningItem]:
     """Return the per-lease warnings with their fixes.
 
     Codes: `expiring_soon` or `expiring_with_running_job`, `box_unreachable`,
@@ -247,7 +249,7 @@ def lease_warnings(lease: CachedLease, now: int, warn_before_expiry: int) -> lis
     if lease.state in HISTORY_STATES or lease.state == "orphan":
         return out
     remaining = ttl_remaining(lease.label, now)
-    if lease.state == "running" and 0 < remaining <= warn_before_expiry:
+    if lease.state == "running" and 0 < remaining <= EXPIRY_WARN_S:
         left = f"{format_minutes_up(remaining)} left"
         ttl = lease.label.ttl
         if jobs:

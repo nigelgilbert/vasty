@@ -1,7 +1,7 @@
 """`vasty serve`.
 
 Without `--on`, `serve` resolves settings the same way `reserve` does and
-reserves a box with `run_ttl` (or `--ttl`). With `--on` it serves on that box.
+reserves a box with the `ttl` setting. With `--on` it serves on that box.
 `--model` is any name or box path `vllm serve` accepts.
 
 Tokens after `--` are appended to the `vllm serve` argv. `serve` owns the
@@ -119,9 +119,8 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     created = False
     if auto:
         from vasty.commands import reserve
-        from vasty.commands.run import auto_ttl
 
-        reserved = reserve.reserve_lease(ctx, args, snap, ttl=auto_ttl(ctx))
+        reserved = reserve.reserve_lease(ctx, args, snap, ttl=ctx.settings.ttl)
         lease = reserved.lease
         warnings = list(reserved.result.warnings)
         swept = merge_swept(swept, reserved.result.swept)

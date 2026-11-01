@@ -266,7 +266,7 @@ def _single(
         if expires <= now:
             raise _past(lease.lease)
         apply(ctx, lease, expires)
-    warnings = views.warnings_for([lease], now, ctx.settings.warn_before_expiry)
+    warnings = views.warnings_for([lease], now)
     warnings += snap.warnings
     _spawn(ctx, [lease], warnings)
     final = effective_expiry(lease.label)
@@ -330,7 +330,7 @@ def _bulk(
                     "expires_at": iso(effective_expiry(lease.label)),
                 },
             ))
-    warnings = views.warnings_for(leases, now, ctx.settings.warn_before_expiry)
+    warnings = views.warnings_for(leases, now)
     warnings += snap.warnings
     _spawn(ctx, [lease for lease in leases if lease.lease not in errors], warnings)
     exit_code = max((EXIT_CODES[err.code] for err in errors.values()), default=0)

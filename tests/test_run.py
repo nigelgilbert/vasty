@@ -319,10 +319,10 @@ def test_os_error_before_job_keeps_existing_box(harness: Harness, box: int) -> N
     assert harness.provider.destroyed == []
 
 
-def test_auto_run_uses_run_ttl_and_releases(harness: Harness, reserve: FakeReserve) -> None:
+def test_auto_run_uses_ttl_default_and_releases(harness: Harness, reserve: FakeReserve) -> None:
     code, data, _ = run(harness, "--", "python", "train.py")
     assert code == 0
-    assert reserve.calls[0]["ttl"] == 7200
+    assert reserve.calls[0]["ttl"] == 1800
     assert data["lease"] == "l-0000b001"
     assert data["released"] is True
     assert harness.provider.destroyed == [1001]
@@ -435,17 +435,25 @@ def test_failed_auto_release_reports_release_refresh_sweep(
     assert "could not release l-0000b001" in err
 
 
-def test_auto_run_ttl_flag_overrides_run_ttl(harness: Harness, reserve: FakeReserve) -> None:
-    run(harness, "--ttl", "45m", "--", "ls")
-    assert reserve.calls[0]["ttl"] == 2700
-
-
-def test_auto_run_profile_ttl_does_not_override_run_ttl(
-    harness: Harness, reserve: FakeReserve
+@pytest.mark.parametrize(
+    ("argv", "env_ttl", "expected"),
+    [
+        ([], None, 1200),
+        ([], "10m", 600),
+        (["--profile", "p"], "10m", 900),
+        (["--profile", "p", "--ttl", "45m"], "10m", 2700),
+    ],
+)
+def test_auto_run_ttl_follows_config_order(
+    harness: Harness, reserve: FakeReserve, argv: list[str], env_ttl: str | None, expected: int
 ) -> None:
-    harness.env["VASTY_TTL"] = "10m"
-    run(harness, "--", "ls")
-    assert reserve.calls[0]["ttl"] == 7200
+    path = harness.home / ".config" / "vasty" / "config.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('[defaults]\nttl = "20m"\n[profiles.p]\nttl = "15m"\n')
+    if env_ttl is not None:
+        harness.env["VASTY_TTL"] = env_ttl
+    run(harness, *argv, "--", "ls")
+    assert reserve.calls[0]["ttl"] == expected
 
 
 def test_auto_run_passes_remote_exit(harness: Harness, reserve: FakeReserve) -> None:
@@ -508,7 +516,7 @@ def test_auto_run_attach_error_keeps_box_and_prints_recovery(
     assert isinstance(err, io.StringIO)
     text = err.getvalue()
     assert "j-1 on l-0000b001" in text
-    assert "2026-10-29T03:00:00Z" in text
+    assert "2026-10-29T01:30:00Z" in text
     assert "vasty status l-0000b001" in text and "vasty release l-0000b001" in text
 
 

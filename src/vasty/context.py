@@ -71,7 +71,6 @@ def default_process_args(pid: int) -> str | None:
 class Context:
     flags: dict[str, Any] = field(default_factory=dict)
     profile: str | None = None
-    stdin_json: dict[str, Any] | None = None
     mode: str = "json"
     env: Mapping[str, str] = field(default_factory=lambda: dict(os.environ))
     cwd: Path = field(default_factory=Path.cwd)
@@ -110,7 +109,7 @@ class Context:
             from vasty.config import resolve
 
             self._settings = resolve(
-                self.flags, self.stdin_json, self.profile, self.env, self.cwd, self.home,
+                self.flags, self.profile, self.env, self.cwd, self.home,
                 stdin_text=self.stdin.read,
             )
         return self._settings
@@ -121,15 +120,14 @@ class Context:
             if self.provider_factory is not None:
                 self._provider = self.provider_factory(self)
             else:
-                from vasty.config import api_key, vastai_key_path
+                from vasty.config import API_KEY_ENV, api_key, vastai_key_path
 
-                key_env = self.settings.api_key_env
-                found = api_key(self.env, self.home, key_env)
+                found = api_key(self.env, self.home)
                 if found is None:
                     path = vastai_key_path(self.home)
                     raise VastyError(
-                        "auth_missing", f"No API key in {key_env} or {path}.",
-                        f"Export {key_env} or write the key to {path}.",
+                        "auth_missing", f"No API key in {API_KEY_ENV} or {path}.",
+                        f"Export {API_KEY_ENV} or write the key to {path}.",
                     )
                 from vasty.provider import VastProvider
 

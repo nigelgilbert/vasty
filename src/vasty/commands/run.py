@@ -1,6 +1,6 @@
 """`vasty run`.
 
-Without `--on`, `run` reserves a box with `run_ttl` (or `--ttl`), runs the
+Without `--on`, `run` reserves a box with the `ttl` setting, runs the
 command and releases the box when the command exits. `--detach` and `--name`
 leave the box alive. Any exception before the job is saved to the cache
 releases a box this call created. `--on LEASE` reuses a box and leaves it alive.
@@ -62,18 +62,12 @@ from vasty.models import (
 )
 from vasty.onstart import WORKDIR
 from vasty.remote import SshTarget
-from vasty.state import effective_expiry, fix_for
+from vasty.state import EXPIRY_WARN_S, effective_expiry, fix_for
 from vasty.timeutil import format_duration, format_minutes_up, iso
 
 INTERRUPT_WAIT_S = 10.0
 INTERRUPT_EXIT = 130
 LOST_EXIT = 2
-
-
-def auto_ttl(ctx: Context) -> int:
-    """Return `--ttl` when given, else the profile's `run_ttl`."""
-    settings = ctx.settings
-    return settings.ttl if settings.sources.get("ttl") == "flag" else settings.run_ttl
 
 
 def release_quietly(ctx: Context, lease: CachedLease) -> tuple[bool, list[SweptEntry]]:
@@ -131,9 +125,9 @@ def push_dir(ctx: Context, target: SshTarget, directory: str) -> None:
 
 
 def warn_if_expiring(ctx: Context, lease: CachedLease, now: int) -> None:
-    """Print a stderr warning and the `extend` command when the clock is under `warn_before_expiry`."""
+    """Print a stderr warning and the `extend` command when the clock is under `EXPIRY_WARN_S`."""
     remaining = effective_expiry(lease.label) - now
-    if remaining < ctx.settings.warn_before_expiry:
+    if remaining < EXPIRY_WARN_S:
         fix = fix_for("expiring_soon", lease.lease, lease.label.ttl)
         ctx.warn(f"vasty: lease {lease.lease} expires in {format_minutes_up(remaining)}. Extend it: {fix}")
 
@@ -154,7 +148,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     auto = args.on is None
     require_tools(ctx, "ssh", *(["rsync"] if args.sync_dir is not None else []))
     sync_dir = _check_sync_dir(ctx, args.sync_dir) if args.sync_dir is not None else None
-    ttl = auto_ttl(ctx) if auto else 0
+    ttl = ctx.settings.ttl if auto else 0
 
     snap = engine.refresh(ctx)
     warnings: list[WarningItem] = []
