@@ -2,7 +2,9 @@
 
 Layers, highest first: flags, `--config -` JSON, `--profile`, environment,
 project file, user file, built-in defaults. `resolve` returns the effective
-`Settings` and the source of each value.
+`Settings` and the source of each value. When no layer sets `cuda` and the
+image is one in `IMAGE_CUDA`, `cuda` takes that image's floor with source
+`image`.
 
 Bad flag values raise `invalid_arguments`. Bad file, environment or stdin
 values raise `invalid_config`. An unknown `--profile` name raises
@@ -60,6 +62,11 @@ SHOWN = (
     "startup",
 )
 
+BASE_IMAGE = "vastai/base-image:cuda-12.6.3-auto"
+VLLM_IMAGE = "vllm/vllm-openai:v0.32.0"
+# CUDA floor of each image vasty names.
+IMAGE_CUDA: dict[str, float] = {VLLM_IMAGE: 13.0, BASE_IMAGE: 12.6}
+
 BUILTIN: dict[str, Any] = {
     "api_key_env": "VAST_API_KEY",
     "ttl": 30 * 60,
@@ -68,7 +75,7 @@ BUILTIN: dict[str, Any] = {
     "warn_before_expiry": 5 * 60,
     "disk": 50,
     "gpus": 1,
-    "image": "vastai/base-image:cuda-12.6.3-auto",
+    "image": BASE_IMAGE,
 }
 
 _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
@@ -480,6 +487,12 @@ def resolve(
     if spec is not None:
         startup, startup_path = _read_startup(spec, sources["startup"], stdin_text)
 
+    image = pick("image")
+    cuda = pick("cuda")
+    if cuda is None and image in IMAGE_CUDA:
+        cuda = IMAGE_CUDA[image]
+        sources["cuda"] = "image"
+
     return Settings(
         owner=owner,
         api_key_env=pick("api_key_env"),
@@ -490,10 +503,10 @@ def resolve(
         warn_before_expiry=pick("warn_before_expiry"),
         disk=pick("disk"),
         gpus=pick("gpus"),
-        image=pick("image"),
+        image=image,
         gpu=pick("gpu"),
         vram=pick("vram"),
-        cuda=pick("cuda"),
+        cuda=cuda,
         region=pick("region"),
         ports=list(pick("ports") or []),
         startup=startup,

@@ -38,6 +38,7 @@ from vasty.commands._common import (
     require_tools,
     save_lease,
 )
+from vasty.config import VLLM_IMAGE
 from vasty.context import Context
 from vasty.errors import VastyError, invalid
 from vasty.models import SERVE_PORT, CachedLease, Job, ServeResult, WarningItem
@@ -50,7 +51,6 @@ POLL_INTERVAL_S = 5.0
 HTTP_TIMEOUT_S = 5.0
 PREFLIGHT_TIMEOUT_S = 30.0
 PREFLIGHT_COMMAND = "command -v vllm"
-VLLM_IMAGE = "vllm/vllm-openai:v0.32.0"
 LOG_TAIL_BYTES = 64 * 1024
 # vLLM flags that `serve` sets itself.
 OWNED_FLAGS = ("--host", "--port", "--api-key")
@@ -93,13 +93,24 @@ class _Plan:
     extra: list[str]
     bind_local: bool
     auto: bool
+    ttl: str | None = None
+    name: str | None = None
+
+    def kept_flags(self) -> list[str]:
+        """Return the caller's `--ttl` and `--name` flags for a hint command."""
+        out: list[str] = []
+        if self.ttl is not None:
+            out += ["--ttl", self.ttl]
+        if self.name is not None:
+            out += ["--name", self.name]
+        return out
 
 
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     auto = args.on is None
     extra = list(args.command or [])
     check_extra(extra)
-    plan = _Plan(args.model, extra, bool(args.bind_local), auto)
+    plan = _Plan(args.model, extra, bool(args.bind_local), auto, args.ttl, args.name)
     require_tools(ctx, "ssh")
 
     snap = engine.refresh(ctx)
@@ -176,13 +187,18 @@ def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Pl
 def _preflight(ctx: Context, target: SshTarget, lease: CachedLease, plan: _Plan) -> None:
     """Raise `vllm_missing` when the box has no `vllm` on PATH.
 
-    Under auto-reserve the hint names the vLLM image. Under `--on` it says to
+    Under auto-reserve the hint reserves with the `vllm` profile, or the vLLM
+    image when no such profile exists, at `--cuda 13` with the caller's
+    `--ttl` and `--name`, then serves on that box. Under `--on` it says to
     install `vllm` on the lease.
     """
     done = ctx.box.exec(target, PREFLIGHT_COMMAND, timeout=PREFLIGHT_TIMEOUT_S)
     if done.exit != 0:
         if plan.auto:
-            hint = f"Reserve with a vLLM image: vasty serve --model {plan.model} --image {VLLM_IMAGE}."
+            image = ["--profile", "vllm"] if "vllm" in ctx.settings.profiles else ["--image", VLLM_IMAGE]
+            reserve = shlex.join(["vasty", "reserve", *image, *plan.kept_flags(), "--cuda", "13"])
+            serve = shlex.join(["vasty", "serve", "--on", plan.name or "LEASE", "--model", plan.model])
+            hint = f"Reserve a vLLM box: {reserve}, then {serve}."
         else:
             hint = (
                 f"Install vllm on {lease.lease}: vasty run --on {lease.lease} -- pip install vllm, "

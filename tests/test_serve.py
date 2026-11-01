@@ -375,6 +375,31 @@ def test_bare_serve_reserves_default_image_and_releases_without_vllm(
     assert harness.provider.destroyed == [1001]
 
 
+def test_vllm_missing_hint_keeps_ttl_and_name_and_adds_cuda(
+    harness: Harness, reserve: FakeReserve
+) -> None:
+    write_user(harness, VLLM_PROFILE)
+    harness.box.state(1001).exec_results["command -v vllm"] = NO_VLLM
+    code, data, _ = run_serve(harness, "--model", "M", "--ttl", "2h", "--name", "n")
+    assert code == 1 and data["error"] == "vllm_missing"
+    assert data["hint"] == (
+        "Reserve a vLLM box: vasty reserve --profile vllm --ttl 2h --name n --cuda 13, "
+        "then vasty serve --on n --model M."
+    )
+
+
+def test_vllm_missing_hint_without_profile_names_image(
+    harness: Harness, reserve: FakeReserve
+) -> None:
+    harness.box.state(1001).exec_results["command -v vllm"] = NO_VLLM
+    code, data, _ = run_serve(harness, "--model", "M")
+    assert code == 1 and data["error"] == "vllm_missing"
+    assert data["hint"] == (
+        "Reserve a vLLM box: vasty reserve --image vllm/vllm-openai:v0.32.0 --cuda 13, "
+        "then vasty serve --on LEASE --model M."
+    )
+
+
 def test_serve_vllm_missing_releases_reserved_box(
     harness: Harness, reserve: FakeReserve, started: list[tuple[Job, str]]
 ) -> None:

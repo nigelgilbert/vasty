@@ -73,7 +73,7 @@ vasty config    (show | set KEY VALUE | profiles)
 vasty completion (bash | zsh | fish)
 ```
 
-Hardware flags on `reserve`, `run` and `serve`: `--gpu NAME`, `--vram MIN_GB`, `--cuda FLOOR`, `--gpus N`, `--disk GB`, `--image IMAGE`, `--max-price $/HR`, `--region R`, `--ports N[,N...]`. A profile or config file supplies defaults for any of them. `--cuda` is the minimum CUDA version the host driver supports. Read an image's floor from `NVIDIA_REQUIRE_CUDA` in `docker inspect IMAGE`. `run --on` and `serve --on` reuse a box and reject creation flags. Auto-reserved `run` and `serve` reject `--no-wait`.
+Hardware flags on `reserve`, `run` and `serve`: `--gpu NAME`, `--vram MIN_GB`, `--cuda FLOOR`, `--gpus N`, `--disk GB`, `--image IMAGE`, `--max-price $/HR`, `--region R`, `--ports N[,N...]`. A profile or config file supplies defaults for any of them. `--cuda` is the minimum CUDA version the host driver supports. With no `cuda` set, Vasty applies the floor of an image it names: 13 for `vllm/vllm-openai:v0.32.0`, 12.6 for `vastai/base-image:cuda-12.6.3-auto`. For any other image, read its floor from `NVIDIA_REQUIRE_CUDA` in `docker inspect IMAGE`. `run --on` and `serve --on` reuse a box and reject creation flags. Auto-reserved `run` and `serve` reject `--no-wait`.
 
 Every verb takes `--json`, `--plain` and `--verbose`.
 
@@ -309,7 +309,6 @@ pip install -U transformers peft
 [profiles.vllm]
 image = "vllm/vllm-openai:v0.32.0"
 vram = 24
-cuda = 13
 ```
 
 `startup` runs once on each box as root in `/workspace` after Vasty's own setup. The box reports `pending` until it exits 0. A failing hook leaves the box up with a `startup_failed` warning so you can `ssh` in and look.

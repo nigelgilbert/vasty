@@ -527,6 +527,25 @@ def test_config_show_cuda_flag(harness: Harness) -> None:
     assert json.loads(out)["values"]["cuda"] == {"value": 12.8, "source": "flag"}
 
 
+def test_config_show_cuda_from_base_image(harness: Harness) -> None:
+    code, out, _ = harness.run("config", "show")
+    assert code == 0
+    assert json.loads(out)["values"]["cuda"] == {"value": 12.6, "source": "image"}
+
+
+def test_config_show_vllm_profile_names_image_as_cuda_source(harness: Harness) -> None:
+    write(user_config_path(harness.home), '[profiles.vllm]\nimage = "vllm/vllm-openai:v0.32.0"\n')
+    code, out, _ = harness.run("config", "show", "--profile", "vllm")
+    assert code == 0
+    assert json.loads(out)["values"]["cuda"] == {"value": 13.0, "source": "image"}
+
+
+def test_config_show_custom_image_has_no_cuda(harness: Harness) -> None:
+    code, out, _ = harness.run("config", "show", "--image", "my/img")
+    assert code == 0
+    assert json.loads(out)["values"]["cuda"] == {"value": None, "source": "default"}
+
+
 def test_config_set_cuda(harness: Harness) -> None:
     code, _, _ = harness.run("config", "set", "profiles.vllm.cuda", "13")
     assert code == 0

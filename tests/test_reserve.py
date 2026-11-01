@@ -186,7 +186,7 @@ def test_no_offers_names_constraints_and_hint(h: Harness) -> None:
     code, data = run_json(h, "reserve", "--gpu", "4090", "--max-price", "0.30")
     assert code == 1
     assert data["error"] == "no_offers"
-    assert data["message"] == "No offers match gpu=4090 under $0.30/hr."
+    assert data["message"] == "No offers match gpu=4090 cuda>=12.6 under $0.30/hr."
     assert "--max-price 0.45" in data["hint"]
     assert calls(h, "create") == []
 
@@ -223,8 +223,41 @@ def test_cuda_env_sends_filter(h: Harness) -> None:
     assert cuda_filter(h) == {"gte": 13.0}
 
 
-def test_no_cuda_sends_no_filter(h: Harness) -> None:
+def test_vllm_image_without_cuda_filters_at_13(h: Harness) -> None:
+    code, _ = run_json(h, "reserve", "--image", "vllm/vllm-openai:v0.32.0")
+    assert code == 0
+    assert cuda_filter(h) == {"gte": 13.0}
+
+
+def test_base_image_without_cuda_filters_at_12_6(h: Harness) -> None:
     code, _ = run_json(h, "reserve")
+    assert code == 0
+    assert calls(h, "search_offers")[0].cuda == 12.6
+    assert cuda_filter(h) == {"gte": 12.6}
+
+
+def test_cuda_flag_overrides_image_floor(h: Harness) -> None:
+    code, _ = run_json(h, "reserve", "--image", "vllm/vllm-openai:v0.32.0", "--cuda", "12.4")
+    assert code == 0
+    assert cuda_filter(h) == {"gte": 12.4}
+
+
+def test_cuda_profile_overrides_image_floor(h: Harness) -> None:
+    write_user(h, '[profiles.old]\nimage = "vllm/vllm-openai:v0.32.0"\ncuda = 12.4\n')
+    code, _ = run_json(h, "reserve", "--profile", "old")
+    assert code == 0
+    assert cuda_filter(h) == {"gte": 12.4}
+
+
+def test_cuda_config_overrides_image_floor(h: Harness) -> None:
+    write_user(h, "[defaults]\ncuda = 12.4\n")
+    code, _ = run_json(h, "reserve", "--image", "vllm/vllm-openai:v0.32.0")
+    assert code == 0
+    assert cuda_filter(h) == {"gte": 12.4}
+
+
+def test_custom_image_without_cuda_sends_no_filter(h: Harness) -> None:
+    code, _ = run_json(h, "reserve", "--image", "ubuntu:24.04")
     assert code == 0
     assert "cuda_max_good" not in build_offer_query(calls(h, "search_offers")[0])
 
