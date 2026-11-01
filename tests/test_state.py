@@ -248,18 +248,10 @@ def test_no_startup_failed(started: bool, exit: int | None, interrupted: bool) -
     assert lease_warnings(item, NOW, WARN) == []
 
 
-def test_expired_with_running_jobs() -> None:
-    item = lease("expired", label=label(expires=NOW - 60), jobs=[job("j-1", "running"), job("j-2", "serving")])
-    [w] = lease_warnings(item, NOW, WARN)
-    assert w.code == "expired_with_running_jobs"
-    assert w.message == "expired with j-1, j-2 running"
-    assert w.fix == "vasty status l-8b12"
-
-
 @pytest.mark.parametrize("state", ["expired", "released", "gone"])
-def test_history_leases_carry_only_expired_with_running_jobs(state: LeaseState) -> None:
+def test_history_leases_carry_no_warnings(state: LeaseState) -> None:
     item = lease(state, label=label(expires=NOW - 60), guard_missing=["watchdog"], startup_exit=1,
-                 jobs=[job("j-1", "exited")])
+                 jobs=[job("j-1", "running"), job("j-2", "serving")])
     assert lease_warnings(item, NOW, WARN) == []
 
 
@@ -287,7 +279,6 @@ def test_fixes_use_the_lease_id_and_shell_quote_it() -> None:
         ("sweep_not_spawned", "l-1", "vasty sweep --follow l-1"),
         ("orphan", "i-55120", "vasty tag i-55120 --ttl 30m"),
         ("startup_failed", "l-1", "vasty ssh l-1 -- cat /workspace/.vasty/startup.log"),
-        ("expired_with_running_jobs", "l-1", "vasty status l-1"),
         ("flag_mismatch", "l-1", "vasty status l-1"),
         ("idle_box_available", "l-1", "vasty status l-1"),
         ("label_unreadable", "i-7", "vasty release i-7"),

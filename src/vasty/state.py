@@ -52,7 +52,6 @@ _FIXES: dict[str, list[str]] = {
     "sweep_not_spawned": ["vasty", "sweep", "--follow", _L],
     "orphan": ["vasty", "tag", _L, "--ttl", "30m"],
     "startup_failed": ["vasty", "ssh", _L, "--", "cat", "/workspace/.vasty/startup.log"],
-    "expired_with_running_jobs": ["vasty", "status", _L],
     "flag_mismatch": ["vasty", "status", _L],
     "idle_box_available": ["vasty", "status", _L],
     "label_unreadable": ["vasty", "release", _L],
@@ -234,8 +233,8 @@ def lease_warnings(lease: CachedLease, now: int, warn_before_expiry: int) -> lis
     """Return the per-lease warnings with their fixes.
 
     Codes: `expiring_soon` or `expiring_with_running_job`, `box_unreachable`,
-    `guard_partial`, `clock_skew`, `clock_skew_unknown`, `startup_failed` on
-    active leases, and `expired_with_running_jobs` on an `expired` lease.
+    `guard_partial`, `clock_skew`, `clock_skew_unknown` and `startup_failed`
+    on active leases.
     `guard_partial` needs observed layers: a probe answered (`reachable_at`),
     another machine's probe wrote `miss=` to the label, or `tag` adopted the
     box without a guard. `clock_skew` fires when the last probe measured the
@@ -245,11 +244,6 @@ def lease_warnings(lease: CachedLease, now: int, warn_before_expiry: int) -> lis
     target = lease.lease
     jobs = live_jobs(lease)
     out: list[WarningItem] = []
-    if lease.state == "expired":
-        if jobs:
-            message = f"expired with {', '.join(jobs)} running"
-            out.append(make_warning("expired_with_running_jobs", target, message))
-        return out
     if lease.state in HISTORY_STATES or lease.state == "orphan":
         return out
     remaining = ttl_remaining(lease.label, now)

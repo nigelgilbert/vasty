@@ -126,7 +126,7 @@ Exit codes: 0 success, 1 bad input or lookup, 2 provider or box failure. Once a 
 
 `status` returns a `warnings` array. Each entry has a code, the lease, a message and `fix`, one runnable `vasty` command. An agent can loop over the warnings and run the fixes. A `guard_partial` warning names the missing layer, so an agent knows how much to trust that box's clock. `status --verbose` lists each layer under `guard_layers`.
 
-Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `expired_with_running_jobs`, `startup_failed`, `flag_mismatch`, `idle_box_available`, `clock_skew`, `clock_skew_unknown`, `sweep_not_spawned`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
+Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `startup_failed`, `flag_mismatch`, `idle_box_available`, `clock_skew`, `clock_skew_unknown`, `sweep_not_spawned`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
 
 | Warning | Fix |
 |---|---|

@@ -311,8 +311,11 @@ def test_swept_lease_in_status(harness: Harness) -> None:
     data = status(harness)
     assert data["swept"] == [{"lease": "l-0000a001", "name": "ft", "owner": "claude",
                               "expired_at": "2026-10-29T01:00:30Z", "ok": True, "error": None}]
-    assert ("expired_with_running_jobs", "l-0000a001") in codes(data)
-    assert ("expired_with_running_jobs", "l-0000a001") in codes(status(harness))
+    assert [w for w in data["warnings"] if w["lease"] == "l-0000a001"] == []
+    assert [w for w in status(harness)["warnings"] if w["lease"] == "l-0000a001"] == []
+    [row] = status(harness, "l-0000a001")["leases"]
+    assert row["state"] == "expired"
+    assert [(j["job"], j["state"]) for j in row["jobs"]] == [("j-1", "unknown")]
 
 
 def test_swept_line_in_human_mode(harness: Harness) -> None:
