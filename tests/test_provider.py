@@ -285,6 +285,13 @@ def test_normalize_instance_reads_cuda_max_good() -> None:
     assert bare is not None and bare.cuda_max_good is None
 
 
+def test_normalize_instance_reads_start_date() -> None:
+    inst = normalize_instance(instance_row(5, start_date=1761700000.73))
+    assert inst is not None and inst.start_date == 1761700000
+    bare = normalize_instance(instance_row(5))
+    assert bare is not None and bare.start_date is None
+
+
 # Create.
 
 

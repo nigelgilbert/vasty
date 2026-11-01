@@ -74,6 +74,8 @@ class Instance:
     runtype: str | None = None
     cuda_max_good: float | None = None
     """The highest CUDA version the host driver supports."""
+    start_date: int | None = None
+    """When the instance started, in epoch seconds."""
 
 
 @dataclass(frozen=True)
