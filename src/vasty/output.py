@@ -1,4 +1,7 @@
-"""JSON and human rendering."""
+"""JSON and human rendering.
+
+JSON money rounds half up to 0.0001. Human money rounds half up to cents.
+"""
 
 from __future__ import annotations
 
@@ -11,14 +14,19 @@ from vasty.models import BulkEntry
 
 
 def money(value: Decimal) -> float:
-    """Round money to 2 places for output."""
+    """Round money to 2 places for human output."""
     return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def json_money(value: Decimal) -> float:
+    """Round money to 4 places for JSON output."""
+    return float(value.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
 
 
 def to_jsonable(obj: Any) -> Any:
     """Convert dataclasses, Decimals and containers to plain JSON values.
 
-    Fields with `omit_none` metadata drop out when None. A `BulkEntry` merges
+    Decimals round to 4 places. Fields with `omit_none` metadata drop out when None. A `BulkEntry` merges
     its `data` into the entry.
     """
     if isinstance(obj, BulkEntry):
@@ -35,7 +43,7 @@ def to_jsonable(obj: Any) -> Any:
             result[f.name] = to_jsonable(value)
         return result
     if isinstance(obj, Decimal):
-        return money(obj)
+        return json_money(obj)
     if isinstance(obj, dict):
         return {str(k): to_jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):

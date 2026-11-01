@@ -495,6 +495,13 @@ def test_config_show_json(harness: Harness) -> None:
     assert values["gpu"] == {"value": None, "source": "default"}
 
 
+def test_config_show_json_keeps_four_places_of_max_price(harness: Harness) -> None:
+    write(user_config_path(harness.home), "[defaults]\nmax_price = 0.272\n")
+    code, out, _ = harness.run("config", "show")
+    assert code == 0
+    assert json.loads(out)["values"]["max_price"] == {"value": 0.272, "source": "user"}
+
+
 def test_config_show_profile(harness: Harness) -> None:
     write(user_config_path(harness.home), '[profiles.big]\ngpu = "A100"\n')
     code, out, _ = harness.run("config", "show", "--profile", "big")

@@ -181,6 +181,17 @@ def test_status_unreachable_jobs_unknown(account: Harness) -> None:
                             "duration_s": 60}]
 
 
+def test_status_money_is_four_places_in_json_and_cents_for_humans(harness: Harness) -> None:
+    row = add_lease(harness, label={"group": "g"})
+    harness.provider.billed = {row.id: Decimal("0.003")}
+    assert status(harness)["leases"][0]["cost"] == 0.003
+    _, out, _ = harness.run("status", "--plain")
+    cells = out.splitlines()[1].split()
+    assert cells[cells.index("running") + 4] == "0.00"
+    _, out, _ = harness.run("status", "--group", "g", "--plain")
+    assert " · $0.00 so far · " in out.splitlines()[0]
+
+
 @pytest.mark.parametrize(
     ("failing", "nulls", "kept"),
     [("charges", ["charges_today"], ["balance", "credit"]),
