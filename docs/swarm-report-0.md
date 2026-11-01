@@ -56,6 +56,10 @@ None. Every item in issues 001 to 015 was implemented.
 
 ## Open items
 
-- Item 004 README: the `orphan_unmanaged`, `lease_pending` and `lease_expired` error rows do not list `stop` among the verbs they apply to.
-- Item 001: `src/vasty/__init__.py` still carries an unused `__version__ = "0.1.0"`; `--version` reads package metadata.
-- Group E saw one unreproduced failure in `tests/test_remote.py` during a run that overlapped other agents' test runs; ten reruns and every full-suite run since passed.
+- `tests/test_remote.py::test_write_clock_translates_into_box_time` reads the wall clock twice and fails when the second ticks between the reads; its tolerance window is -5 to 0 and the observed difference was 1. It predates this run. Widening the window to 1 removes the flake.
+
+## Closed after the report
+
+- `8675205` names `stop` in the `orphan_unmanaged` and `lease_pending` README rows. The `lease_expired` row lists no verbs.
+- `9f56d7a` drops the unused `__version__` constant.
+- `a5087a2` documents `already_absent` on both `release` rows.
