@@ -1,6 +1,6 @@
-# Follow-ups from live runs 2, 3 and 4
+# Follow-ups from live runs 2 to 5
 
-Decided 2026-10-31 from `docs/live-test-report-2.md`, `-3.md` and `-4.md`. Input to the issue split. Delete after the issues exist.
+Decided 2026-10-31 from live runs 2 to 5; the raw output is under `docs/live/`. Each item has an issue under `issues/`: items 4 and 5 share #005, items 8 and 16 split across #007 and #008, item 12 is in #008, and the rest map one to one in the order below. `docs/decisions.md` holds the one-row form of each item and the Declined list.
 
 ## 1. Help text for every flag, plus `--version`
 
@@ -35,7 +35,7 @@ Source: run 3 phase 2, run 4 scenario 4A.
 
 ## 6. Create and wait failures
 
-- After any create failure, list instances by the lease label. Destroy what is found. Return `provider_error` with `lease`, `instance_id` and `destroyed` in details.
+- After a create that returns `success: false`, list instances by the lease label. Destroy what is found. Return `provider_error` with `lease`, `instance_id` and `destroyed` in details. A create timeout keeps its recovery in `create_with_recovery`: adopt the labelled instance.
 - During the readiness wait, a refresh error writes one stderr line and the wait continues until the lease's clock. Ctrl-C still destroys a box this call created.
 - Every error raised after create names the lease and whether the box was destroyed.
 
@@ -45,15 +45,16 @@ Source: run 3 phase 1 first reserve, run 4 ghost instance.
 
 - The job id key is `job` in every result: `status`, `release`, `run`, `serve`, `stop`.
 - `release` job entries gain `state`.
-- `release` finishes every live job record: `state: killed`, `exit: null`, `duration_s` frozen at release. `unknown` stays for a pid that vanished without a record.
+- `release` finishes every live job record: `state: killed`, `exit: null`, `duration_s` frozen at release. A live job on a lease that reached history without `release` freezes `duration_s` at the first sample that found the lease gone. `unknown` stays for a pid that vanished without a record.
 - README result table lists the job entry fields.
+- `run` and `status` report the same `duration_s` for a job.
 
-Source: run 3 items 7 and 12, run 4 lists 1 and 3.
+Source: run 3 items 7 and 12, run 4 lists 1 and 3, run 5 hiccups.
 
 ## 8. History leases stop reporting live fields
 
 - `ttl_remaining_s` is null and `verbose.actual_status` is absent on `released`, `expired` and `gone` leases.
-- Untargeted `status --verbose` applies the same owner scope to history as to active leases.
+- Untargeted `status --verbose` lists the current owner's history, or `--owner O`'s. `--everyone` widens it to the account. Active leases keep listing every owner. README line "History states show when named directly" changes to say this.
 - Single-lease `status` returns `log_tail` in every state, `[]` when empty.
 
 Source: run 3 items 11 and 13, run 4 list 3.
@@ -66,9 +67,12 @@ Source: run 3 w1 and w2, both attempts.
 
 ## 10. One follower per lease per machine
 
-Record the follower pid in the lease cache. `reserve` and `extend` spawn only when no recorded follower is alive.
+- Record the follower pid in the lease cache. `reserve` and `extend` spawn only when no recorded follower is alive.
+- After each sleep chunk the follower re-reads the lease's expiry and recomputes its wait, so an `extend --to` that shortens the clock holds.
+- `release` sends TERM to the lease's recorded follower after checking that the pid still runs `vasty sweep --follow` for that lease. A destroy left `destroy_pending` falls to the next command's sweep, as today.
+- A shortened clock is picked up within one 300 s sleep chunk. The on-box clock file carries the exact time.
 
-Source: run 3 item 15, run 4 hiccups.
+Source: run 3 item 15, run 4 hiccups, run 5 followers.
 
 ## 11. README follows the code
 
@@ -76,13 +80,59 @@ Source: run 3 item 15, run 4 hiccups.
 - Where `run --sync DIR` lands and the remote working directory.
 - Offer order: reliability, then download bandwidth, then price, then id.
 - The clock starts when Vast reports `running`; the startup hook runs on it.
+- `pending` lasts while the hook runs. A hook that exits nonzero leaves the box `running` with `startup_failed`, as `state.py` does today; the README's "until it exits 0" goes.
 - Swarm workers set `VASTY_OWNER`.
+- Plain `status` lists every owner's active leases. `totals.live_mine` counts the caller's.
+- The vLLM example says to pass `--gpu` on a mixed pool. Run 2's `--profile vllm` picked a Tesla V100, and vLLM 0.32 ships no Volta kernels.
+
+## 12. Owner scope reads clearly
+
+- `status --everyone` alone reads as `--all --everyone`. `release` and `extend` keep requiring `--all` or `--group`.
+- `lease_not_found` for a name other owners hold lists their active lease ids in `details.matches` and hints `vasty status <id>`.
+- Each `swept` entry carries `owner`.
+
+Source: run 5 gates 1 and 3, lists 2 to 4.
+
+## 13. `extend` returns the previous clock
+
+The result gains `previous_expires_at`. The label's `ttl` stays the reserve's ttl, since item 5 sizes the `expiring_*` fix from it. README says so.
+
+Source: run 5 gate 3, B's `extend ft --by 20m`.
+
+## 14. JSON money to four places
+
+`to_jsonable` rounds Decimals to 0.0001. Human output stays at cents. This covers `cost`, `totals.credit` and `config show` `max_price`.
+
+Source: run 5 numbers, `cost` 0.0 against a $0.003 charge row and `max_price` 0.27 for 0.272. Run 4 showed the same rounding.
+
+## 15. API key from the vastai CLI file
+
+When the env var named by `api_key_env` is unset, read `~/.config/vastai/vast_api_key`. `config show` reports which source won. `auth_missing` names both.
+
+Source: run 2 setup, every vasty call set the key inline. Run 3, every worker that needed the key loaded it from that file by hand.
+
+## 16. Pending leases carry no clock
+
+`status` returns `expires_at` and `ttl_remaining_s` null while a lease is `pending`, as `reserve --no-wait` does. The clock starts at `running`.
+
+Source: run 4 list 3, `nowait/02` to `05`.
+
+## 17. `serve_failed` names the fix for error 804
+
+When `log_tail` holds `Error 804`, the hint reads: the host driver is below the image's CUDA; serve on a new box with `--image IMAGE --cuda 13`, keeping the caller's `--model`, `--ttl` and `--name`. Item 2 covers the reserve path; this covers `serve --on`.
+
+Source: run 2 item 7a, the dropped image and the 708 s reserve.
 
 ## Declined
 
 - Prefer cheaper offers. `max_price` is the filter; item 11 documents the order.
 - Start the clock after the startup hook. Vast bills from `running`, so ttl equals billed time.
 - A readiness deadline shorter than the clock. Item 6 removes the ghost behind it.
-- Map error 804 to `--cuda` in `serve_failed`. Item 2 removes the failure; agents read the cause from `log_tail`.
 - Retry `release` until the endpoint stops answering. `destroy_pending: true` already says the destroy is unconfirmed.
-- Rename `api_key_env`, warn on `state: unknown` jobs, `config show` money precision, profile inheriting defaults.
+- Rename `api_key_env`, warn on `state: unknown` jobs, profile inheriting defaults.
+- Stop counting `unknown` jobs as `busy`. Run 4 step 3 produced the case by editing a pid file by hand; no caller hit it.
+- Report a missing follower in `status`. The on-box watchdog destroyed B's `ft` 7 s past its clock with none, and the next command sweeps a box both layers miss.
+- Filter plain `status` to the caller's leases. Both drivers read `owner` and `totals.live_mine` correctly; item 11 documents it.
+- Update or drop `ttl` in the label. Item 5 reads it; item 13 returns the previous clock.
+- A compute-capability floor on the vLLM image. `--gpu` already filters the card; item 11 documents it.
+
