@@ -5,9 +5,10 @@ billing helpers read Vast's charges and balance for `status` and `release`.
 `cached_snapshot` answers `status --cached` from the
 local file and imports only the standard library.
 
-Reconciliation keeps history leases in `Snapshot.leases` for 24h from the
-moment vasty first sees them gone. A lease listed by Vast is active unless it
-has `destroy_pending`.
+Reconciliation keeps history leases in `Snapshot.leases` for 24h from
+`history_since`: the release call for a released lease, else the moment vasty
+first sees the row gone. A lease listed by Vast is active unless it has
+`destroy_pending`.
 
 Job records. A live job on a lease the sweep expires, or on a lease a list
 call no longer shows, gets `finished_at` set to that sample's time, so its
@@ -22,11 +23,11 @@ row for the sweep and its retries, the cached label for `release`, and for the
 `reserve` give-up the stored label, or the row read at give-up when the stored
 label has none.
 
-- `release` and the `reserve` give-up path set it with `released_here` and
-  state `released` once Vast accepts the destroy call. A give-up whose destroy
-  fails or finds the row changed leaves the lease active. When the stored
-  label has no `expires`, the give-up reads `expires` from the row and passes
-  that value to the destroy re-read.
+- `release` and the `reserve` give-up path set it with `released_here`, state
+  `released` and `history_since` once Vast accepts the destroy call. A
+  give-up whose destroy fails or finds the row changed leaves the lease
+  active. When the stored label has no `expires`, the give-up reads `expires`
+  from the row and passes that value to the destroy re-read.
 - The sweep sets it with state `expired` when it sends a destroy, whether Vast
   accepts the call or fails it.
 - `refresh` resends the destroy while the row stays listed, and sets
@@ -41,8 +42,8 @@ label has none.
 - A swept lease whose label is no longer past its clock drops
   `destroy_pending` and turns active again. A `released_here` lease keeps
   retrying.
-- Reconciliation clears `destroy_pending` and starts the history window when
-  a list call no longer shows the row.
+- Reconciliation clears `destroy_pending` when a list call no longer shows the
+  row, and sets `history_since` when it is unset.
 - The probe skips leases with `destroy_pending`. `release` on a history lease
   whose row is still listed sends the destroy again and returns
   `provider_error` when the call fails. A `release` whose re-read finds an
@@ -357,10 +358,10 @@ def kill_jobs(lease: CachedLease, now: int) -> None:
 
 
 def mark_released(lease: CachedLease, now: int) -> None:
-    """Record an accepted destroy for a lease this machine released."""
+    """Record an accepted destroy for a lease this machine released and start its history window."""
     lease.state = "released"
     lease.released_here = True
-    lease.history_since = None
+    lease.history_since = now
     mark_destroy_sent(lease, now)
 
 
@@ -459,20 +460,17 @@ def _sweep(
 def _to_history(lease: CachedLease, now: int) -> None:
     """Move a lease whose row a list call no longer shows into history and freeze its live jobs."""
     freeze_jobs(lease, now)
-    if lease.state in HISTORY_STATES:
-        if lease.destroy_pending or lease.history_since is None:
-            _clear_destroy(lease)
-            lease.history_since = now
-        return
-    if lease.released_here:
-        lease.state = "released"
-    elif now > effective_expiry(lease.label):
-        lease.state = "expired"
-        lease.expired_at = effective_expiry(lease.label)
-    else:
-        lease.state = "gone"
+    if lease.state not in HISTORY_STATES:
+        if lease.released_here:
+            lease.state = "released"
+        elif now > effective_expiry(lease.label):
+            lease.state = "expired"
+            lease.expired_at = effective_expiry(lease.label)
+        else:
+            lease.state = "gone"
     _clear_destroy(lease)
-    lease.history_since = now
+    if lease.history_since is None:
+        lease.history_since = now
 
 
 @dataclass

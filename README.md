@@ -143,7 +143,7 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 |---|---|
 | `reserve` | the lease: `lease`, `name`, `owner`, `group`, `state`, `reused`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `expires_at`, `ttl_remaining_s`, `ssh`, `rsync_target`, `ssh_port`, `ports` |
 | `extend` on one lease | `lease`, `previous_expires_at`, `expires_at`, `ttl_remaining_s`. The label's `ttl` keeps the reserve's value |
-| `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending`, and `already_absent` when the lease was already gone |
+| `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending`, and `already_absent` when the lease was already gone. `destroy_pending` is true from the destroy call until a refresh sees the instance gone from the provider listing |
 | bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error`; `extend` adds `previous_expires_at` and `expires_at`; `release` adds `name`, `uptime_s`, `cost`, `jobs`, `destroy_pending` and `already_absent`, or `name` and `message` when it fails |
 | `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s` |
 | `status` | `leases`, `totals`, `cached_at`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
