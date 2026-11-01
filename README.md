@@ -147,7 +147,7 @@ Every JSON result except `config`, `completion` and error objects carries `warni
 | `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending`, and `already_absent` when the lease was already gone. `destroy_pending` is true from the destroy call until a refresh sees the instance gone from the provider listing |
 | bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error`; `extend` adds `previous_expires_at` and `expires_at`; `release` adds `name`, `uptime_s`, `cost`, `jobs`, `destroy_pending` and `already_absent`, or `name` and `message` when it fails |
 | `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s` |
-| `status` | `leases`, `totals`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty. An `expired` lease adds `destroyed_at` and, when vasty destroyed it, `destroyed_by` |
+| `status` | `leases`, `totals`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
 | job entry in `status` and `release` `jobs` | `job`, `cmd`, `state`, `exit`, `duration_s`. `state` is `running`, `serving`, `exited`, `killed` or `unknown`. `release` marks live jobs `killed` with a null `exit` and freezes `duration_s`. A job on a history lease stops its `duration_s` at the lease's end. `stop` marks its job `killed` with the job's exit code |
 | attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `expires_at`, `ttl_remaining_s`, `error`. The clock fields are null when `released` is true. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
 | `run --detach` | `lease`, `job`, `gpu`, `price_per_hr`, `log_path`, `expires_at`, `ttl_remaining_s` |
@@ -159,7 +159,7 @@ Every JSON result except `config`, `completion` and error objects carries `warni
 
 `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at` and `ttl_remaining_s`.
 
-`busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. `uptime_s` counts from the first sample where Vast reports `running` and is null before it. An orphan's `uptime_s` counts from Vast's `start_date`. `--verbose` shows that sample as `running_at`, and `reachable_at` as the last probe that got an answer. `destroyed_by` is `sweep` when a command's sweep destroyed an expired box and `follower` when `sweep --follow` did. Without it, `destroyed_at` is when vasty first saw the instance gone.
+`busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. `uptime_s` counts from the first sample where Vast reports `running` and is null before it. An orphan's `uptime_s` counts from Vast's `start_date`. `--verbose` shows that sample as `running_at`, and `reachable_at` as the last probe that got an answer.
 
 ### Error codes
 
@@ -254,7 +254,7 @@ jobs:
 
 GitHub runs schedules best effort, so a sweep can land minutes late or skip a slot. The watchdog and the follower remain the first two enforcers.
 
-The clock starts when the box boots and writes its clock file from its own time, within seconds of Vast reporting the instance `running`. Vast starts charging GPU rent at `running`. The startup hook runs on that clock, so a waiting `reserve` returns with the hook's run time already spent. Storage and bandwidth bill from creation. A box that never reaches SSH is destroyed by the waiting `reserve` or by the next sweep once `created + ttl` passes.
+The clock starts when the box boots and writes its clock file from its own time, within seconds of Vast reporting the instance `running`. Vast starts charging GPU rent at `running`. The startup hook runs on that clock, so a waiting `reserve` returns with the hook's run time already spent. Storage and bandwidth bill from creation. A waiting `reserve`, `run` or `serve` destroys a box it created that answers no SSH 5 minutes after Vast reports it `running`, and returns `box_unreachable`. The next sweep destroys any other box at `created + ttl`.
 
 The label holds the expiry in provider time and the clock file holds it in the box's own time. Every write to the clock file carries the provider clock at send, and the box adds its own offset before writing. The probe measures the offset on each visit, copies a fresh box's clock file into the label with the offset removed, and warns `clock_skew` when the box clock sits more than two minutes from the provider. `status --verbose` shows the measured offset as `clock_skew_s`. While `clock_unverified` is set, values cross unchanged.
 
@@ -336,7 +336,7 @@ The API key comes from `VAST_API_KEY`. When that is unset, vasty reads `~/.confi
 Done:
 
 - Every verb above, in `src/vasty/`.
-- 1457 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
+- 1451 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
 - Funded live runs on Vast from 2026-10-29 to 2026-11-01, `serve` end to end included.
 
 Not done:

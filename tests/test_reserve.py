@@ -496,6 +496,54 @@ def test_wait_ends_with_box_unreachable_when_loading_never_ends(h: Harness) -> N
     assert len(h.provider.destroyed) == 1
 
 
+def test_wait_gives_up_on_a_created_box_with_no_ssh(h: Harness) -> None:
+    h.provider.on_create = None
+    code, data = run_json(h, "reserve", "--ttl", "30m")
+    assert code == 2
+    assert data["error"] == "box_unreachable"
+    assert data["message"] == (
+        "Lease l-abababab answered no SSH for 5m after Vast reported it running."
+    )
+    assert data["hint"] == "Run vasty reserve again."
+    assert data["details"] == {"lease": "l-abababab", "destroyed": True}
+    assert h.provider.instances == {}
+    assert NOW + 300 <= h.time.wall_now < NOW + 300 + reserve.WAIT_POLL_S + 1
+
+
+def test_wait_gives_up_on_a_reused_box_with_no_ssh_and_keeps_it(h: Harness) -> None:
+    row = add_lease(h, label={"name": "ft", "expires": NOW + 1800}, reachable=False)
+    code, data = run_json(h, "reserve", "--name", "ft")
+    assert code == 2
+    assert data["error"] == "box_unreachable"
+    assert data["details"] == {"lease": "l-0000a001", "destroyed": False}
+    assert h.provider.destroyed == []
+    assert row.id in h.provider.instances
+
+
+def test_wait_passes_a_box_that_answers_ssh_at_4_minutes(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_sleep = h.time.sleep
+    states: dict[int, CreateRequest] = {}
+
+    def late_boot(inst: Instance, req: CreateRequest) -> None:
+        states[inst.id] = req
+
+    def sleep(seconds: float) -> None:
+        real_sleep(seconds)
+        if h.time.wall_now >= NOW + 240:
+            for iid, req in states.items():
+                if h.box.boxes.get(iid) is None:
+                    boot(h, h.provider.instances[iid], req)
+
+    h.provider.on_create = late_boot
+    monkeypatch.setattr(h.time, "sleep", sleep)
+    code, data = run_json(h, "reserve", "--ttl", "30m")
+    assert code == 0
+    assert data["state"] == "running"
+    assert h.provider.destroyed == []
+
+
 def cached_lease(h: Harness) -> Any:
     return h.context().cache.load().leases["l-abababab"]
 
@@ -1101,7 +1149,7 @@ def test_lease_swept_by_the_follower_during_wait_reports_destroyed(
         if h.time.wall_now > NOW + 120 and not h.provider.destroyed:
             if fail:
                 h.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
-            engine.refresh(h.context(), probe=False, by="follower")
+            engine.refresh(h.context(), probe=False)
 
     monkeypatch.setattr(h.time, "sleep", sleep)
     code, data = run_json(h, "reserve", "--ttl", "2m")

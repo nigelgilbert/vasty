@@ -390,30 +390,6 @@ def test_history_lease_drops_live_fields(harness: Harness, state: str) -> None:
     assert "actual_status" not in out
 
 
-def test_expired_lease_names_its_destroyer(harness: Harness) -> None:
-    _history_lease(harness, "expired")
-    row = status(harness, "ft")["leases"][0]
-    assert (row["destroyed_by"], row["destroyed_at"]) == ("sweep", iso(NOW + 60))
-
-
-def test_expired_lease_gone_on_its_own_has_first_seen_gone_time(harness: Harness) -> None:
-    row = add_lease(harness, label={"name": "ft", "expires": NOW + 30})
-    harness.run("status")
-    del harness.provider.instances[row.id]
-    harness.time.advance(60)
-    view = status(harness, "ft")["leases"][0]
-    assert view["state"] == "expired"
-    assert view["destroyed_at"] == iso(NOW + 60)
-    assert "destroyed_by" not in view
-
-
-@pytest.mark.parametrize("state", ["released", "gone"])
-def test_other_history_states_carry_no_destroy_fields(harness: Harness, state: str) -> None:
-    _history_lease(harness, state)
-    row = status(harness, "ft")["leases"][0]
-    assert "destroyed_at" not in row and "destroyed_by" not in row
-
-
 def test_active_lease_verbose_keeps_actual_status(harness: Harness) -> None:
     add_lease(harness)
     row = by_lease(status(harness, "--verbose"))["l-0000a001"]

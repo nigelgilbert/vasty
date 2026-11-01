@@ -176,8 +176,6 @@ def lease_view(
     """Build one `status.leases` entry for a managed lease."""
     expiry = effective_expiry(lease.label)
     pending = lease.state == "pending"
-    expired = lease.state == "expired"
-    destroyed_at = lease.destroyed_at if lease.destroyed_at is not None else lease.history_since
     return LeaseView(
         lease=lease.lease,
         name=lease.label.name,
@@ -196,8 +194,6 @@ def lease_view(
         jobs=[job_view(job, now, lease) for job in lease.jobs],
         log_tail=log_tail,
         destroy_pending=True if lease.destroy_pending else None,
-        destroyed_at=iso(destroyed_at) if expired else None,
-        destroyed_by=lease.destroyed_by if expired else None,
         verbose=lease_verbose(lease) if verbose else None,
     )
 

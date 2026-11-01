@@ -27,9 +27,7 @@ label has none.
   active. When the stored label has no `expires`, the give-up reads `expires`
   from the row and passes that value to the destroy re-read.
 - The sweep sets it with state `expired` when it sends a destroy, whether Vast
-  accepts the call or fails it. An accepted destroy on an expired lease, first
-  call or retry, sets `destroyed_by` to the refresh's `by` and `destroyed_at`
-  to now. A lease that turns active again drops both.
+  accepts the call or fails it.
 - `refresh` resends the destroy while the row stays listed, and sets
   `destroy_pending` again on a listed `released` lease. The wait between calls
   starts at 5s and doubles per call up to 60s. A failed call sets
@@ -105,7 +103,6 @@ from vasty.models import (
     Job,
     Label,
     ProbeResult,
-    Sweeper,
     SweptEntry,
     WarningItem,
 )
@@ -378,13 +375,12 @@ def retry_delay(attempts: int) -> int:
 
 
 def _retry_destroy(
-    ctx: Context, lease: CachedLease, inst: Instance, label: Label, now: int, by: Sweeper
+    ctx: Context, lease: CachedLease, inst: Instance, label: Label, now: int
 ) -> SweptEntry | None:
     """Resend the destroy for a `destroy_pending` or `released` lease when its backoff allows.
 
     Return a failed `SweptEntry` when Vast rejects the call, and None when the
-    call is accepted, skipped by the re-read or held back by the backoff. An
-    accepted retry on an expired lease records `by` as `destroyed_by`.
+    call is accepted, skipped by the re-read or held back by the backoff.
     """
     if not lease.released_here and not past_clock(label, now):
         _clear_destroy(lease)
@@ -400,28 +396,20 @@ def _retry_destroy(
         error = err.code
     mark_destroy_sent(lease, now, error)
     if error is None:
-        if not lease.released_here:
-            _mark_destroyed(lease, now, by)
         return None
     return SweptEntry(
         lease.lease, label.name, label.owner, iso(min(now, effective_expiry(label))), False, error
     )
 
 
-def _mark_destroyed(lease: CachedLease, now: int, by: Sweeper) -> None:
-    lease.destroyed_by = by
-    lease.destroyed_at = now
-
-
 def _sweep(
-    ctx: Context, rows: _Rows, leases: dict[str, CachedLease], now: int, by: Sweeper
+    ctx: Context, rows: _Rows, leases: dict[str, CachedLease], now: int
 ) -> tuple[list[SweptEntry], dict[int, Instance | None], set[int]]:
     """Destroy managed rows past their clock and retry pending destroys.
 
     Return the swept entries with any failed retries, the rows to replace in
     the listing and the ids destroyed this call. A replacement is None for a
-    vanished row and the re-read row when `expires` moved. An accepted
-    destroy records `by` and the time on the lease.
+    vanished row and the re-read row when `expires` moved.
     """
     swept: list[SweptEntry] = []
     replaced: dict[int, Instance | None] = {}
@@ -429,7 +417,7 @@ def _sweep(
     for inst, label in rows.managed:
         cached = leases.get(label.lease)
         if cached is not None and (cached.destroy_pending or cached.state == "released"):
-            failed = _retry_destroy(ctx, cached, inst, label, now, by)
+            failed = _retry_destroy(ctx, cached, inst, label, now)
             if failed is not None:
                 swept.append(failed)
             continue
@@ -457,7 +445,6 @@ def _sweep(
         mark_destroy_sent(lease, now, error)
         if error is None:
             destroyed.add(inst.id)
-            _mark_destroyed(lease, now, by)
         leases[label.lease] = lease
         expired_at = iso(effective_expiry(label))
         swept.append(
@@ -654,12 +641,11 @@ def _probe_all(ctx: Context, leases: list[CachedLease], now: int) -> None:
         _apply_probe(ctx, lease, probed, now)
 
 
-def refresh(ctx: Context, probe: bool = True, by: Sweeper = "sweep") -> Snapshot:
+def refresh(ctx: Context, probe: bool = True) -> Snapshot:
     """List instances, sweep expired leases, reconcile the cache, probe running boxes and save.
 
     Account warnings cover `clock_unverified`, `label_unreadable` and
-    `cache_rebuilt`. Callers add per-lease and `orphan` warnings. `by` names
-    the caller in `destroyed_by` for each destroy its sweep makes.
+    `cache_rebuilt`. Callers add per-lease and `orphan` warnings.
     """
     with ctx.cache.lock():
         data = ctx.cache.load()
@@ -672,7 +658,7 @@ def refresh(ctx: Context, probe: bool = True, by: Sweeper = "sweep") -> Snapshot
             ))
         rows = classify(instances)
         leases = data.leases
-        swept, replaced, destroyed = _sweep(ctx, rows, leases, now, by)
+        swept, replaced, destroyed = _sweep(ctx, rows, leases, now)
         ctx.swept.extend(swept)
         instances = [
             row for row in (replaced.get(inst.id, inst) for inst in instances) if row is not None
@@ -703,8 +689,6 @@ def refresh(ctx: Context, probe: bool = True, by: Sweeper = "sweep") -> Snapshot
                 lease.state = "pending"
                 lease.history_since = None
                 lease.expired_at = None
-                lease.destroyed_by = None
-                lease.destroyed_at = None
             running = (inst.actual_status or "").strip().lower() == "running"
             if running and lease.running_at is None:
                 lease.running_at = now

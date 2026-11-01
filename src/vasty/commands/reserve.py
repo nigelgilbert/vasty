@@ -11,8 +11,9 @@ seconds.
 
 A refresh error during the wait writes one stderr line and the wait goes on.
 The wait writes one stderr line at each milestone: created, Vast `running`,
-SSH answering and startup done. The wait gives up at the lease's effective
-expiry with `box_unreachable`.
+SSH answering and startup done. The wait gives up with `box_unreachable`
+when SSH has not answered `SSH_WAIT_S` seconds after Vast reports `running`,
+and at the lease's effective expiry.
 Once SSH answers, every required port has `PORT_GRACE_S` seconds to show a
 mapping before `port_mapping_missing`; on a direct offer the required ports
 are every requested port, and a proxy offer has none. A box this call created
@@ -49,6 +50,7 @@ from vasty.models import (
 )
 from vasty.state import (
     GUARD_LAYERS,
+    SSH_WAIT_S,
     effective_expiry,
     gpu_matches,
     hardware_mismatch,
@@ -512,6 +514,15 @@ def _not_ready(lease: CachedLease) -> VastyError:
     )
 
 
+def _no_ssh(lease: CachedLease) -> VastyError:
+    return VastyError(
+        "box_unreachable",
+        f"Lease {lease.lease} answered no SSH for {format_duration(SSH_WAIT_S)} after Vast "
+        "reported it running.",
+        "Run vasty reserve again.",
+    )
+
+
 def wait_ready(
     ctx: Context, lease: CachedLease, required: list[int], created: bool
 ) -> tuple[CachedLease, list[SweptEntry], list[WarningItem]]:
@@ -575,6 +586,12 @@ def wait_ready(
                     "Run vasty reserve again; another offer maps its ports.",
                     details={"ports": unmapped},
                 ))
+        elif (
+            lease.running_at is not None
+            and lease.reachable_at is None
+            and now - lease.running_at >= SSH_WAIT_S
+        ):
+            raise _give_up(ctx, lease, created, _no_ssh(lease))
         elif now >= deadline:
             raise _give_up(ctx, lease, created, _not_ready(lease))
         _pause(ctx, lease, created)

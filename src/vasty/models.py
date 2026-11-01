@@ -168,8 +168,6 @@ LeaseState = Literal[
     "pending", "running", "unreachable", "stopped", "expired", "released", "gone", "orphan"
 ]
 HISTORY_STATES: frozenset[str] = frozenset({"expired", "released", "gone"})
-Sweeper = Literal["sweep", "follower"]
-"""A vasty sweep: a command's refresh or `vasty sweep --follow`."""
 SERVE_PORT = 8000
 
 
@@ -225,10 +223,6 @@ class CachedLease:
     """Set when the last probe returned no box time."""
     follower_pid: int | None = None
     """The pid of the last `vasty sweep --follow` this machine started for the lease."""
-    destroyed_by: Sweeper | None = None
-    """Which vasty sweep had its destroy accepted for the expired lease."""
-    destroyed_at: int | None = None
-    """When Vast accepted that destroy."""
 
 
 # Output shapes.
@@ -284,8 +278,6 @@ class LeaseView:
     jobs: list[JobView]
     log_tail: list[str] | None = field(default=None, metadata=OMIT_NONE)
     destroy_pending: bool | None = field(default=None, metadata=OMIT_NONE)
-    destroyed_at: str | None = field(default=None, metadata=OMIT_NONE)
-    destroyed_by: str | None = field(default=None, metadata=OMIT_NONE)
     verbose: dict[str, Any] | None = field(default=None, metadata=OMIT_NONE)
 
 

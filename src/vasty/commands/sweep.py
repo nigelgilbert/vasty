@@ -147,7 +147,7 @@ def _refresh(ctx: Context) -> engine.Snapshot:
     failures = 0
     while True:
         try:
-            return engine.refresh(ctx, probe=False, by="follower")
+            return engine.refresh(ctx, probe=False)
         except VastyError:
             failures += 1
             if failures > FOLLOW_RETRIES:
