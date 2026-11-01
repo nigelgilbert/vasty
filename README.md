@@ -154,7 +154,7 @@ A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fie
 |---|---|---|
 | `invalid_arguments` | 1 | a flag combination, name, duration, TIME or port list is invalid |
 | `invalid_config` | 1 | a config key or value is invalid |
-| `auth_missing` | 1 | no API key |
+| `auth_missing` | 1 | no API key in the `api_key_env` variable or `~/.config/vastai/vast_api_key` |
 | `dependency_missing` | 1 | `ssh` or `rsync` is not on PATH |
 | `no_offers` | 1 | no offer matches |
 | `lease_not_found` | 1 | unknown id or name |
@@ -312,6 +312,8 @@ vram = 24
 ```
 
 `startup` runs once on each box as root in `/workspace` after Vasty's own setup. The box reports `pending` until it exits 0. A failing hook leaves the box up with a `startup_failed` warning so you can `ssh` in and look.
+
+The API key comes from the environment variable named by `api_key_env`, `VAST_API_KEY` by default. When that is unset, vasty reads `~/.config/vastai/vast_api_key`, the file the `vastai` CLI writes. `config show` names the source in `api_key_source` and never prints the key.
 
 ## Status
 

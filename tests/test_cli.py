@@ -134,8 +134,54 @@ def test_status_without_api_key_is_auth_missing(
     result = json.loads(out)
     assert code == 1
     assert result["error"] == "auth_missing"
-    assert key_env in result["hint"]
+    key_file = str(harness.home / ".config" / "vastai" / "vast_api_key")
+    for text in (result["message"], result["hint"]):
+        assert key_env in text
+        assert key_file in text
     assert harness.http_calls == []
+
+
+def _real_provider_key(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, env_key: str | None, file_text: str | None
+) -> str:
+    """Build the real provider path and return the API key VastProvider receives."""
+    import vasty.provider
+
+    keys: list[str] = []
+
+    def record(api_key: str, *args: Any, **kw: Any) -> Any:
+        keys.append(api_key)
+        return object()
+
+    monkeypatch.setattr(vasty.provider, "VastProvider", record)
+    harness.env.pop("VAST_API_KEY", None)
+    if env_key is not None:
+        harness.env["VAST_API_KEY"] = env_key
+    if file_text is not None:
+        path = harness.home / ".config" / "vastai" / "vast_api_key"
+        path.parent.mkdir(parents=True)
+        path.write_text(file_text)
+    ctx = replace(harness.context(), provider_factory=None)
+    assert ctx.provider is not None
+    return keys[0]
+
+
+def test_api_key_from_vastai_file(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _real_provider_key(harness, monkeypatch, None, "  file-key\n") == "file-key"
+
+
+def test_api_key_env_beats_vastai_file(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _real_provider_key(harness, monkeypatch, "env-key", "file-key\n") == "env-key"
+
+
+def test_empty_vastai_file_is_auth_missing(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(VastyError) as exc:
+        _real_provider_key(harness, monkeypatch, None, " \n")
+    assert exc.value.code == "auth_missing"
 
 
 # Sweep entries of a failing command.

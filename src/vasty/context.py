@@ -120,15 +120,19 @@ class Context:
             if self.provider_factory is not None:
                 self._provider = self.provider_factory(self)
             else:
+                from vasty.config import api_key, vastai_key_path
+
                 key_env = self.settings.api_key_env
-                api_key = self.env.get(key_env)
-                if not api_key:
+                found = api_key(self.env, self.home, key_env)
+                if found is None:
+                    path = vastai_key_path(self.home)
                     raise VastyError(
-                        "auth_missing", f"No API key in {key_env}.", f"Export {key_env}."
+                        "auth_missing", f"No API key in {key_env} or {path}.",
+                        f"Export {key_env} or write the key to {path}.",
                     )
                 from vasty.provider import VastProvider
 
-                self._provider = VastProvider(api_key)
+                self._provider = VastProvider(found[0])
         return self._provider
 
     @property

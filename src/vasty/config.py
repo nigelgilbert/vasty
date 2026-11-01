@@ -12,6 +12,9 @@ values raise `invalid_config`. An unknown `--profile` name raises
 setting: the highest layer that sets either wins, and one table setting both
 raises `invalid_config`.
 
+`api_key` reads the env var named by `api_key_env`, then the vastai CLI key
+file at `~/.config/vastai/vast_api_key`.
+
 This module imports only the standard library, `vasty.errors`, `vasty.ids` and `vasty.timeutil`.
 """
 
@@ -362,6 +365,29 @@ def _load(path: Path, source: str, home: Path) -> ConfigFile | None:
 
 def user_config_path(home: Path) -> Path:
     return home / ".config" / "vasty" / "config.toml"
+
+
+def vastai_key_path(home: Path) -> Path:
+    """Return the file where the vastai CLI stores its API key."""
+    return home / ".config" / "vastai" / "vast_api_key"
+
+
+def api_key(env: Mapping[str, str], home: Path, key_env: str) -> tuple[str, str] | None:
+    """Return the API key and its source, the env var name or the vastai key file path.
+
+    The env var named by `key_env` wins. An unset or empty env var falls back
+    to the vastai CLI file with whitespace stripped. Return None when neither
+    holds a key.
+    """
+    key = env.get(key_env)
+    if key:
+        return key, key_env
+    path = vastai_key_path(home)
+    try:
+        key = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return (key, str(path)) if key else None
 
 
 def project_config_paths(cwd: Path) -> tuple[Path, Path]:

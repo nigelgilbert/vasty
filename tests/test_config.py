@@ -507,11 +507,42 @@ def test_config_show_human(harness: Harness) -> None:
     code, out, _ = harness.run("config", "show", "--plain")
     assert code == 0
     lines = out.strip().splitlines()
-    assert len(lines) == 16
+    assert len(lines) == 17
     rows = {line.split()[0]: line.split()[1:] for line in lines}
     assert rows["image"] == ["my/img", "project"]
     assert rows["ttl"] == ["30m", "default"]
     assert rows["max_price"] == ["0.60", "default"]
+    assert rows["api_key_source"] == ["-"]
+
+
+@pytest.mark.parametrize(
+    ("env_key", "file_key", "source"),
+    [
+        ("env-secret", None, "VAST_API_KEY"),
+        (None, "file-secret", "FILE"),
+        ("env-secret", "file-secret", "VAST_API_KEY"),
+        (None, None, None),
+    ],
+)
+def test_config_show_names_api_key_source(
+    harness: Harness, env_key: str | None, file_key: str | None, source: str | None
+) -> None:
+    key_file = harness.home / ".config" / "vastai" / "vast_api_key"
+    if env_key is not None:
+        harness.env["VAST_API_KEY"] = env_key
+    if file_key is not None:
+        write(key_file, file_key + "\n")
+    expected = str(key_file) if source == "FILE" else source
+    code, out, _ = harness.run("config", "show")
+    assert code == 0
+    assert json.loads(out)["api_key_source"] == expected
+    code, plain, _ = harness.run("config", "show", "--plain")
+    assert code == 0
+    row = next(line for line in plain.splitlines() if line.startswith("api_key_source"))
+    assert row.split()[1:] == [expected or "-"]
+    for text in (out, plain):
+        assert "env-secret" not in text
+        assert "file-secret" not in text
 
 
 def test_config_show_cuda_from_env(harness: Harness) -> None:
