@@ -20,7 +20,7 @@ Read @docs/principles.md before proposing or reviewing a change. Reviewers work 
 - Stay on the named task or defect list. Raise anything else as a one-line note.
 - Name branches `<type>/<description>`.
 - Squash merge PRs with `gh pr merge N --squash`.
-- Keep loop outputs, validation reports and test plans out of PRs.
+- Delete loop outputs, validation reports and test plans from the branch before squash merging.
 - Write PR descriptions that stand alone, with no pointers to internal docs.
 - Don't propose a merge while fix items remain on the branch.
 - Check for a live run before starting one. Live runs share one account.
