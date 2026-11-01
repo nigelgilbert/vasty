@@ -9,7 +9,7 @@ from fakes import NOW, FakeReserve, Harness, add_lease
 from vasty.commands import serve
 from vasty.errors import VastyError
 from vasty.models import Job
-from vasty.remote import BoxUnreachableError, ExecResult, SshTarget
+from vasty.remote import LOG_TAIL_BYTES, BoxUnreachableError, ExecResult, SshTarget
 
 QWEN = "Qwen/Qwen3-14B-AWQ"
 VLLM_PROFILE = '[profiles.vllm]\nimage = "vllm/vllm-openai:v0.32.0"\nvram = 24\ncuda = 13\n'
@@ -203,12 +203,17 @@ def test_serve_failed_log_tail_keeps_last_lines_and_redacts_key(
     assert KEY not in json.dumps(data)
 
 
-def test_redact_tail_keeps_the_last_64_kib() -> None:
+def test_redact_tail_keeps_whole_lines_within_the_byte_bound() -> None:
     lines = [f"{n:04d}" + "x" * 995 for n in range(100)]
     tail = serve.redact_tail(lines, KEY)
-    assert len("\n".join(tail).encode("utf-8")) == serve.LOG_TAIL_BYTES
-    assert tail[-1] == lines[-1]
-    assert tail[1:] == lines[-(len(tail) - 1):]
+    assert tail == lines[-16:]
+    assert len("\n".join(tail).encode("utf-8")) <= LOG_TAIL_BYTES
+
+
+def test_redact_tail_collapses_progress_bars() -> None:
+    bar = "".join(f"\rLoading {n}%|{'#' * n}" for n in range(101))
+    tail = serve.redact_tail(["start", bar, f"key {KEY}"], KEY)
+    assert tail == ["start", f"Loading 100%|{'#' * 100}", "key <redacted>"]
 
 
 def test_serve_vllm_missing_on_box(

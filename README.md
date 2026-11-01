@@ -147,7 +147,7 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 | bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error`; `extend` adds `previous_expires_at` and `expires_at`; `release` adds `name`, `uptime_s`, `cost`, `jobs`, `destroy_pending` and `already_absent`, or `name` and `message` when it fails |
 | `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s` |
 | `status` | `leases`, `totals`, `cached_at`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
-| job entry in `status` and `release` `jobs` | `job`, `cmd`, `state`, `exit`, `duration_s`. `state` is `running`, `serving`, `exited`, `killed` or `unknown`. `release` marks live jobs `killed` with a null `exit` and freezes `duration_s`. `stop` marks its job `killed` with the job's exit code |
+| job entry in `status` and `release` `jobs` | `job`, `cmd`, `state`, `exit`, `duration_s`. `state` is `running`, `serving`, `exited`, `killed` or `unknown`. `release` marks live jobs `killed` with a null `exit` and freezes `duration_s`. A job on a history lease stops its `duration_s` at the lease's end. `stop` marks its job `killed` with the job's exit code |
 | attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `error`. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
 | `run --detach` | `lease`, `job`, `gpu`, `price_per_hr`, `log_path`, `expires_at`, `ttl_remaining_s` |
 | `serve` | `lease`, `job`, `model`, `url`, `api_key`, `expires_at` |
@@ -158,7 +158,7 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 
 `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at` and `ttl_remaining_s`.
 
-`busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. `uptime_s` counts from vasty's first `running` sample and is null before it. `--verbose` shows that sample as `running_at`.
+`busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. `uptime_s` counts from vasty's first `running` sample and is null before it. An orphan's `uptime_s` counts from Vast's `start_date`. `--verbose` shows that sample as `running_at`.
 
 ### Error codes
 

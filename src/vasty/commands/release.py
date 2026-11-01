@@ -145,7 +145,7 @@ def summarize(
     lease: CachedLease, now: int, snap: Snapshot, already_absent: bool = False
 ) -> ReleaseSummary:
     """Build the release summary from the cached lease."""
-    jobs = [views.job_view(job, now, lease.state) for job in lease.jobs]
+    jobs = [views.job_view(job, now, lease) for job in lease.jobs]
     return ReleaseSummary(
         lease=lease.lease,
         name=lease.label.name,

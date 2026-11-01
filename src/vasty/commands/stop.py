@@ -82,7 +82,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         finished = record.finished_at or now
         save_lease(ctx, lease, lambda found: finish_job(found, job.id, code, finished, "killed"))
     stopped = next(j for j in lease.jobs if j.id == job.id)
-    view = views.job_view(record if running else stopped, now, lease.state)
+    view = views.job_view(record if running else stopped, now, lease)
     result = StopResult(
         lease=lease.lease,
         job=view.job,

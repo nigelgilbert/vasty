@@ -37,6 +37,7 @@ from vasty.remote import (
     ExecResult,
     SshTarget,
     following_job_id,
+    tail_lines,
 )
 from vasty.timeutil import day_start
 
@@ -392,7 +393,7 @@ class FakeBox:
             if not box.jobs:
                 return []
             job_id = list(box.jobs)[-1]
-        return box.logs.get(job_id, [])[-lines:]
+        return tail_lines("\n".join(box.logs.get(job_id, [])), lines)
 
     def exec(self, target: SshTarget, command: str, timeout: float | None = None) -> ExecResult:
         box = self._get(target)

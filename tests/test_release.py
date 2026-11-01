@@ -8,6 +8,7 @@ from typing import Any
 
 from fakes import NOW, START, Harness, add_lease
 
+from vasty import views
 from vasty.errors import VastyError
 from vasty.models import Instance, Job
 
@@ -104,6 +105,15 @@ def test_release_freezes_killed_job_duration(harness: Harness) -> None:
         harness.time.advance(120)
         _, out, _ = harness.run("status", "l-0000a001")
         assert json.loads(out)["leases"][0]["jobs"] == [entry]
+
+
+def test_history_job_duration_stops_at_the_lease_end(harness: Harness) -> None:
+    add_lease(harness)
+    harness.run("status")
+    lease = cached(harness, "l-0000a001")
+    lease.state, lease.history_since = "released", NOW + 426
+    job = Job(id="j-1", cmd="train", started_at=NOW - 60, exit=None, state="running")
+    assert views.job_view(job, NOW + 20_000, lease).duration_s == 486
 
 
 def test_release_while_loading_reports_null_uptime(harness: Harness) -> None:

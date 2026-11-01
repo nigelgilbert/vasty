@@ -104,6 +104,11 @@ def test_status_orphan_row(account: Harness) -> None:
     assert row["price_per_hr"] == 0.22
 
 
+def test_status_orphan_uptime_from_start_date(harness: Harness) -> None:
+    harness.provider.add_instance(id=55120, label=None, start_date=NOW - 900)
+    assert by_lease(status(harness))["i-55120"]["uptime_s"] == 900
+
+
 def test_status_orphan_hardware_from_instance_row(harness: Harness) -> None:
     harness.provider.add_instance(id=55120, label=None, num_gpus=2, gpu_ram_gb=12.288)
     row = by_lease(status(harness))["i-55120"]
