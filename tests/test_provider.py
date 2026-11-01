@@ -15,6 +15,7 @@ import requests
 from vasty.errors import VastyError
 from vasty.models import Balance, CreateRequest, OfferQuery
 from vasty.provider import (
+    CreateRejected,
     ProviderTimeout,
     VastProvider,
     build_offer_query,
@@ -328,6 +329,21 @@ def test_create_rejection_is_provider_error(failure: requests.Response) -> None:
         provider.create(request())
     assert not isinstance(exc.value, ProviderTimeout)
     assert exc.value.code == "provider_error"
+
+
+def test_create_success_false_raises_create_rejected() -> None:
+    provider, _, _ = make(always(resp(200, {"success": False, "msg": "offer taken"})))
+    with pytest.raises(CreateRejected) as exc:
+        provider.create(request())
+    assert exc.value.code == "provider_error"
+    assert "offer taken" in exc.value.message
+
+
+def test_create_http_error_is_not_create_rejected() -> None:
+    provider, _, _ = make(always(resp(400, {"error": "invalid_args", "msg": "bad image"})))
+    with pytest.raises(VastyError) as exc:
+        provider.create(request())
+    assert not isinstance(exc.value, CreateRejected)
 
 
 # The real SDK client with its session patched.

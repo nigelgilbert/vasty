@@ -3,15 +3,19 @@
 `reserve_lease` does the work for `reserve` and for auto-reserved `run` and
 `serve`. Under the `leases.json` lock it checks the name, searches offers,
 registers the SSH key and creates the instance. A create
-that times out is recovered by listing instances for the lease id. Outside
-the lock it starts `vasty sweep --follow` for the lease and waits for the
-lease to leave `pending` by refreshing every `WAIT_POLL_S` seconds.
+that times out is recovered by listing instances for the lease id. A create
+that returns `success: false` lists instances for the lease id and destroys
+each one. Outside the lock it starts `vasty sweep --follow` for the lease and
+waits for the lease to leave `pending` by refreshing every `WAIT_POLL_S`
+seconds.
 
+A refresh error during the wait writes one stderr line and the wait goes on.
 The wait gives up at the lease's effective expiry with `box_unreachable`.
 Once SSH answers, every required port has `PORT_GRACE_S` seconds to show a
 mapping before `port_mapping_missing`; on a direct offer the required ports
 are every requested port, and a proxy offer has none. A box this call created
-and then gave up on is destroyed before the error propagates.
+and then gave up on is destroyed before the error propagates. Every error
+raised after create carries `lease` and `destroyed` in its details.
 """
 
 from __future__ import annotations
@@ -321,13 +325,17 @@ def create_with_recovery(ctx: Context, request: CreateRequest, lease_id: str) ->
     Return the created row, or its instance id when no row is at hand. Keep
     the lowest instance id among several matches and destroy the rest. Raise
     `provider_error` naming the lease id when no match appears within 60s.
+    On a `success: false` create, destroy every match and raise the create
+    error through `_clear_rejected`.
     """
-    from vasty.provider import ProviderTimeout
+    from vasty.provider import CreateRejected, ProviderTimeout
 
     try:
         return ctx.provider.create(request)
     except ProviderTimeout:
         pass
+    except CreateRejected as err:
+        raise _clear_rejected(ctx, lease_id, err) from None
     waited = 0.0
     while True:
         try:
@@ -353,8 +361,41 @@ def create_with_recovery(ctx: Context, request: CreateRequest, lease_id: str) ->
         "provider_error",
         f"Create timed out and no instance carries lease {lease_id} after {RECOVER_WINDOW_S}s.",
         f"Run vasty status to look for {lease_id} before reserving again.",
-        details={"lease": lease_id},
+        details={"lease": lease_id, "destroyed": False},
     )
+
+
+def _clear_rejected(ctx: Context, lease_id: str, err: VastyError) -> VastyError:
+    """List instances for `lease_id` after a `success: false` create and destroy each one.
+
+    Return `err` with `lease`, `instance_id` and `destroyed` added to its
+    details. `instance_id` is the lowest matching id, or None when no row
+    carries the lease. `destroyed` is true when Vast accepted every destroy.
+    A failed list or destroy writes one stderr line naming the fix.
+    """
+    try:
+        rows = _rows_for(ctx.provider.list_instances(), lease_id)
+    except VastyError as failure:
+        ctx.warn(
+            f"vasty: could not list instances for {lease_id}: {failure.message}"
+            f" Run vasty status to look for {lease_id}."
+        )
+        rows = []
+    destroyed = bool(rows)
+    for inst in rows:
+        try:
+            ctx.provider.destroy(inst.id)
+        except VastyError as failure:
+            destroyed = False
+            ctx.warn(
+                f"vasty: could not destroy instance {inst.id} for {lease_id}: {failure.message}"
+                f" Run vasty release i-{inst.id} --yes."
+            )
+    instance_id = rows[0].id if rows else None
+    err.details = {
+        **(err.details or {}), "lease": lease_id, "instance_id": instance_id, "destroyed": destroyed,
+    }
+    return err
 
 
 def _new_cached(
@@ -392,10 +433,17 @@ def _give_up(ctx: Context, lease: CachedLease, created: bool, err: _E) -> _E:
     probe may have written the clock to the label before the wait stopped.
     The lease turns `released` only when Vast accepts the destroy or the row
     is already gone. Otherwise it stays active and a stderr line names the
-    `vasty release` fix.
+    `vasty release` fix. A `VastyError` gets `lease` and `destroyed` added to
+    its details.
     """
-    if not created:
-        return err
+    destroyed = created and _destroy_created(ctx, lease)
+    if isinstance(err, VastyError):
+        _name_lease(err, lease, destroyed)
+    return err
+
+
+def _destroy_created(ctx: Context, lease: CachedLease) -> bool:
+    """Destroy the lease's box and mark it `released`. Return True when the lease turned `released`."""
     fix = f"Run vasty release {lease.lease}."
     try:
         expires = lease.label.expires
@@ -404,12 +452,27 @@ def _give_up(ctx: Context, lease: CachedLease, created: bool, err: _E) -> _E:
         destroyed = engine.destroy_checked(ctx, lease.instance_id, expires)
         if not destroyed and ctx.provider.get_instance(lease.instance_id) is not None:
             ctx.warn(f"vasty: {lease.lease} changed before it could be destroyed. {fix}")
-            return err
+            return False
         engine.mark_released(lease, ctx.clock.now())
         engine.store_lease(ctx, lease)
     except VastyError as failure:
         ctx.warn(f"vasty: could not destroy {lease.lease}: {failure.message} {fix}")
+        return False
+    return True
+
+
+def _name_lease(err: VastyError, lease: CachedLease, destroyed: bool) -> VastyError:
+    """Add `lease` and `destroyed` to the details of `err` and return it."""
+    err.details = {**(err.details or {}), "lease": lease.lease, "destroyed": destroyed}
     return err
+
+
+def _not_ready(lease: CachedLease) -> VastyError:
+    return VastyError(
+        "box_unreachable",
+        f"Lease {lease.lease} did not become ready before its clock ran out.",
+        "Run vasty reserve again, or pick another offer with --gpu or --region.",
+    )
 
 
 def wait_ready(
@@ -419,25 +482,32 @@ def wait_ready(
 
     Return the lease, the entries every refresh swept and the latest account
     warnings. Raise `box_unreachable`, `image_unsupported` or
-    `port_mapping_missing`. A refresh error or Ctrl-C during the wait destroys
-    a box this call created and re-raises.
+    `port_mapping_missing`. A refresh error writes one stderr line and the
+    wait goes on until the lease's effective expiry. Ctrl-C during the wait
+    destroys a box this call created and re-raises.
     """
     swept: list[SweptEntry] = []
     ready_at: int | None = None
     while True:
         try:
             snap = engine.refresh(ctx)
-        except (VastyError, KeyboardInterrupt) as exc:
+        except KeyboardInterrupt as exc:
             raise _give_up(ctx, lease, created, exc)
+        except VastyError as err:
+            ctx.warn(f"vasty: refresh failed while waiting for {lease.lease}: {err.message}")
+            if ctx.clock.now() >= effective_expiry(lease.label):
+                raise _give_up(ctx, lease, created, _not_ready(lease)) from None
+            _pause(ctx, lease, created)
+            continue
         swept = merge_swept(swept, snap.swept)
         now = snap.now
         fresh = snap.leases.get(lease.lease)
         if fresh is None or fresh.state in HISTORY_STATES:
-            raise VastyError(
+            raise _name_lease(VastyError(
                 "box_unreachable",
                 f"Lease {lease.lease} ended before it became ready.",
                 f"Run vasty status {lease.lease}, then vasty reserve again.",
-            )
+            ), lease, False)
         lease = fresh
         if lease.unsupported:
             missing = ", ".join(lease.unsupported)
@@ -462,15 +532,16 @@ def wait_ready(
                     details={"ports": unmapped},
                 ))
         elif now >= deadline:
-            raise _give_up(ctx, lease, created, VastyError(
-                "box_unreachable",
-                f"Lease {lease.lease} did not become ready before its clock ran out.",
-                "Run vasty reserve again, or pick another offer with --gpu or --region.",
-            ))
-        try:
-            ctx.sleep(WAIT_POLL_S)
-        except (VastyError, KeyboardInterrupt) as exc:
-            raise _give_up(ctx, lease, created, exc)
+            raise _give_up(ctx, lease, created, _not_ready(lease))
+        _pause(ctx, lease, created)
+
+
+def _pause(ctx: Context, lease: CachedLease, created: bool) -> None:
+    """Sleep `WAIT_POLL_S`. On an error or Ctrl-C, destroy a box this call created and re-raise."""
+    try:
+        ctx.sleep(WAIT_POLL_S)
+    except (VastyError, KeyboardInterrupt) as exc:
+        raise _give_up(ctx, lease, created, exc)
 
 
 def reserve_result(

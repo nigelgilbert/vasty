@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from fakes import NOW, Harness, add_lease, make_offer, timeout_error
+from fakes import NOW, Harness, add_lease, make_offer, rejected_error, timeout_error
 from vasty import engine
 from vasty.commands import reserve
 from vasty.config import user_config_path
@@ -274,7 +274,7 @@ def test_port_mapping_missing_destroys_box(h: Harness) -> None:
     code, data = run_json(h, "reserve")
     assert code == 2
     assert data["error"] == "port_mapping_missing"
-    assert data["details"] == {"ports": [8080]}
+    assert data["details"] == {"ports": [8080], "lease": "l-abababab", "destroyed": True}
     assert len(h.provider.destroyed) == 1
     assert h.time.wall_now >= NOW + reserve.PORT_GRACE_S
 
@@ -617,22 +617,50 @@ def test_give_up_keeps_stored_expires_when_row_differs(
     assert h.provider.destroyed == []
 
 
-def test_refresh_error_during_wait_destroys_box(
-    h: Harness, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    h.provider.start_status = "loading"
+def fail_list_on_sleep(h: Harness, monkeypatch: pytest.MonkeyPatch, times: int) -> None:
+    """Fail the list call after each of the first `times` sleeps, then let the box run."""
     real_sleep = h.time.sleep
+    sleeps: list[float] = []
 
     def sleep(seconds: float) -> None:
-        h.provider.fail["list_instances"] = VastyError("provider_error", "list failed", "retry")
+        sleeps.append(seconds)
+        if len(sleeps) <= times:
+            h.provider.fail["list_instances"] = VastyError("provider_error", "list failed", "retry")
+        else:
+            for inst in h.provider.instances.values():
+                inst.actual_status = "running"
         real_sleep(seconds)
 
     monkeypatch.setattr(h.time, "sleep", sleep)
-    code, data = run_json(h, "reserve")
+
+
+def test_refresh_error_during_wait_warns_and_keeps_waiting(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h.provider.start_status = "loading"
+    fail_list_on_sleep(h, monkeypatch, 1)
+    code, out, err = h.run("reserve")
+    data = json.loads(out)
+    assert code == 0, data
+    assert data["state"] == "running"
+    assert err.count("vasty: refresh failed while waiting for l-abababab: list failed") == 1
+    assert h.provider.destroyed == []
+
+
+def test_refresh_errors_for_the_whole_clock_end_with_box_unreachable(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h.provider.start_status = "loading"
+    fail_list_on_sleep(h, monkeypatch, 10_000)
+    code, out, err = h.run("reserve", "--ttl", "5m")
+    data = json.loads(out)
     assert code == 2
-    assert (data["error"], data["message"]) == ("provider_error", "list failed")
+    assert data["error"] == "box_unreachable"
+    assert "l-abababab" in data["message"]
+    assert data["details"] == {"lease": "l-abababab", "destroyed": True}
     assert h.provider.destroyed == [1001]
-    assert calls(h, "destroy") == [1001]
+    assert NOW + 300 <= h.time.wall_now < NOW + 300 + reserve.WAIT_POLL_S + 1
+    assert err.count("vasty: refresh failed while waiting for l-abababab") == 30
 
 
 # Name idempotency.
@@ -860,6 +888,41 @@ def test_create_timeout_no_match_returns_provider_error(h: Harness) -> None:
     assert len(lists) == 1 + reserve.RECOVER_WINDOW_S // int(reserve.RECOVER_POLL_S) + 1
 
 
+def test_create_rejected_destroys_the_labelled_instance(h: Harness) -> None:
+    h.provider.reject_created = True
+    code, data = run_json(h, "reserve")
+    assert code == 2
+    assert data["error"] == "provider_error"
+    assert "offer taken" in data["message"]
+    details = data["details"]
+    assert (details["lease"], details["instance_id"], details["destroyed"]) == (
+        "l-abababab", 1001, True)
+    assert h.provider.destroyed == [1001]
+    assert calls(h, "destroy") == [1001]
+    assert h.provider.instances == {}
+
+
+def test_create_rejected_without_an_instance_destroys_nothing(h: Harness) -> None:
+    h.provider.fail["create"] = rejected_error()
+    code, data = run_json(h, "reserve")
+    assert code == 2
+    assert data["error"] == "provider_error"
+    details = data["details"]
+    assert (details["lease"], details["instance_id"], details["destroyed"]) == (
+        "l-abababab", None, False)
+    assert calls(h, "destroy") == []
+
+
+def test_create_rejected_failed_destroy_names_release_fix(h: Harness) -> None:
+    h.provider.reject_created = True
+    h.provider.fail["destroy"] = VastyError("provider_error", "boom.", "retry")
+    code, out, err = h.run("reserve")
+    data = json.loads(out)
+    assert code == 2
+    assert (data["details"]["instance_id"], data["details"]["destroyed"]) == (1001, False)
+    assert "vasty: could not destroy instance 1001 for l-abababab: boom. Run vasty release i-1001 --yes." in err
+
+
 def test_create_error_other_than_timeout_is_not_retried(h: Harness) -> None:
     h.provider.fail["create"] = VastyError("provider_error", "no", "Run vasty status.")
     code, data = run_json(h, "reserve")
@@ -882,3 +945,81 @@ def test_reserve_lease_accepts_sparse_args(h: Harness) -> None:
     assert reserved.result.state == "running"
     assert reserved.lease.label.ttl == 7200
     assert reserved.result.ttl_remaining_s == 7200
+
+
+# Every error after create names the lease and whether the box was destroyed.
+
+
+def _rejected_with_row(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    h.provider.reject_created = True
+
+
+def _rejected_without_row(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    h.provider.fail["create"] = rejected_error()
+
+
+def _timeout_without_row(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _timing_out_create(h, 0)
+
+
+def _unsupported(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    unsupported_image(h)
+
+
+def _port_missing(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    def drop_port(inst: Instance, req: CreateRequest) -> None:
+        boot(h, inst, req)
+        del inst.ports[8080]
+
+    h.provider.on_create = drop_port
+
+
+def _never_ready(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    h.provider.start_status = "loading"
+
+
+def _refresh_always_fails(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    h.provider.start_status = "loading"
+    fail_list_on_sleep(h, monkeypatch, 10_000)
+
+
+def _ended_before_ready(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    h.provider.start_status = "loading"
+    real_sleep = h.time.sleep
+
+    def sleep(seconds: float) -> None:
+        h.provider.instances.clear()
+        real_sleep(seconds)
+
+    monkeypatch.setattr(h.time, "sleep", sleep)
+
+
+def _sleep_error(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    h.provider.start_status = "loading"
+
+    def sleep(seconds: float) -> None:
+        raise VastyError("provider_error", "sleep failed", "retry")
+
+    monkeypatch.setattr(h.time, "sleep", sleep)
+
+
+@pytest.mark.parametrize(("setup", "error", "destroyed"), [
+    (_rejected_with_row, "provider_error", True),
+    (_rejected_without_row, "provider_error", False),
+    (_timeout_without_row, "provider_error", False),
+    (_unsupported, "image_unsupported", True),
+    (_port_missing, "port_mapping_missing", True),
+    (_never_ready, "box_unreachable", True),
+    (_refresh_always_fails, "box_unreachable", True),
+    (_ended_before_ready, "box_unreachable", False),
+    (_sleep_error, "provider_error", True),
+])
+def test_every_error_after_create_names_lease_and_destroyed(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, setup: Any, error: str, destroyed: bool
+) -> None:
+    setup(h, monkeypatch)
+    code, data = run_json(h, "reserve", "--image", "alpine:3", "--ttl", "5m")
+    assert code != 0
+    assert data["error"] == error
+    assert data["details"]["lease"] == "l-abababab"
+    assert data["details"]["destroyed"] is destroyed

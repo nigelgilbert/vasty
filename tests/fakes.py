@@ -29,7 +29,7 @@ from vasty.models import (
     ProbeResult,
     SshKey,
 )
-from vasty.provider import ProviderTimeout, parse_charges
+from vasty.provider import CreateRejected, ProviderTimeout, parse_charges
 from vasty.remote import (
     CLOCK_TOLERANCE_S,
     BoxUnreachableError,
@@ -98,6 +98,8 @@ class FakeProvider:
     on_create: Callable[[Instance, CreateRequest], None] | None = None
     keep_rows: bool = False
     """When set, `destroy` accepts the call and leaves the row listed."""
+    reject_created: bool = False
+    """When set, `create` adds the row and then raises `rejected_error()`."""
     _ids: Any = field(default_factory=lambda: itertools.count(1001))
     _date: tuple[float, float] | None = None
 
@@ -148,6 +150,8 @@ class FakeProvider:
         )
         if self.on_create is not None:
             self.on_create(inst, request)
+        if self.reject_created:
+            raise rejected_error()
         return inst.id
 
     def list_instances(self) -> list[Instance]:
@@ -200,6 +204,14 @@ class FakeProvider:
 
 def timeout_error() -> ProviderTimeout:
     return ProviderTimeout("create timed out")
+
+
+def rejected_error() -> CreateRejected:
+    """Return the error a `success: false` create body raises."""
+    return CreateRejected(
+        "provider_error", "Vast create failed: offer taken", "Check the request and retry.",
+        {"action": "create", "response": {"msg": "offer taken"}},
+    )
 
 
 @dataclass

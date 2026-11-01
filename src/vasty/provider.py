@@ -15,6 +15,7 @@ Endpoints and the fields read from each response:
   (else `reliability2`), `inet_down`, `direct_port_count`, `geolocation`.
 - Create: SDK `instances.create_instance_from_payload` (`PUT /asks/{id}/`)
   on a client with one attempt. Reads `success`, `new_contract`, `msg`, `error`.
+  A `success: false` body raises `CreateRejected`.
 - List: SDK `instances.show_instances_v1` (`GET /api/v1/instances/`), paged
   by passing each `next_token` back as `after_token`. Reads `instances[]`
   and `next_token`.
@@ -53,6 +54,10 @@ class ProviderTimeout(VastyError):
 
     def __init__(self, message: str) -> None:
         super().__init__("provider_error", message, "Run vasty status.")
+
+
+class CreateRejected(VastyError):
+    """A create call returned `success: false`; Vast may still list a labelled instance."""
 
 
 class Provider(Protocol):
@@ -435,7 +440,7 @@ class VastProvider:
             if _may_have_created(exc):
                 raise ProviderTimeout(f"Vast create may have succeeded: {_describe(exc)}.") from exc
             raise _provider_error("create", exc) from exc
-        _check_success(data, "create")
+        _check_success(data, "create", CreateRejected)
         new_id = _to_int(data.get("new_contract")) if isinstance(data, dict) else None
         if new_id is None:
             raise ProviderTimeout("Vast create returned no new_contract.")
@@ -656,11 +661,11 @@ def _body_message(response: Any) -> str:
     return json.dumps(data)[:200]
 
 
-def _check_success(data: object, action: str) -> None:
-    """Raise `provider_error` when a 2xx body reports `success: false`."""
+def _check_success(data: object, action: str, kind: type[VastyError] = VastyError) -> None:
+    """Raise a `provider_error` of type `kind` when a 2xx body reports `success: false`."""
     if isinstance(data, dict) and data.get("success") is False:
         message = data.get("msg") or data.get("error") or "success is false"
-        raise VastyError(
+        raise kind(
             "provider_error",
             f"Vast {action} failed: {message}",
             "Check the request and retry.",
