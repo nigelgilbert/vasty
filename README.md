@@ -79,6 +79,8 @@ Hardware flags on `reserve`, `run` and `serve`: `--gpu NAME`, `--vram MIN_GB`, `
 
 A new box comes from the matching offer with the highest reliability, then the highest download bandwidth, then the lowest price, then the lowest offer id.
 
+`extend --by D` adds D to the clock. `extend --to D` sets the clock to D from now.
+
 `run --sync DIR` pushes the contents of DIR into `/workspace/` before the command starts. Every `run` job starts in `/workspace`. `sync pull` creates DEST's parent directory.
 
 Every verb takes `--json` and `--verbose`.
@@ -145,7 +147,7 @@ Every JSON result except `config`, `completion` and error objects carries `warni
 | `reserve` | the lease: `lease`, `name`, `owner`, `group`, `state`, `reused`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `expires_at`, `ttl_remaining_s`, `ssh`, `rsync_target`, `ssh_port`, `ports` |
 | `extend` on one lease | `lease`, `previous_expires_at`, `expires_at`, `ttl_remaining_s`. The label's `ttl` keeps the reserve's value |
 | `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending`, and `already_absent` when the lease was already gone. `destroy_pending` is true from the destroy call until a refresh sees the instance gone from the provider listing |
-| bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error`; `extend` adds `previous_expires_at` and `expires_at`; `release` adds `name`, `uptime_s`, `cost`, `jobs`, `destroy_pending` and `already_absent`, or `name` and `message` when it fails |
+| bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error`; `extend` adds `previous_expires_at` and `expires_at`; `release` adds `name`, `uptime_s`, `cost`, `jobs`, `destroy_pending` and `already_absent`, true when the lease was already gone, or `name` and `message` when it fails |
 | `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s` |
 | `status` | `leases`, `totals`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
 | job entry in `status` and `release` `jobs` | `job`, `cmd`, `state`, `exit`, `duration_s`. `state` is `running`, `serving`, `exited`, `killed` or `unknown`. `release` marks live jobs `killed` with a null `exit` and freezes `duration_s`. A job on a history lease stops its `duration_s` at the lease's end. `stop` marks its job `killed` with the job's exit code |
@@ -303,7 +305,7 @@ Any machine with the API key sees the same leases, owners and groups. An instanc
 
 Resolution order, highest first: flags, `--profile NAME`, `VASTY_*` environment variables, `./vasty.toml`, `~/.config/vasty/config.toml`, built-in defaults. `vasty config show` prints every effective value and its source. `--help` prints the built-in defaults.
 
-`reserve`, `run` and `serve` all read `ttl` through this order. An auto-reserved `run` or `serve` without `--ttl` gets the 30m built-in; earlier releases gave it 2h.
+`reserve`, `run` and `serve` all read `ttl` through this order. When no layer sets `ttl`, an auto-reserved `run` or `serve` gets the 30m built-in; earlier releases gave it 2h.
 
 `any` clears `gpu` or `region`, so `--gpu any` or `gpu = "any"` in a profile drops a pin from a lower layer.
 

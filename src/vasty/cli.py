@@ -198,7 +198,7 @@ def build_parser() -> Parser:
     p.add_argument("--detach", action="store_true",
                    help="return once the job starts and leave the box up")
     p.add_argument("--sync", dest="sync_dir", metavar="DIR",
-                   help="push DIR to the box before the command; default: none")
+                   help="push DIR's contents into /workspace before the command; default: none")
     _reserve_flags(p, reserve_help)
 
     p = sub.add_parser("serve", parents=[out], help="serve a model behind an OpenAI endpoint",
