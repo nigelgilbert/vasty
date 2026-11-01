@@ -243,6 +243,41 @@ def test_rsync_protects_the_state_dir_only_on_push_with_delete(tmp_path: Path) -
     assert not any(a.startswith("--filter=") for a in pushed + pulled)
 
 
+@pytest.mark.parametrize(
+    ("dest", "rsync_path"),
+    [
+        ("/workspace/a/b/", "mkdir -p /workspace/a/b && rsync"),
+        ("/workspace/a/b", "mkdir -p /workspace/a && rsync"),
+        ("out/run 1/", "mkdir -p '/workspace/out/run 1' && rsync"),
+        ("model.bin", "mkdir -p /workspace && rsync"),
+        ("~/a/b", "mkdir -p a && rsync"),
+        ("/", None),
+        ("/data", None),
+        ("~", None),
+        ("~/", None),
+        ("~/a", None),
+    ],
+)
+@pytest.mark.parametrize("protect", [True, False])
+def test_rsync_push_creates_the_destination_parent(
+    tmp_path: Path, dest: str, rsync_path: str | None, protect: bool
+) -> None:
+    box = fake_box(tmp_path, FakeRunner(), protect_args=protect)
+    argv = box.rsync_argv(TARGET, True, "./", dest, False, [])
+    paths = [a for a in argv if a.startswith("--rsync-path")]
+    if rsync_path is None:
+        assert paths == []
+    else:
+        assert paths == [f"--rsync-path={rsync_path}"]
+        assert argv.index(paths[0]) < argv.index("-e")
+
+
+def test_rsync_pull_passes_no_rsync_path(tmp_path: Path) -> None:
+    box = fake_box(tmp_path, FakeRunner())
+    argv = box.rsync_argv(TARGET, False, "/workspace/a/b/", "./out/", False, [])
+    assert not any(a.startswith("--rsync-path") for a in argv)
+
+
 def test_rsync_path_with_a_space_uses_protect_args(tmp_path: Path) -> None:
     box = fake_box(tmp_path, FakeRunner(), protect_args=True)
     argv = box.rsync_argv(TARGET, True, "./my src/", "my dir/", False, [])
@@ -343,6 +378,11 @@ def test_rsync_push_delete_runs_against_a_path_with_a_space(tmp_path: Path) -> N
     assert not (workspace / "stale").exists()
     assert (workspace / ".vasty" / "clock").read_text() == "1\n"
     assert (workspace / ".vasty" / "jobs").is_dir()
+    argv = box.rsync_argv(TARGET, True, f"{src}/", f"{workspace}/a/b/", False, [".git"])
+    argv[argv.index("-e") + 1] = str(stub)
+    done = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
+    assert done.returncode == 0, done.stderr
+    assert (workspace / "a" / "b" / "pkg" / "a.py").read_text() == "print(1)\n"
 
 
 # Probe with a fake runner.

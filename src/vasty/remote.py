@@ -717,8 +717,10 @@ class SshBox:
         """Return the rsync argv for one transfer over the lease's ssh options.
 
         A push with `delete` protects vasty's state directory when it sits
-        under the destination. The remote path goes through `-s` on rsync
-        3.0 or later and is shell-quoted on older rsync.
+        under the destination. A push runs `mkdir -p` of the destination's
+        parent through `--rsync-path`, so a missing parent on the box gets
+        created. The remote path goes through `-s` on rsync 3.0 or later and
+        is shell-quoted on older rsync.
         """
         protect = self._rsync_protect_args()
         argv = ["rsync", "-az", "--partial"]
@@ -731,6 +733,10 @@ class SshBox:
             rule = self._protect_rule(dest)
             if rule is not None:
                 argv.append(f"--filter=P {rule}")
+        if push:
+            parent = self._push_parent(dest)
+            if parent is not None:
+                argv.append(f"--rsync-path=mkdir -p {shlex.quote(parent)} && rsync")
         argv += ["-e", shlex.join(["ssh", *self.ssh_options(target)])]
         remote = f"{target.user}@{target.host}:"
         if push:
@@ -759,6 +765,27 @@ class SshBox:
         if protect:
             return resolved
         return shlex.quote(resolved)
+
+    def _push_parent(self, dest: str) -> str | None:
+        """Return the directory a push into `dest` writes into, or None when it always exists.
+
+        A trailing slash names the directory itself. Without one, `dest` is
+        the file or directory rsync creates and its parent is returned. A
+        `~` path becomes relative to the login home, as in `_rsync_path`.
+        `/`, `.` and the home directory return None.
+        """
+        check_remote_path(dest)
+        resolved = self.remote_path(dest)
+        if resolved == "~" or resolved.startswith("~/"):
+            resolved = "." + resolved[1:]
+        if resolved.endswith("/"):
+            parent = resolved.rstrip("/")
+        else:
+            parent = posixpath.dirname(resolved)
+        parent = posixpath.normpath(parent) if parent else ""
+        if parent in ("", "/", "."):
+            return None
+        return parent
 
     def _protect_rule(self, dest: str) -> str | None:
         """Return the anchored filter pattern for the state directory under `dest`, if any."""
