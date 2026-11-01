@@ -332,7 +332,7 @@ The API key comes from the environment variable named by `api_key_env`, `VAST_AP
 Done:
 
 - Every verb above, in `src/vasty/`.
-- 1246 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
+- 1392 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
 - Two funded live runs on Vast, 2026-10-29 and 2026-10-31. The second covered `serve` end to end. See [docs/live-test-report.md](docs/live-test-report.md).
 
 Not done:
