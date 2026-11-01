@@ -54,6 +54,20 @@ def test_run_on_streams_to_stderr_in_json_and_passes_exit(harness: Harness, box:
     assert box in harness.provider.instances
 
 
+def test_run_and_status_report_the_same_duration(harness: Harness, box: int) -> None:
+    state = harness.box.state(box)
+    state.job_runtime = 90
+    state.attach_lag = 3
+    code, data, _ = run(harness, "--on", "ft", "--", "python", "train.py")
+    assert code == 0
+    assert data["job"] == "j-1" and "id" not in data
+    assert data["duration_s"] == 90
+    _, out, _ = harness.run("status", "ft")
+    entry = json.loads(out)["leases"][0]["jobs"][0]
+    assert entry["job"] == "j-1" and "id" not in entry
+    assert entry["duration_s"] == data["duration_s"]
+
+
 def test_run_shell_joins_command(harness: Harness, box: int) -> None:
     run(harness, "--on", "ft", "--", "echo", "a b", "$HOME")
     assert harness.box.state(box).jobs["j-1"].cmd == "echo 'a b' '$HOME'"

@@ -1,7 +1,8 @@
-"""Helpers shared by `release`, `reserve`, `run`, `serve`, `sync`, `ssh` and `tag`.
+"""Helpers shared by `release`, `reserve`, `run`, `serve`, `stop`, `sync`, `ssh` and `tag`.
 
-`pick_lease` resolves the single LEASE that `run --on`, `serve --on`, `sync`
-and `ssh` act on and raises the error code for a lease they cannot use.
+`pick_lease` resolves the single LEASE that `run --on`, `serve --on`, `stop`,
+`sync` and `ssh` act on and raises the error code for a lease they cannot use.
+`signal_and_wait` signals a job and polls its box record.
 `save_lease` applies one change to a lease in the snapshot and in
 `leases.json`. Job ids count up from the highest `j-N` the lease has seen.
 `taken_ids` lists the lease ids a new lease id avoids.
@@ -19,17 +20,21 @@ from vasty.models import (
     CachedLease,
     Instance,
     Job,
+    JobState,
     Label,
     SweptEntry,
     WarningItem,
 )
+from vasty.state import LIVE_JOB_STATES
 from vasty.targeting import resolve_lease
 from vasty.views import warnings_for
 
 if TYPE_CHECKING:
     from vasty.context import Context
     from vasty.engine import Snapshot
+    from vasty.remote import SshTarget
 
+JOB_POLL_S = 0.5
 DEFAULT_EXCLUDES: tuple[str, ...] = (".git", "__pycache__", ".venv", "node_modules")
 
 
@@ -86,13 +91,38 @@ def put_job(lease: CachedLease, job: Job) -> None:
     lease.jobs = [j for j in lease.jobs if j.id != job.id] + [job]
 
 
-def finish_job(lease: CachedLease, job_id: str, exit_code: int | None, finished: int | None) -> None:
-    """Mark job `job_id` exited with `exit_code` at `finished`."""
+def finish_job(
+    lease: CachedLease,
+    job_id: str,
+    exit_code: int | None,
+    finished: int | None,
+    state: JobState = "exited",
+) -> None:
+    """Mark job `job_id` finished in `state` with `exit_code` at `finished`."""
     for job in lease.jobs:
         if job.id == job_id:
             job.exit = exit_code
-            job.state = "exited"
+            job.state = state
             job.finished_at = finished
+
+
+def signal_and_wait(
+    ctx: Context, target: SshTarget, job_id: str, signal: str, wait_s: float
+) -> Job:
+    """Send `signal` to the job's process group and poll its box record.
+
+    Return the last record read: the first that has an exit or a state other
+    than `running` and `serving`, else the one read after `wait_s` seconds.
+    """
+    ctx.box.signal_job(target, job_id, signal)
+    deadline = ctx.mono() + wait_s
+    while True:
+        record = ctx.box.job_status(target, job_id)
+        if record.exit is not None or record.state not in LIVE_JOB_STATES:
+            return record
+        if ctx.mono() >= deadline:
+            return record
+        ctx.sleep(JOB_POLL_S)
 
 
 def taken_ids(snap: Snapshot) -> set[str]:

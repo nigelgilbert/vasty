@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from fakes import NOW, Harness, add_lease
+from vasty.models import Job
 from vasty.commands import sweep
 from vasty.errors import VastyError
 
@@ -39,6 +40,26 @@ def test_sweep_destroys_past_clock_without_probing(harness: Harness) -> None:
     assert kept.id in harness.provider.instances
     assert harness.box.probes == []
     assert harness.spawned == []
+
+
+def test_sweep_freezes_live_jobs_on_the_expired_lease(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": NOW + 600})
+    harness.box.state(row.id).jobs["j-1"] = Job(
+        id="j-1", cmd="python train.py", started_at=NOW - 60, exit=None, state="running"
+    )
+    harness.run("status")
+    harness.time.advance(700)
+    code, data = run_json(harness, "sweep")
+    assert code == 0 and [e["lease"] for e in data["swept"]] == ["l-0000a001"]
+    harness.time.advance(300)
+    for _ in range(2):
+        _, status = run_json(harness, "status", "l-0000a001")
+        assert status["leases"][0]["state"] == "expired"
+        assert status["leases"][0]["jobs"] == [{
+            "job": "j-1", "cmd": "python train.py", "state": "unknown", "exit": None,
+            "duration_s": 760,
+        }]
+        harness.time.advance(300)
 
 
 def test_sweep_carries_account_warnings(harness: Harness) -> None:

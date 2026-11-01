@@ -62,7 +62,8 @@ def test_detached_run_leaves_the_box_alive(h: Harness) -> None:
     assert len(h.provider.instances) == 1
     code, status = run_json(h, "status", data["lease"])
     assert code == 0
-    assert status["leases"][0]["jobs"][0]["id"] == "j-1"
+    entry = status["leases"][0]["jobs"][0]
+    assert entry["job"] == "j-1" and "id" not in entry
 
 
 def test_auto_reserved_serve_returns_endpoint(h: Harness) -> None:
@@ -158,7 +159,8 @@ def test_post_training_workflow(h: Harness, tmp_path: Any) -> None:
     assert ext["ttl_remaining_s"] == 4 * 3600
     code, rel = run_json(h, "release", "ft")
     assert code == 0, rel
-    assert rel["jobs"][0]["id"] == "j-1"
+    assert rel["jobs"][0]["job"] == "j-1" and "id" not in rel["jobs"][0]
+    assert rel["jobs"][0]["state"] == "killed" and rel["jobs"][0]["exit"] is None
     assert h.provider.instances == {}
 
 

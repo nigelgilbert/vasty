@@ -180,7 +180,7 @@ def _job_parts(view: JobView, lease: CachedLease | None) -> tuple[str, str]:
     kind, port = "run", None
     if lease is not None:
         for job in lease.jobs:
-            if job.id == view.id:
+            if job.id == view.job:
                 kind, port = job.kind, job.port
     return short_cmd(view.cmd, kind), str(port or SERVE_PORT)
 
@@ -194,11 +194,11 @@ def jobs_cell(view: LeaseView, lease: CachedLease | None) -> str:
     for job in _shown_jobs(view):
         name, port = _job_parts(job, lease)
         if job.state == "running":
-            parts.append(f"{job.id} {name} (running {format_duration(job.duration_s or 0, pad=True)})")
+            parts.append(f"{job.job} {name} (running {format_duration(job.duration_s or 0, pad=True)})")
         elif job.state == "serving":
-            parts.append(f"{job.id} {name} (serving :{port})")
+            parts.append(f"{job.job} {name} (serving :{port})")
         else:
-            parts.append(f"{job.id} {name} (unknown)")
+            parts.append(f"{job.job} {name} (unknown)")
     if parts:
         return ", ".join(parts)
     return "idle" if view.busy is False else DASH
@@ -209,9 +209,9 @@ def group_jobs_cell(view: LeaseView, lease: CachedLease | None) -> str:
     for job in _shown_jobs(view):
         name, _ = _job_parts(job, lease)
         if job.state == "running":
-            parts.append(f"{job.id} {name} running")
+            parts.append(f"{job.job} {name} running")
         else:
-            parts.append(f"{job.id} {job.state}")
+            parts.append(f"{job.job} {job.state}")
     return ", ".join(parts) if parts else "idle"
 
 

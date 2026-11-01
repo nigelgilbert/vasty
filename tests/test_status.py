@@ -176,7 +176,7 @@ def test_status_warnings(account: Harness) -> None:
 def test_status_unreachable_jobs_unknown(account: Harness) -> None:
     row = by_lease(status(account))["l-8b11"]
     assert row["state"] == "unreachable"
-    assert row["jobs"] == [{"id": "j-3", "cmd": "vllm serve", "state": "unknown", "exit": None,
+    assert row["jobs"] == [{"job": "j-3", "cmd": "vllm serve", "state": "unknown", "exit": None,
                             "duration_s": 60}]
 
 

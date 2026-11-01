@@ -44,8 +44,8 @@ def test_release_returns_summary_and_marks_cache(harness: Harness) -> None:
     assert data["destroy_pending"] is True
     assert "already_absent" not in data
     assert data["jobs"] == [
-        {"id": "j-1", "cmd": "python train.py", "exit": 0, "duration_s": 5400},
-        {"id": "j-2", "cmd": "python eval.py", "exit": None, "duration_s": 60},
+        {"job": "j-1", "cmd": "python train.py", "state": "exited", "exit": 0, "duration_s": 5400},
+        {"job": "j-2", "cmd": "python eval.py", "state": "killed", "exit": None, "duration_s": 60},
     ]
     assert data["warnings"] == [] and data["swept"] == []
     lease = cached(harness, "l-0000a001")
@@ -87,6 +87,22 @@ def test_release_keeps_the_follower_when_the_expiry_moved(harness: Harness) -> N
     assert code == 2, data
     assert "expiry moved" in data["message"]
     assert harness.kills == []
+
+
+def test_release_freezes_killed_job_duration(harness: Harness) -> None:
+    row = add_lease(harness)
+    harness.box.state(row.id).jobs["j-1"] = Job(
+        id="j-1", cmd="python train.py", started_at=NOW - 60, exit=None, state="running"
+    )
+    code, data, _ = release(harness, "l-0000a001")
+    assert code == 0
+    entry = {"job": "j-1", "cmd": "python train.py", "state": "killed", "exit": None,
+             "duration_s": 60}
+    assert data["jobs"] == [entry]
+    for _ in range(2):
+        harness.time.advance(120)
+        _, out, _ = harness.run("status", "l-0000a001")
+        assert json.loads(out)["leases"][0]["jobs"] == [entry]
 
 
 def test_release_while_loading_reports_null_uptime(harness: Harness) -> None:

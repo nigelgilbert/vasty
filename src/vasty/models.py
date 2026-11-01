@@ -121,7 +121,8 @@ class Label:
     extra: dict[str, str] = field(default_factory=dict)
 
 
-JobState = Literal["running", "exited", "unknown", "serving"]
+JobState = Literal["running", "exited", "unknown", "serving", "killed"]
+"""`killed` marks a job that `release` or `stop` ended; vasty wrote its exit record."""
 
 
 @dataclass
@@ -245,7 +246,9 @@ class SweptEntry:
 
 @dataclass
 class JobView:
-    id: str
+    """One job entry in `status`, `release` and `stop` results."""
+
+    job: str
     cmd: str
     state: str
     exit: int | None
@@ -344,20 +347,12 @@ class BulkResult:
 
 
 @dataclass
-class ReleaseJob:
-    id: str
-    cmd: str
-    exit: int | None
-    duration_s: int | None
-
-
-@dataclass
 class ReleaseSummary:
     lease: str
     name: str | None
     uptime_s: int | None
     cost: Decimal | None
-    jobs: list[ReleaseJob]
+    jobs: list[JobView]
     destroy_pending: bool | None = field(default=True, metadata=OMIT_NONE)
     already_absent: bool | None = field(default=None, metadata=OMIT_NONE)
     warnings: list[WarningItem] | None = field(default=None, metadata=OMIT_NONE)

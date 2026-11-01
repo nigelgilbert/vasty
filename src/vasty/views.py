@@ -76,6 +76,14 @@ def show_jobs_unknown(state: str) -> bool:
     return state == "unreachable" or state in HISTORY_STATES
 
 
+def job_duration(job: Job, now: int) -> int | None:
+    """Return seconds from `started_at` to `finished_at`, or to now while it is unset."""
+    if job.started_at is None:
+        return None
+    end = job.finished_at if job.finished_at is not None else now
+    return max(0, end - job.started_at)
+
+
 def job_view(job: Job, now: int, lease_state: str) -> JobView:
     """Build a job entry. Live jobs on an unreachable or destroyed box report `unknown`."""
     state: str = job.state
@@ -84,11 +92,9 @@ def job_view(job: Job, now: int, lease_state: str) -> JobView:
         state, exit_code = "unknown", None
     if job.state == "unknown":
         exit_code = None
-    duration = None
-    if job.started_at is not None:
-        end = job.finished_at if job.finished_at is not None else now
-        duration = max(0, end - job.started_at)
-    return JobView(id=job.id, cmd=job.cmd, state=state, exit=exit_code, duration_s=duration)
+    return JobView(
+        job=job.id, cmd=job.cmd, state=state, exit=exit_code, duration_s=job_duration(job, now)
+    )
 
 
 def ports_view(ports: dict[int, int]) -> dict[str, int]:

@@ -90,6 +90,7 @@ def test_serve_fresh_key_per_job(harness: Harness, box: int) -> None:
     assert first["api_key"] == "vasty-" + "11" * 32
     assert second["api_key"] == "vasty-" + "22" * 32
     assert (first["job"], second["job"]) == ("j-1", "j-2")
+    assert "id" not in first and "id" not in second
 
 
 def exit_job(harness: Harness, box: int) -> None:

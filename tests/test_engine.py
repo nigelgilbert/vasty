@@ -565,7 +565,21 @@ def test_unreachable_after_answered_and_jobs_unknown(harness: Harness) -> None:
     from vasty.views import lease_view
 
     view = lease_view(lease, snap.now)
-    assert [(j.id, j.state, j.exit) for j in view.jobs] == [("j-1", "unknown", None)]
+    assert [(j.job, j.state, j.exit) for j in view.jobs] == [("j-1", "unknown", None)]
+
+
+def test_vanished_lease_freezes_live_jobs_at_first_gone_sample(harness: Harness) -> None:
+    row = add_lease(harness)
+    harness.box.state(row.id).jobs["j-1"] = Job(
+        id="j-1", cmd="python train.py", started_at=NOW - 60, exit=None, state="running"
+    )
+    refresh(harness)
+    del harness.provider.instances[row.id]
+    harness.time.advance(30)
+    assert refresh(harness).leases["l-0000a001"].state == "gone"
+    harness.time.advance(600)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert [(j.state, j.finished_at) for j in lease.jobs] == [("running", NOW + 30)]
 
 
 def test_never_answered_is_pending(harness: Harness) -> None:

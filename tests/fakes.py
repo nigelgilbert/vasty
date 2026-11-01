@@ -234,7 +234,13 @@ class BoxState:
     clock_write_fails: bool = False
     adopt_missing: list[str] = field(default_factory=list)
     job_exit: int | None = 0
+    job_runtime: int = 0
+    """Seconds a job runs inside `attach_job` before it writes its exit record."""
+    attach_lag: int = 0
+    """Seconds `attach_job` takes to return after the job writes its exit record."""
     signals: list[tuple[str, str]] = field(default_factory=list)
+    signal_exits: dict[str, int] = field(default_factory=dict)
+    """Exit codes a live job records when it gets the named signal; other signals leave it running."""
     tails: list[str | None] = field(default_factory=list)
     """Job ids `log_tail` read, in call order."""
     execs: list[str] = field(default_factory=list)
@@ -356,13 +362,22 @@ class FakeBox:
         job = box.jobs[job_id]
         if box.job_exit is None:
             return None
+        self.time.advance(box.job_runtime)
         job.exit = box.job_exit
         job.state = "exited"
         job.finished_at = int(self.time.wall_now)
+        self.time.advance(box.attach_lag)
         return box.job_exit
 
     def signal_job(self, target: SshTarget, job_id: str, signal: str) -> None:
-        self._get(target).signals.append((job_id, signal))
+        box = self._get(target)
+        box.signals.append((job_id, signal))
+        job = box.jobs.get(job_id)
+        code = box.signal_exits.get(signal)
+        if job is not None and code is not None and job.state in ("running", "serving"):
+            job.exit = code
+            job.state = "exited"
+            job.finished_at = int(self.time.wall_now)
 
     def job_status(self, target: SshTarget, job_id: str) -> Job:
         return self._get(target).jobs[job_id]

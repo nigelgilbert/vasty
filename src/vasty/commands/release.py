@@ -3,7 +3,8 @@
 `release` destroys the box and returns once the provider accepts the destroy
 call. The lease is then `released` with `destroy_pending` until a list call
 shows it gone; `released_here` lets reconciliation record `released`.
-Uptime and jobs come from the local cache. Cost is Vast's billed sum for the
+Uptime and jobs come from the local cache. `release` marks every live job
+`killed` with a null exit and freezes its `duration_s` at the release. Cost is Vast's billed sum for the
 instance, the same figure `status` reports. The engine module docstring
 describes the destroy lifecycle.
 
@@ -41,7 +42,6 @@ from vasty.models import (
     Instance,
     Label,
     ReleaseAbsent,
-    ReleaseJob,
     ReleaseSummary,
     SweptEntry,
     WarningItem,
@@ -127,10 +127,16 @@ def _destroy(ctx: Context, snap: Snapshot, lease: CachedLease) -> ReleaseSummary
                 )
             return summarize(lease, max(snap.now, ctx.clock.now()), snap, already_absent=True)
         now = ctx.clock.now()
-        if lease.state in HISTORY_STATES:
-            save_lease(ctx, lease, lambda found: engine.mark_destroy_sent(found, now))
-        else:
-            save_lease(ctx, lease, lambda found: engine.mark_released(found, now))
+        history = lease.state in HISTORY_STATES
+
+        def finish(found: CachedLease) -> None:
+            if history:
+                engine.mark_destroy_sent(found, now)
+            else:
+                engine.mark_released(found, now)
+            engine.kill_jobs(found, now)
+
+        save_lease(ctx, lease, finish)
     return summarize(lease, max(snap.now, ctx.clock.now()), snap)
 
 
@@ -138,10 +144,7 @@ def summarize(
     lease: CachedLease, now: int, snap: Snapshot, already_absent: bool = False
 ) -> ReleaseSummary:
     """Build the release summary from the cached lease."""
-    jobs = []
-    for job in lease.jobs:
-        view = views.job_view(job, now, lease.state)
-        jobs.append(ReleaseJob(view.id, view.cmd, view.exit, view.duration_s))
+    jobs = [views.job_view(job, now, lease.state) for job in lease.jobs]
     return ReleaseSummary(
         lease=lease.lease,
         name=lease.label.name,
@@ -207,9 +210,9 @@ def _summary_lines(summary: ReleaseSummary) -> list[str]:
         head += "  destroy pending"
     lines = [head]
     for job in summary.jobs:
-        code = "running" if job.exit is None else f"exit {job.exit}"
+        code = job.state if job.exit is None else f"exit {job.exit}"
         took = "" if job.duration_s is None else f"  {format_duration(job.duration_s)}"
-        lines.append(f"  {job.id} {job.cmd}  {code}{took}")
+        lines.append(f"  {job.job} {job.cmd}  {code}{took}")
     return lines
 
 
