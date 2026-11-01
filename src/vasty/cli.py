@@ -92,7 +92,8 @@ def _setting_help(ttl_default: str) -> dict[str, str]:
         "config_stdin": "pass - to read config JSON from stdin",
         "gpu": "GPU model name such as 4090 or A100; default: any",
         "vram": "minimum GPU memory in GB; default: any",
-        "cuda": "minimum CUDA version the host driver supports, such as 12.6; default: none",
+        "cuda": "minimum CUDA version the host driver supports, such as 12.6; "
+                "default: the image's floor, 13 for the vllm image and 12.6 for the base image",
         "gpus": f"number of GPUs; default: {BUILTIN['gpus']}",
         "disk": f"disk size in GB; default: {BUILTIN['disk']}",
         "image": f"Docker image; default: {BUILTIN['image']}",
@@ -109,7 +110,8 @@ def _target_flags(p: argparse.ArgumentParser, lease_optional: bool = True) -> No
     p.add_argument("--owner", help="select the leases of owner O")
     p.add_argument("--all", action="store_true", help="select every lease of the current owner")
     p.add_argument("--everyone", action="store_true",
-                   help="with --all or --group, select the leases of every owner")
+                   help="select every owner's leases; status takes it alone, "
+                        "other verbs with --all or --group")
 
 
 def _hardware_flags(p: argparse.ArgumentParser, h: dict[str, str]) -> None:
@@ -138,7 +140,6 @@ def _reserve_flags(p: argparse.ArgumentParser, h: dict[str, str]) -> None:
 
 
 def build_parser() -> Parser:
-    out = _output_flags()
     from vasty.config import BUILTIN
     from vasty.timeutil import format_duration_exact
 

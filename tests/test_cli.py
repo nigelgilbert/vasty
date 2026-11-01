@@ -285,7 +285,7 @@ def _verb_action(verb: str, flag: str) -> argparse.Action:
         ("reserve", "--ttl", ["duration", "default: 30m"]),
         ("run", "--ttl", ["duration", "default: run_ttl, 2h"]),
         ("serve", "--ttl", ["duration", "default: run_ttl, 2h"]),
-        ("reserve", "--cuda", ["CUDA version", "12.6", "default: none"]),
+        ("reserve", "--cuda", ["CUDA version", "12.6", "default: the image's floor"]),
         ("reserve", "--max-price", ["dollars per hour", "default: 0.60"]),
         ("reserve", "--image", ["default: vastai/base-image:cuda-12.6.3-auto"]),
         ("reserve", "--disk", ["GB", "default: 50"]),
