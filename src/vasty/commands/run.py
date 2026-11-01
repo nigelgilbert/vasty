@@ -133,7 +133,7 @@ def warn_if_expiring(ctx: Context, lease: CachedLease, now: int) -> None:
     """Print a stderr warning and the `extend` command when the clock is under `warn_before_expiry`."""
     remaining = effective_expiry(lease.label) - now
     if remaining < ctx.settings.warn_before_expiry:
-        fix = fix_for("expiring_soon", lease.lease)
+        fix = fix_for("expiring_soon", lease.lease, lease.label.ttl)
         ctx.warn(f"vasty: lease {lease.lease} expires in {format_duration(remaining)}. Extend it: {fix}")
 
 

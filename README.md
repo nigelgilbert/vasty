@@ -124,6 +124,11 @@ Exit codes: 0 success, 1 bad input or lookup, 2 provider or box failure. Once a 
 
 Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `expired_with_running_jobs`, `startup_failed`, `flag_mismatch`, `idle_box_available`, `clock_skew`, `clock_skew_unknown`, `sweep_not_spawned`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
 
+| Warning | Fix |
+|---|---|
+| `expiring_soon`, `expiring_with_running_job` | `vasty extend LEASE --by TTL`, with the lease's reserve ttl; the message rounds time left up to the minute |
+| `box_unreachable` | `vasty status LEASE` |
+
 When `reserve`, or `run` or `serve` without `--on`, creates a box, it warns `idle_box_available` for up to three idle leases that would have fit.
 
 ### Result shapes

@@ -138,6 +138,17 @@ def test_expiring_soon() -> None:
     assert (w.code, w.lease, w.message, w.fix) == ("expiring_soon", "l-8b12", "3m left", "vasty extend l-8b12 --by 30m")
 
 
+def test_expiring_fix_extends_by_the_reserve_ttl_and_rounds_time_up() -> None:
+    [w] = lease_warnings(lease(label=label(ttl=2700, expires=NOW + 170)), NOW, WARN)
+    assert (w.message, w.fix) == ("3m left", "vasty extend l-8b12 --by 45m")
+
+
+@pytest.mark.parametrize("remaining, text", [(60, "1m"), (174, "3m"), (1, "1m"), (240, "4m")])
+def test_expiring_message_rounds_up(remaining: int, text: str) -> None:
+    [w] = lease_warnings(lease(label=label(expires=NOW + remaining)), NOW, WARN)
+    assert w.message == f"{text} left"
+
+
 @pytest.mark.parametrize("remaining", [0, WARN + 1, 3600])
 def test_no_expiring_soon_outside_window(remaining: int) -> None:
     assert lease_warnings(lease(label=label(expires=NOW + remaining)), NOW, WARN) == []
@@ -162,7 +173,7 @@ def test_expiring_with_running_job_replaces_expiring_soon(job_state: str) -> Non
 
 def test_box_unreachable() -> None:
     [w] = lease_warnings(lease("unreachable", reachable_at=NOW - 360), NOW, WARN)
-    assert (w.code, w.message, w.fix) == ("box_unreachable", "no answer for 6m", "vasty release l-8b12")
+    assert (w.code, w.message, w.fix) == ("box_unreachable", "no answer for 6m", "vasty status l-8b12")
 
 
 def test_box_unreachable_never_answered() -> None:
@@ -269,9 +280,7 @@ def test_fixes_use_the_lease_id_and_shell_quote_it() -> None:
 @pytest.mark.parametrize(
     "code, target, fix",
     [
-        ("expiring_soon", "l-1", "vasty extend l-1 --by 30m"),
-        ("expiring_with_running_job", "l-1", "vasty extend l-1 --by 30m"),
-        ("box_unreachable", "l-1", "vasty release l-1"),
+        ("box_unreachable", "l-1", "vasty status l-1"),
         ("guard_partial", "l-1", "vasty release l-1"),
         ("clock_skew", "l-1", "vasty release l-1"),
         ("clock_skew_unknown", "l-1", "vasty release l-1"),
@@ -290,6 +299,13 @@ def test_fixes_use_the_lease_id_and_shell_quote_it() -> None:
 )
 def test_fix_table(code: str, target: str | None, fix: str) -> None:
     assert fix_for(code, target) == fix
+
+
+@pytest.mark.parametrize("code", ["expiring_soon", "expiring_with_running_job"])
+def test_expiring_fix_uses_the_ttl(code: str) -> None:
+    assert fix_for(code, "l-1", 5400) == "vasty extend l-1 --by 1h30m"
+    with pytest.raises(ValueError):
+        fix_for(code, "l-1")
 
 
 @pytest.mark.parametrize("skew, codes_out", [

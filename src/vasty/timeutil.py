@@ -67,6 +67,11 @@ def format_duration(seconds: int, *, pad: bool = False) -> str:
     return f"{secs}s"
 
 
+def format_minutes_up(seconds: int) -> str:
+    """Format seconds rounded up to the whole minute, so 174 reads `3m` and 3601 reads `1h1m`."""
+    return format_duration(-(-int(seconds) // 60) * 60)
+
+
 def format_duration_exact(seconds: int) -> str:
     """Format seconds with every nonzero unit, as `1h30m`, `2d` or `1d2h3m4s`.
 

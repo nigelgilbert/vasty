@@ -169,7 +169,8 @@ def test_status_warnings(account: Harness) -> None:
     assert ("orphan", "i-55120") in found
     assert ("spend_unavailable", None) not in found
     fixes = {w["code"]: w["fix"] for w in data["warnings"]}
-    assert fixes["expiring_soon"] == "vasty extend l-8b12 --by 30m"
+    assert fixes["expiring_soon"] == "vasty extend l-8b12 --by 1h"
+    assert fixes["box_unreachable"] == "vasty status l-8b11"
     assert fixes["orphan"] == "vasty tag i-55120 --ttl 30m"
 
 
@@ -370,7 +371,7 @@ def test_status_human_table(account: Harness) -> None:
     assert orphan[1:6] == ["—", "—", "?", "1x24", "3090"] and "none" in orphan and "?" in orphan[-3:]
     assert "WARNINGS" in lines
     warn = next(line for line in lines if "expiring_soon" in line)
-    assert warn.split()[0] == "l-8b12" and warn.endswith("fix: vasty extend l-8b12 --by 30m")
+    assert warn.split()[0] == "l-8b12" and warn.endswith("fix: vasty extend l-8b12 --by 1h")
     assert lines[-1] == ("TODAY  charged $7.12  ·  credit $20.00  ·  balance $0.00  ·  "
                          "5 leases live (4 yours)  ·  burning $5.46/hr")
 

@@ -107,7 +107,7 @@ def test_run_warns_when_clock_is_short(harness: Harness) -> None:
     add_lease(harness, label={"name": "ft", "expires": NOW + 120})
     code, data, err = run(harness, "--on", "ft", "--", "ls")
     assert code == 0
-    assert "vasty extend l-0000a001 --by 30m" in err
+    assert "vasty extend l-0000a001 --by 1h" in err
     assert [w["code"] for w in data["warnings"]] == ["expiring_with_running_job"]
 
 
