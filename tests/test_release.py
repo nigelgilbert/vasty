@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import signal
+import sys
 from decimal import Decimal
 from typing import Any
 
@@ -48,6 +50,43 @@ def test_release_returns_summary_and_marks_cache(harness: Harness) -> None:
     assert data["warnings"] == [] and data["swept"] == []
     lease = cached(harness, "l-0000a001")
     assert (lease.state, lease.released_here, lease.destroy_pending) == ("released", True, True)
+
+
+def test_release_terms_the_recorded_follower(harness: Harness) -> None:
+    add_lease(harness, label={"expires": NOW + 600})
+    harness.run("extend", "l-0000a001", "--by", "30m")
+    assert harness.processes[4001] == f"{sys.executable} -m vasty sweep --follow l-0000a001"
+    code, data, _ = release(harness, "l-0000a001")
+    assert code == 0, data
+    assert harness.kills == [(4001, signal.SIGTERM)]
+
+
+def test_release_leaves_a_reused_pid_alone(harness: Harness) -> None:
+    add_lease(harness, label={"expires": NOW + 600})
+    harness.run("extend", "l-0000a001", "--by", "30m")
+    harness.processes[4001] = "/usr/bin/vim notes.txt"
+    code, data, _ = release(harness, "l-0000a001")
+    assert code == 0, data
+    assert harness.kills == []
+    assert harness.processes[4001] == "/usr/bin/vim notes.txt"
+
+
+def test_release_keeps_the_follower_when_the_expiry_moved(harness: Harness) -> None:
+    add_lease(harness, label={"expires": NOW + 600})
+    harness.run("extend", "l-0000a001", "--by", "30m")
+    real_get = harness.provider.get_instance
+
+    def moved(instance_id: int) -> Instance | None:
+        inst = real_get(instance_id)
+        if inst is not None:
+            inst.label = (inst.label or "").replace(f"expires={NOW + 2400}", f"expires={NOW + 9999}")
+        return inst
+
+    harness.provider.get_instance = moved  # type: ignore[method-assign]
+    code, data, _ = release(harness, "l-0000a001")
+    assert code == 2, data
+    assert "expiry moved" in data["message"]
+    assert harness.kills == []
 
 
 def test_release_while_loading_reports_null_uptime(harness: Harness) -> None:

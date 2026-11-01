@@ -42,12 +42,28 @@ def default_http_get(url: str, headers: Mapping[str, str], timeout: float) -> in
         return 0
 
 
-def default_spawn(argv: list[str], env: Mapping[str, str]) -> None:
-    """Start `argv` detached from this process, with no terminal and its output discarded."""
-    subprocess.Popen(
+def default_spawn(argv: list[str], env: Mapping[str, str]) -> int:
+    """Start `argv` detached from this process, with no terminal and its output discarded. Return its pid."""
+    process = subprocess.Popen(
         argv, env=dict(env), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
     )
+    return process.pid
+
+
+def default_process_args(pid: int) -> str | None:
+    """Return the command line of process `pid`, or None when no such process runs."""
+    try:
+        done = subprocess.run(
+            ["ps", "-ww", "-o", "args=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = done.stdout.strip()
+    if done.returncode != 0 or not line:
+        return None
+    return line
 
 
 @dataclass
@@ -70,7 +86,9 @@ class Context:
     random_hex: Callable[[int], str] = secrets.token_hex
     which: Callable[[str], str | None] = shutil.which
     http_get: Callable[[str, Mapping[str, str], float], int] = default_http_get
-    spawn: Callable[[list[str], Mapping[str, str]], None] = default_spawn
+    spawn: Callable[[list[str], Mapping[str, str]], int] = default_spawn
+    process_args: Callable[[int], str | None] = default_process_args
+    kill: Callable[[int, int], None] = os.kill
     provider_factory: Callable[[Context], Provider] | None = None
     box_factory: Callable[[Context], BoxAccess] | None = None
     # Collect the `swept` entries of every refresh so a failing command can report them.

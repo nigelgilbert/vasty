@@ -13,7 +13,10 @@ no longer lists its row. While the row is listed, `release` sends the destroy
 again and keeps the history state. An orphan or unreadable row released by
 instance id needs `--yes` or a TTY confirmation. Before destroying, `release`
 re-reads the row and aborts with `provider_error` when its `expires` moved
-or its label became unreadable.
+or its label became unreadable. After a destroy, or when the lease is
+already absent, `release` sends TERM to the lease's recorded follower
+through `stop_follower`. A destroy left pending falls to the next command's
+sweep.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from typing import Any
 from vasty import engine, labels, views
 from vasty.cli import Outcome
 from vasty.commands._common import save_lease
+from vasty.commands.sweep import stop_follower
 from vasty.context import Context
 from vasty.engine import Snapshot
 from vasty.errors import VastyError
@@ -93,8 +97,15 @@ def release_lease(ctx: Context, snap: Snapshot, lease: CachedLease) -> ReleaseSu
     vanished, returns its summary with `already_absent`. A lease in history
     whose row is still listed gets the destroy again. Raise `provider_error`
     when the destroy call fails, the row's `expires` moved since `lease` was
-    read, or the re-read label is unreadable.
+    read, or the re-read label is unreadable. Stop the lease's follower
+    before returning.
     """
+    summary = _destroy(ctx, snap, lease)
+    stop_follower(ctx, lease.lease)
+    return summary
+
+
+def _destroy(ctx: Context, snap: Snapshot, lease: CachedLease) -> ReleaseSummary:
     in_history = lease.state in HISTORY_STATES or lease.destroy_pending
     if in_history and snap.instance(lease.instance_id) is None:
         return summarize(lease, max(snap.now, ctx.clock.now()), snap, already_absent=True)

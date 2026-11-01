@@ -218,6 +218,8 @@ class CachedLease:
     """Box clock minus provider clock in seconds, from the last probe under a verified clock."""
     clock_skew_unknown: bool = False
     """Set when the last probe returned no box time."""
+    follower_pid: int | None = None
+    """The pid of the last `vasty sweep --follow` this machine started for the lease."""
 
 
 # Output shapes.

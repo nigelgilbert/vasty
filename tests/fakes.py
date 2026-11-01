@@ -421,6 +421,12 @@ class Harness:
     """Argument lists `spawn` received."""
     spawn_error: OSError | None = None
     """When set, `spawn` raises it instead of recording the call."""
+    processes: dict[int, str] = field(default_factory=dict)
+    """Command line per running pid; `spawn` adds one, a test removes it to end the process."""
+    next_pid: int = 4001
+    """The pid the next `spawn` returns."""
+    kills: list[tuple[int, int]] = field(default_factory=list)
+    """`(pid, signal)` pairs `kill` received."""
     last_ctx: Context | None = None
     """The context the latest `run` built, kept when an exception escapes."""
 
@@ -438,10 +444,20 @@ class Harness:
             return self.http_statuses.pop(0)
         return self.http_status
 
-    def spawn(self, argv: list[str], env: Mapping[str, str]) -> None:
+    def spawn(self, argv: list[str], env: Mapping[str, str]) -> int:
         if self.spawn_error is not None:
             raise self.spawn_error
         self.spawned.append(list(argv))
+        pid = self.next_pid
+        self.next_pid += 1
+        self.processes[pid] = " ".join(argv)
+        return pid
+
+    def kill(self, pid: int, sig: int) -> None:
+        if pid not in self.processes:
+            raise ProcessLookupError(pid)
+        self.kills.append((pid, sig))
+        del self.processes[pid]
 
     def random_hex(self, nbytes: int) -> str:
         if self.hex_values:
@@ -458,6 +474,8 @@ class Harness:
             which=lambda name: None if name in self.missing_tools else f"/usr/bin/{name}",
             http_get=self.http_get,
             spawn=self.spawn,
+            process_args=self.processes.get,
+            kill=self.kill,
             provider_factory=lambda ctx: self.provider,
             box_factory=lambda ctx: self.box,
         )

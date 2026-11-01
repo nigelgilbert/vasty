@@ -250,6 +250,16 @@ def test_status_verbose_fields(account: Harness) -> None:
     assert set(extra) >= {"instance_id", "image", "last_provider_error"}
 
 
+def test_status_verbose_leaves_out_the_follower_pid(harness: Harness) -> None:
+    add_lease(harness)
+    harness.run("extend", "l-0000a001", "--by", "30m")
+    assert harness.context().cache.load().leases["l-0000a001"].follower_pid == 4001
+    _, out, _ = harness.run("status", "--verbose")
+    assert "follower" not in out
+    _, out, _ = harness.run("status", "--cached", "--verbose")
+    assert "follower" not in out
+
+
 def test_uptime_counts_from_first_running_sample(harness: Harness) -> None:
     add_lease(harness, label={"name": "ft", "created": NOW - 1200})
     harness.run("status")

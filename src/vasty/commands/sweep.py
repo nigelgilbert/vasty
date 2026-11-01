@@ -8,19 +8,24 @@ more pass `FOLLOW_RETRY_S` later, so a failed destroy, a probe that moves
 `expires` and a later `extend` are each picked up on the next pass.
 
 `reserve`, `tag` on adopt and `extend` start `sweep --follow` detached on the
-laptop through `spawn_follow`. The follower inherits the parent's
-environment and working directory, so it reads the same config files and
-API key. A spawn that fails returns a `sweep_not_spawned` warning and the
-command succeeds.
+laptop through `spawn_follow`. The lease's `follower_pid` in `leases.json`
+records the pid, and `spawn_follow` starts a new follower only when that pid
+no longer runs `vasty sweep --follow LEASE`. The follower inherits the
+parent's environment and working directory, so it reads the same config
+files and API key. A spawn that fails returns a `sweep_not_spawned` warning
+and the command succeeds. `release` calls `stop_follower`, which sends TERM
+to the recorded pid when its command line still names the lease.
 
 The follower sleeps in bounded chunks against the wall clock, so a laptop
 that slept through the expiry refreshes on wake. After each chunk it reads
-`leases.json` without a network call and refreshes early when the lease has
-left the cache, moved to history or has a destroy pending, so a `release`
-during the sleep ends the follower within one chunk. A refresh that raises
-waits `FOLLOW_RETRY_S` and tries again, up to `FOLLOW_RETRIES` times in a
-row, so a short outage at expiry sweeps once it is over. The retry after
-that raises the last error, so a revoked key or a broken config ends the
+`leases.json` without a network call and recomputes its wait from the
+cached expiry, so an `extend` that moves the clock either way holds within
+one chunk. It refreshes early when the lease has left the cache, moved to
+history or has a destroy pending, so a `release` whose TERM missed the
+follower ends it within one chunk. A refresh that raises waits
+`FOLLOW_RETRY_S` and tries again, up to `FOLLOW_RETRIES` times in a row, so
+a short outage at expiry sweeps once it is over. The retry after that
+raises the last error, so a revoked key or a broken config ends the
 follower. The watchdog on the box and the next `vasty` command sweep the
 lease either way.
 """
@@ -28,14 +33,23 @@ lease either way.
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
+from pathlib import Path
 
 from vasty import engine
 from vasty.cli import Outcome
 from vasty.commands._common import merge_swept
 from vasty.context import Context
 from vasty.errors import VastyError, invalid
-from vasty.models import HISTORY_STATES, Instance, SweepResult, SweptEntry, WarningItem
+from vasty.models import (
+    HISTORY_STATES,
+    CachedLease,
+    Instance,
+    SweepResult,
+    SweptEntry,
+    WarningItem,
+)
 from vasty.state import effective_expiry, make_warning
 from vasty.targeting import resolve_lease
 
@@ -48,13 +62,54 @@ SLEEP_CHUNK_S = 300
 
 
 def spawn_follow(ctx: Context, lease_id: str) -> WarningItem | None:
-    """Start `vasty sweep --follow LEASE` detached. Return a `sweep_not_spawned` warning on failure."""
+    """Start `vasty sweep --follow LEASE` detached unless the lease's recorded follower runs.
+
+    Record the new pid as the lease's `follower_pid` in `leases.json`. Return
+    a `sweep_not_spawned` warning when the spawn fails.
+    """
     argv = [sys.executable, "-m", "vasty", "sweep", "--follow", lease_id]
-    try:
-        ctx.spawn(argv, ctx.env)
-    except OSError as exc:
-        return make_warning("sweep_not_spawned", lease_id, f"could not start the follower: {exc}")
+    with ctx.cache.lock():
+        data = ctx.cache.load()
+        lease = data.leases.get(lease_id)
+        if lease is not None and _follower_runs(ctx, lease):
+            return None
+        try:
+            pid = ctx.spawn(argv, ctx.env)
+        except OSError as exc:
+            return make_warning(
+                "sweep_not_spawned", lease_id, f"could not start the follower: {exc}"
+            )
+        if lease is not None:
+            lease.follower_pid = pid
+            ctx.cache.save(data)
     return None
+
+
+def stop_follower(ctx: Context, lease_id: str) -> None:
+    """Send TERM to the lease's recorded follower when that pid still runs `vasty sweep --follow LEASE`."""
+    with ctx.cache.lock():
+        lease = ctx.cache.load().leases.get(lease_id)
+    if lease is None or lease.follower_pid is None or not _follower_runs(ctx, lease):
+        return
+    try:
+        ctx.kill(lease.follower_pid, signal.SIGTERM)
+    except OSError:
+        pass
+
+
+def _follower_runs(ctx: Context, lease: CachedLease) -> bool:
+    """Return True when `lease.follower_pid` runs `vasty sweep --follow` for the lease."""
+    if lease.follower_pid is None:
+        return False
+    args = ctx.process_args(lease.follower_pid)
+    if args is None:
+        return False
+    words = args.split()
+    return (
+        len(words) >= 4
+        and Path(words[-4]).name == "vasty"
+        and words[-3:] == ["sweep", "--follow", lease.lease]
+    )
 
 
 def _sleep(ctx: Context, seconds: int) -> None:
@@ -66,23 +121,25 @@ def _sleep(ctx: Context, seconds: int) -> None:
         ctx.sleep(min(left, SLEEP_CHUNK_S))
 
 
-def _lease_changed(ctx: Context, lease_id: str) -> bool:
-    """Return True when the cache shows `lease_id` gone, in history or with a destroy pending."""
-    with ctx.cache.lock():
-        lease = ctx.cache.load().leases.get(lease_id)
-    return lease is None or lease.state in HISTORY_STATES or lease.destroy_pending
+def _wait(ctx: Context, lease_id: str, seconds: int, now: int) -> None:
+    """Sleep `seconds` from `now` in chunks, re-reading the lease from the cache after each.
 
-
-def _wait(ctx: Context, lease_id: str, seconds: int) -> None:
-    """Sleep `seconds` in chunks, returning early once `_lease_changed` holds."""
+    Return early when the cache shows the lease gone, in history or with a
+    destroy pending. Otherwise reset the deadline to one second past the
+    cached expiry, read through the offset between `now` and the wall clock.
+    """
+    offset = now - ctx.wall()
     deadline = ctx.wall() + seconds
     while True:
         left = deadline - ctx.wall()
         if left <= 0:
             return
         ctx.sleep(min(left, SLEEP_CHUNK_S))
-        if _lease_changed(ctx, lease_id):
+        with ctx.cache.lock():
+            lease = ctx.cache.load().leases.get(lease_id)
+        if lease is None or lease.state in HISTORY_STATES or lease.destroy_pending:
             return
+        deadline = effective_expiry(lease.label) + 1 - offset
 
 
 def _refresh(ctx: Context) -> engine.Snapshot:
@@ -113,7 +170,7 @@ def follow(ctx: Context, ref: str) -> SweepResult:
         wait = effective_expiry(lease.label) - snap.now + 1
         if lease.destroy_pending or wait <= 0:
             wait = FOLLOW_RETRY_S
-        _wait(ctx, lease_id, wait)
+        _wait(ctx, lease_id, wait, snap.now)
         snap = _refresh(ctx)
         swept = merge_swept(swept, snap.swept)
 

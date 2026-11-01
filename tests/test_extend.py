@@ -77,6 +77,16 @@ def test_extend_spawns_a_follower(h: Harness) -> None:
     assert data["warnings"] == []
 
 
+def test_extend_replaces_a_follower_that_exited(h: Harness) -> None:
+    add_lease(h, label={"expires": NOW + 600})
+    run_json(h, "extend", "l-0000a001", "--by", "30m")
+    del h.processes[4001]
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert code == 0, data
+    assert [argv[-1] for argv in h.spawned] == ["l-0000a001", "l-0000a001"]
+    assert cached(h, "l-0000a001").follower_pid == 4002
+
+
 def test_extend_with_a_failed_spawn_warns_and_succeeds(h: Harness) -> None:
     add_lease(h, label={"expires": NOW + 600})
     h.spawn_error = OSError("no fork")

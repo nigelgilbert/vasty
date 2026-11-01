@@ -94,6 +94,14 @@ def test_reserve_spawns_a_follower(h: Harness) -> None:
     assert h.spawned == [[sys.executable, "-m", "vasty", "sweep", "--follow", "l-abababab"]]
 
 
+def test_reserve_then_extend_spawns_one_follower(h: Harness) -> None:
+    assert run_json(h, "reserve")[0] == 0
+    code, data = run_json(h, "extend", "l-abababab", "--by", "30m")
+    assert code == 0, data
+    assert len(h.spawned) == 1
+    assert h.context().cache.load().leases["l-abababab"].follower_pid == 4001
+
+
 def test_reserve_with_a_failed_spawn_warns_and_succeeds(h: Harness) -> None:
     h.spawn_error = OSError("no fork")
     code, data = run_json(h, "reserve")
