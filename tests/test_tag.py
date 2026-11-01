@@ -241,6 +241,16 @@ def test_adopt_spawns_a_follower(h: Harness) -> None:
     assert h.spawned == [[sys.executable, "-m", "vasty", "sweep", "--follow", "l-abababab"]]
 
 
+def test_adopt_then_extend_spawns_one_follower(h: Harness) -> None:
+    add_key(h)
+    orphan(h)
+    assert run_json(h, "tag", "i-55120", "--ttl", "30m")[0] == 0
+    code, data = run_json(h, "extend", "l-abababab", "--by", "30m")
+    assert code == 0, data
+    assert len(h.spawned) == 1
+    assert h.context().cache.load().leases["l-abababab"].follower_pid == 4001
+
+
 def test_adopt_with_a_failed_spawn_warns_and_succeeds(h: Harness) -> None:
     add_key(h)
     orphan(h)
@@ -273,7 +283,7 @@ def test_adopt_writes_the_clock_in_box_time(h: Harness) -> None:
 
 def test_adopt_orphan_with_setters(h: Harness) -> None:
     iid = orphan(h)
-    code, data = run_json(h, "tag", "i-55120", "--ttl", "1h", "--set-owner", "nick",
+    code, _data = run_json(h, "tag", "i-55120", "--ttl", "1h", "--set-owner", "nick",
                           "--set-name", "found", "--set-group", "g")
     assert code == 0
     label = label_of(h, iid)

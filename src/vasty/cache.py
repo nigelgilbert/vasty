@@ -71,7 +71,7 @@ class Cache:
         with self._mutex:
             if self._depth == 0:
                 self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-                handle = open(self.lock_path, "ab")
+                handle = open(self.lock_path, "ab")  # noqa: SIM115
                 try:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
                 except BaseException:
@@ -149,7 +149,7 @@ def decode(text: str) -> CacheData:
         raise CorruptCache(str(exc)) from None
     if not isinstance(body, dict) or body.get("version") != FORMAT_VERSION:
         raise CorruptCache("unknown cache version")
-    cached_at = _from_json(body.get("cached_at"), Union[int, None])
+    cached_at = _from_json(body.get("cached_at"), int | None)
     raw_leases = body.get("leases")
     if not isinstance(raw_leases, dict):
         raise CorruptCache("leases is not an object")
@@ -158,12 +158,12 @@ def decode(text: str) -> CacheData:
         leases=leases,
         cached_at=cached_at,
         instances=_from_json(body.get("instances", []), list[Instance]),
-        charges=_from_json(body.get("charges"), Union[Charges, None]),
-        charges_at=_from_json(body.get("charges_at"), Union[int, None]),
-        charges_start=_from_json(body.get("charges_start"), Union[int, None]),
-        balance=_from_json(body.get("balance"), Union[Decimal, None]),
-        credit=_from_json(body.get("credit"), Union[Decimal, None]),
-        balance_at=_from_json(body.get("balance_at"), Union[int, None]),
+        charges=_from_json(body.get("charges"), Charges | None),
+        charges_at=_from_json(body.get("charges_at"), int | None),
+        charges_start=_from_json(body.get("charges_start"), int | None),
+        balance=_from_json(body.get("balance"), Decimal | None),
+        credit=_from_json(body.get("credit"), Decimal | None),
+        balance_at=_from_json(body.get("balance_at"), int | None),
     )
 
 

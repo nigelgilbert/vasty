@@ -14,9 +14,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Mapping, TextIO
+from typing import TYPE_CHECKING, Any, TextIO
 
 from vasty.errors import VastyError
 
@@ -42,12 +43,28 @@ def default_http_get(url: str, headers: Mapping[str, str], timeout: float) -> in
         return 0
 
 
-def default_spawn(argv: list[str], env: Mapping[str, str]) -> None:
-    """Start `argv` detached from this process, with no terminal and its output discarded."""
-    subprocess.Popen(
+def default_spawn(argv: list[str], env: Mapping[str, str]) -> int:
+    """Start `argv` detached from this process, with no terminal and its output discarded. Return its pid."""
+    process = subprocess.Popen(
         argv, env=dict(env), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
     )
+    return process.pid
+
+
+def default_process_args(pid: int) -> str | None:
+    """Return the command line of process `pid`, or None when no such process runs."""
+    try:
+        done = subprocess.run(
+            ["ps", "-ww", "-o", "args=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = done.stdout.strip()
+    if done.returncode != 0 or not line:
+        return None
+    return line
 
 
 @dataclass
@@ -70,7 +87,9 @@ class Context:
     random_hex: Callable[[int], str] = secrets.token_hex
     which: Callable[[str], str | None] = shutil.which
     http_get: Callable[[str, Mapping[str, str], float], int] = default_http_get
-    spawn: Callable[[list[str], Mapping[str, str]], None] = default_spawn
+    spawn: Callable[[list[str], Mapping[str, str]], int] = default_spawn
+    process_args: Callable[[int], str | None] = default_process_args
+    kill: Callable[[int, int], None] = os.kill
     provider_factory: Callable[[Context], Provider] | None = None
     box_factory: Callable[[Context], BoxAccess] | None = None
     # Collect the `swept` entries of every refresh so a failing command can report them.
@@ -102,15 +121,19 @@ class Context:
             if self.provider_factory is not None:
                 self._provider = self.provider_factory(self)
             else:
+                from vasty.config import api_key, vastai_key_path
+
                 key_env = self.settings.api_key_env
-                api_key = self.env.get(key_env)
-                if not api_key:
+                found = api_key(self.env, self.home, key_env)
+                if found is None:
+                    path = vastai_key_path(self.home)
                     raise VastyError(
-                        "auth_missing", f"No API key in {key_env}.", f"Export {key_env}."
+                        "auth_missing", f"No API key in {key_env} or {path}.",
+                        f"Export {key_env} or write the key to {path}.",
                     )
                 from vasty.provider import VastProvider
 
-                self._provider = VastProvider(api_key)
+                self._provider = VastProvider(found[0])
         return self._provider
 
     @property

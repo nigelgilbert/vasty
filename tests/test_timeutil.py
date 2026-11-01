@@ -8,6 +8,7 @@ from vasty.timeutil import (
     Clock,
     format_duration,
     format_duration_exact,
+    format_minutes_up,
     iso,
     parse_duration,
     parse_http_date,
@@ -57,6 +58,14 @@ def test_format_duration_exact(seconds: int, text: str) -> None:
     assert format_duration_exact(seconds) == text
     if seconds > 0:
         assert parse_duration(text) == seconds
+
+
+@pytest.mark.parametrize(
+    ("seconds", "text"),
+    [(0, "0s"), (1, "1m"), (60, "1m"), (61, "2m"), (174, "3m"), (3601, "1h1m"), (7200, "2h")],
+)
+def test_format_minutes_up(seconds: int, text: str) -> None:
+    assert format_minutes_up(seconds) == text
 
 
 @pytest.mark.parametrize(

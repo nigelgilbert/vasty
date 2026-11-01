@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 from decimal import Decimal
 from typing import Any
 
@@ -146,7 +147,7 @@ def test_listed_row_retries_with_backoff_capped_at_60s(harness: Harness) -> None
         if len(harness.provider.destroyed) > before:
             sent.append(snap.now)
     assert set(harness.provider.destroyed) == {row.id}
-    gaps = [b - a for a, b in zip(sent, sent[1:])]
+    gaps = [b - a for a, b in itertools.pairwise(sent)]
     assert gaps == [5, 10, 20, 40, 60, 60]
     lease = harness.context().cache.load().leases["l-0000a001"]
     assert (lease.destroy_pending, lease.destroy_attempts, lease.destroy_at) == (True, 7, sent[-1])
@@ -565,7 +566,21 @@ def test_unreachable_after_answered_and_jobs_unknown(harness: Harness) -> None:
     from vasty.views import lease_view
 
     view = lease_view(lease, snap.now)
-    assert [(j.id, j.state, j.exit) for j in view.jobs] == [("j-1", "unknown", None)]
+    assert [(j.job, j.state, j.exit) for j in view.jobs] == [("j-1", "unknown", None)]
+
+
+def test_vanished_lease_freezes_live_jobs_at_first_gone_sample(harness: Harness) -> None:
+    row = add_lease(harness)
+    harness.box.state(row.id).jobs["j-1"] = Job(
+        id="j-1", cmd="python train.py", started_at=NOW - 60, exit=None, state="running"
+    )
+    refresh(harness)
+    del harness.provider.instances[row.id]
+    harness.time.advance(30)
+    assert refresh(harness).leases["l-0000a001"].state == "gone"
+    harness.time.advance(600)
+    lease = refresh(harness).leases["l-0000a001"]
+    assert [(j.state, j.finished_at) for j in lease.jobs] == [("running", NOW + 30)]
 
 
 def test_never_answered_is_pending(harness: Harness) -> None:
@@ -902,14 +917,14 @@ def test_read_charges_failure_sets_none(harness: Harness) -> None:
 
 
 def test_read_balance_caches_balance_and_credit(harness: Harness) -> None:
-    harness.provider.account_balance = Decimal("0")
+    harness.provider.account_balance = Decimal(0)
     harness.provider.account_credit = Decimal("19.90")
     ctx = harness.context()
     snap = engine.refresh(ctx)
     engine.read_balance(ctx, snap)
-    assert snap.balance == Balance(Decimal("0"), Decimal("19.90"))
+    assert snap.balance == Balance(Decimal(0), Decimal("19.90"))
     data = ctx.cache.load()
-    assert (data.balance, data.credit, data.balance_at) == (Decimal("0"), Decimal("19.90"), NOW)
+    assert (data.balance, data.credit, data.balance_at) == (Decimal(0), Decimal("19.90"), NOW)
     harness.time.advance(59)
     engine.read_balance(ctx, engine.refresh(ctx))
     assert len(calls(harness, "balance")) == 1
@@ -917,7 +932,7 @@ def test_read_balance_caches_balance_and_credit(harness: Harness) -> None:
     harness.provider.fail["balance"] = VastyError("provider_error", "down", "retry")
     engine.read_balance(ctx, engine.refresh(ctx))
     data = ctx.cache.load()
-    assert (data.balance, data.credit, data.balance_at) == (Decimal("0"), Decimal("19.90"), NOW)
+    assert (data.balance, data.credit, data.balance_at) == (Decimal(0), Decimal("19.90"), NOW)
 
 
 def test_cached_snapshot_keeps_billing_read_today_only(harness: Harness) -> None:

@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import io
 import itertools
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Callable, Mapping, TextIO
+from typing import Any, TextIO
 
 from vasty.context import Context
 from vasty.errors import VastyError
@@ -29,7 +30,7 @@ from vasty.models import (
     ProbeResult,
     SshKey,
 )
-from vasty.provider import ProviderTimeout, parse_charges
+from vasty.provider import CreateRejected, ProviderTimeout, parse_charges
 from vasty.remote import (
     CLOCK_TOLERANCE_S,
     BoxUnreachableError,
@@ -66,10 +67,10 @@ class FakeTime:
 
 
 def make_offer(offer_id: int = 1, **kw: Any) -> Offer:
-    base: dict[str, Any] = dict(
-        id=offer_id, gpu_name="RTX 4090", num_gpus=1, gpu_ram_gb=24.0,
-        dph_total=Decimal("0.38"), reliability=0.99, inet_down=500.0, direct_port_count=10,
-    )
+    base: dict[str, Any] = {
+        "id": offer_id, "gpu_name": "RTX 4090", "num_gpus": 1, "gpu_ram_gb": 24.0,
+        "dph_total": Decimal("0.38"), "reliability": 0.99, "inet_down": 500.0, "direct_port_count": 10,
+    }
     base.update(kw)
     return Offer(**base)
 
@@ -85,8 +86,8 @@ class FakeProvider:
     """Billed amount per instance in rows dated today."""
     charge_rows: list[tuple[int, Decimal, int]] = field(default_factory=list)
     """Extra `(instance_id, amount, start)` charge rows."""
-    account_balance: Decimal = Decimal("0")
-    account_credit: Decimal = Decimal("20")
+    account_balance: Decimal = Decimal(0)
+    account_credit: Decimal = Decimal(20)
     ssh_keys: list[SshKey] = field(default_factory=list)
     attached: list[tuple[str, int | None]] = field(default_factory=list)
     destroyed: list[int] = field(default_factory=list)
@@ -98,6 +99,8 @@ class FakeProvider:
     on_create: Callable[[Instance, CreateRequest], None] | None = None
     keep_rows: bool = False
     """When set, `destroy` accepts the call and leaves the row listed."""
+    reject_created: bool = False
+    """When set, `create` adds the row and then raises `rejected_error()`."""
     _ids: Any = field(default_factory=lambda: itertools.count(1001))
     _date: tuple[float, float] | None = None
 
@@ -119,11 +122,11 @@ class FakeProvider:
 
     def add_instance(self, **kw: Any) -> Instance:
         iid = kw.pop("id", None) or next(self._ids)
-        base: dict[str, Any] = dict(
-            id=iid, label=None, actual_status="running", gpu_name="RTX 3090", num_gpus=1,
-            gpu_ram_gb=24.0, dph_total=Decimal("0.22"), public_ipaddr="198.51.100.9",
-            ssh_host=None, ssh_port=None, ports={22: 40022, 8000: 40080, 8080: 40081},
-        )
+        base: dict[str, Any] = {
+            "id": iid, "label": None, "actual_status": "running", "gpu_name": "RTX 3090", "num_gpus": 1,
+            "gpu_ram_gb": 24.0, "dph_total": Decimal("0.22"), "public_ipaddr": "198.51.100.9",
+            "ssh_host": None, "ssh_port": None, "ports": {22: 40022, 8000: 40080, 8080: 40081},
+        }
         base.update(kw)
         inst = Instance(**base)
         self.instances[inst.id] = inst
@@ -148,6 +151,8 @@ class FakeProvider:
         )
         if self.on_create is not None:
             self.on_create(inst, request)
+        if self.reject_created:
+            raise rejected_error()
         return inst.id
 
     def list_instances(self) -> list[Instance]:
@@ -202,6 +207,14 @@ def timeout_error() -> ProviderTimeout:
     return ProviderTimeout("create timed out")
 
 
+def rejected_error() -> CreateRejected:
+    """Return the error a `success: false` create body raises."""
+    return CreateRejected(
+        "provider_error", "Vast create failed: offer taken", "Check the request and retry.",
+        {"action": "create", "response": {"msg": "offer taken"}},
+    )
+
+
 @dataclass
 class BoxState:
     """One box's `/workspace/.vasty` as the fake sees it."""
@@ -222,7 +235,15 @@ class BoxState:
     clock_write_fails: bool = False
     adopt_missing: list[str] = field(default_factory=list)
     job_exit: int | None = 0
+    job_runtime: int = 0
+    """Seconds a job runs inside `attach_job` before it writes its exit record."""
+    attach_lag: int = 0
+    """Seconds `attach_job` takes to return after the job writes its exit record."""
     signals: list[tuple[str, str]] = field(default_factory=list)
+    signal_exits: dict[str, int] = field(default_factory=lambda: {"TERM": 143})
+    """Exit codes a live job records when it gets the named signal; other signals leave it running."""
+    ignores_term: bool = False
+    """Set for a job that ignores TERM: the record keeps no exit and the job stays live."""
     tails: list[str | None] = field(default_factory=list)
     """Job ids `log_tail` read, in call order."""
     execs: list[str] = field(default_factory=list)
@@ -285,9 +306,9 @@ class FakeBox:
                 box.clock = target_clock
                 box.clock_readable = True
         missing = list(box.guard_missing)
-        if box.alive_mtime is not None and self.time.wall_now - box.alive_mtime > 180:
-            if "watchdog" not in missing:
-                missing.append("watchdog")
+        stale = box.alive_mtime is not None and self.time.wall_now - box.alive_mtime > 180
+        if stale and "watchdog" not in missing:
+            missing.append("watchdog")
         off = box.clock is None or (
             target_clock is not None and abs(box.clock - target_clock) > CLOCK_TOLERANCE_S
         )
@@ -344,13 +365,22 @@ class FakeBox:
         job = box.jobs[job_id]
         if box.job_exit is None:
             return None
+        self.time.advance(box.job_runtime)
         job.exit = box.job_exit
         job.state = "exited"
         job.finished_at = int(self.time.wall_now)
+        self.time.advance(box.attach_lag)
         return box.job_exit
 
     def signal_job(self, target: SshTarget, job_id: str, signal: str) -> None:
-        self._get(target).signals.append((job_id, signal))
+        box = self._get(target)
+        box.signals.append((job_id, signal))
+        job = box.jobs.get(job_id)
+        code = None if signal == "TERM" and box.ignores_term else box.signal_exits.get(signal)
+        if job is not None and code is not None and job.state in ("running", "serving"):
+            job.exit = code
+            job.state = "exited"
+            job.finished_at = int(self.time.wall_now)
 
     def job_status(self, target: SshTarget, job_id: str) -> Job:
         return self._get(target).jobs[job_id]
@@ -409,6 +439,12 @@ class Harness:
     """Argument lists `spawn` received."""
     spawn_error: OSError | None = None
     """When set, `spawn` raises it instead of recording the call."""
+    processes: dict[int, str] = field(default_factory=dict)
+    """Command line per running pid; `spawn` adds one, a test removes it to end the process."""
+    next_pid: int = 4001
+    """The pid the next `spawn` returns."""
+    kills: list[tuple[int, int]] = field(default_factory=list)
+    """`(pid, signal)` pairs `kill` received."""
     last_ctx: Context | None = None
     """The context the latest `run` built, kept when an exception escapes."""
 
@@ -426,10 +462,20 @@ class Harness:
             return self.http_statuses.pop(0)
         return self.http_status
 
-    def spawn(self, argv: list[str], env: Mapping[str, str]) -> None:
+    def spawn(self, argv: list[str], env: Mapping[str, str]) -> int:
         if self.spawn_error is not None:
             raise self.spawn_error
         self.spawned.append(list(argv))
+        pid = self.next_pid
+        self.next_pid += 1
+        self.processes[pid] = " ".join(argv)
+        return pid
+
+    def kill(self, pid: int, sig: int) -> None:
+        if pid not in self.processes:
+            raise ProcessLookupError(pid)
+        self.kills.append((pid, sig))
+        del self.processes[pid]
 
     def random_hex(self, nbytes: int) -> str:
         if self.hex_values:
@@ -446,6 +492,8 @@ class Harness:
             which=lambda name: None if name in self.missing_tools else f"/usr/bin/{name}",
             http_get=self.http_get,
             spawn=self.spawn,
+            process_args=self.processes.get,
+            kill=self.kill,
             provider_factory=lambda ctx: self.provider,
             box_factory=lambda ctx: self.box,
         )

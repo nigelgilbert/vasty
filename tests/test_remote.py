@@ -29,6 +29,7 @@ from vasty.remote import (
     RunMode,
     SshBox,
     SshTarget,
+    exec_last,
     parse_rsync_version,
     probe_script,
     subprocess_runner,
@@ -38,7 +39,7 @@ TARGET = SshTarget(instance_id=4242, host="198.51.100.7", port=41022)
 
 
 def bash_n(script: str) -> None:
-    done = subprocess.run(["bash", "-n"], input=script, capture_output=True, text=True)
+    done = subprocess.run(["bash", "-n"], input=script, capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
 
 
@@ -85,7 +86,7 @@ class LocalRunner:
         if mode == "stream":
             return subprocess_runner(remote, mode="stream", out=out)
         done = subprocess.run(remote, input=input, capture_output=True, text=True,
-                              timeout=timeout or 30, env=self.env)
+                              timeout=timeout or 30, env=self.env, check=False)
         return ExecResult(done.returncode, done.stdout, done.stderr)
 
 
@@ -243,6 +244,41 @@ def test_rsync_protects_the_state_dir_only_on_push_with_delete(tmp_path: Path) -
     assert not any(a.startswith("--filter=") for a in pushed + pulled)
 
 
+@pytest.mark.parametrize(
+    ("dest", "rsync_path"),
+    [
+        ("/workspace/a/b/", "mkdir -p /workspace/a/b && rsync"),
+        ("/workspace/a/b", "mkdir -p /workspace/a && rsync"),
+        ("out/run 1/", "mkdir -p '/workspace/out/run 1' && rsync"),
+        ("model.bin", "mkdir -p /workspace && rsync"),
+        ("~/a/b", "mkdir -p a && rsync"),
+        ("/", None),
+        ("/data", None),
+        ("~", None),
+        ("~/", None),
+        ("~/a", None),
+    ],
+)
+@pytest.mark.parametrize("protect", [True, False])
+def test_rsync_push_creates_the_destination_parent(
+    tmp_path: Path, dest: str, rsync_path: str | None, protect: bool
+) -> None:
+    box = fake_box(tmp_path, FakeRunner(), protect_args=protect)
+    argv = box.rsync_argv(TARGET, True, "./", dest, False, [])
+    paths = [a for a in argv if a.startswith("--rsync-path")]
+    if rsync_path is None:
+        assert paths == []
+    else:
+        assert paths == [f"--rsync-path={rsync_path}"]
+        assert argv.index(paths[0]) < argv.index("-e")
+
+
+def test_rsync_pull_passes_no_rsync_path(tmp_path: Path) -> None:
+    box = fake_box(tmp_path, FakeRunner())
+    argv = box.rsync_argv(TARGET, False, "/workspace/a/b/", "./out/", False, [])
+    assert not any(a.startswith("--rsync-path") for a in argv)
+
+
 def test_rsync_path_with_a_space_uses_protect_args(tmp_path: Path) -> None:
     box = fake_box(tmp_path, FakeRunner(), protect_args=True)
     argv = box.rsync_argv(TARGET, True, "./my src/", "my dir/", False, [])
@@ -337,12 +373,17 @@ def test_rsync_push_delete_runs_against_a_path_with_a_space(tmp_path: Path) -> N
     )
     argv = box.rsync_argv(TARGET, True, f"{src}/", f"{workspace}/", True, [".git"])
     argv[argv.index("-e") + 1] = str(stub)
-    done = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    done = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
     assert done.returncode == 0, done.stderr
     assert (workspace / "pkg" / "a.py").read_text() == "print(1)\n"
     assert not (workspace / "stale").exists()
     assert (workspace / ".vasty" / "clock").read_text() == "1\n"
     assert (workspace / ".vasty" / "jobs").is_dir()
+    argv = box.rsync_argv(TARGET, True, f"{src}/", f"{workspace}/a/b/", False, [".git"])
+    argv[argv.index("-e") + 1] = str(stub)
+    done = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
+    assert done.returncode == 0, done.stderr
+    assert (workspace / "a" / "b" / "pkg" / "a.py").read_text() == "print(1)\n"
 
 
 # Probe with a fake runner.
@@ -767,6 +808,35 @@ def test_signal_reaches_the_process_group(local: LocalBox) -> None:
     local.wait_exit("j-1")
     assert int(local.read("jobs/j-1/exit")) == 130
     assert local.box.job_status(TARGET, "j-1").exit == 130
+
+
+def test_exec_last_execs_a_simple_command_and_wraps_a_compound_one() -> None:
+    assert exec_last("python 'x y'") == "exec python 'x y'\n"
+    assert exec_last("export K=1\nvllm serve m\n") == "export K=1\nexec vllm serve m\n"
+    assert exec_last("a | b") == "exec bash -c 'a | b'\n"
+    assert exec_last("cd d && make") == "exec bash -c 'cd d && make'\n"
+    assert exec_last("echo x; exit 4") == "exec bash -c 'echo x; exit 4'\n"
+    assert exec_last("cmd >out") == "exec bash -c 'cmd >out'\n"
+
+
+def test_job_that_ignores_term_keeps_running_with_no_exit_record(local: LocalBox) -> None:
+    fixture = local.tmp / "stubborn.py"
+    fixture.write_text("import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                       "time.sleep(60)\n")
+    job = Job("j-1", "stubborn", None, None, "running")
+    started = local.box.start_job(TARGET, job, f"{sys.executable} {fixture}")
+    assert started.pid is not None
+    try:
+        time.sleep(0.5)
+        local.box.signal_job(TARGET, "j-1", "TERM")
+        time.sleep(0.5)
+        status = local.box.job_status(TARGET, "j-1")
+        assert (status.state, status.exit) == ("running", None)
+        assert not (local.root / "jobs" / "j-1" / "exit").exists()
+    finally:
+        subprocess.run(["pkill", "-9", "-P", str(started.pid)], check=False)
+    local.wait_exit("j-1")
+    assert local.box.job_status(TARGET, "j-1").exit == 137
 
 
 def test_log_tail_defaults_to_newest_job(local: LocalBox) -> None:

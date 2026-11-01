@@ -9,7 +9,12 @@ active lease matches, so callers can raise `lease_expired` or return
 Owner scope: writes act on the current owner (`ctx.settings.owner`) unless
 `--owner` or `--everyone` is given. Reads span owners unless `--owner`
 filters them. `--all` means the current owner's leases on reads too, and
-`--all --everyone` widens it to the account.
+`--all --everyone` widens it to the account. `status --everyone` alone
+reads as `--all --everyone`.
+
+A name that matches no lease of the current owner raises `lease_not_found`.
+When other owners hold active leases under that name, `details.matches`
+lists their ids and the hint names `vasty status <id>`.
 """
 
 from __future__ import annotations
@@ -43,6 +48,7 @@ def has_target(ns: argparse.Namespace) -> bool:
         or getattr(ns, "group", None)
         or getattr(ns, "owner", None)
         or getattr(ns, "all", False)
+        or getattr(ns, "everyone", False)
     )
 
 
@@ -50,6 +56,16 @@ def _not_found(ref: str, owner: str | None) -> VastyError:
     scope = f" for owner {owner}" if owner is not None else ""
     return VastyError(
         "lease_not_found", f"No lease {ref!r}{scope}.", "Run vasty status to list leases."
+    )
+
+
+def _held_by_others(ref: str, owner: str, matches: list[str]) -> VastyError:
+    return VastyError(
+        "lease_not_found",
+        f"No lease {ref!r} for owner {owner}. Other owners hold {', '.join(matches)}.",
+        f"Run vasty status {matches[0]}." if len(matches) == 1
+        else f"Run vasty status ID with one of {', '.join(matches)}.",
+        details={"matches": matches},
     )
 
 
@@ -69,7 +85,7 @@ def resolve_target(ctx: Context, snap: Snapshot, ns: argparse.Namespace, write: 
     owner_flag = getattr(ns, "owner", None)
     everyone = bool(getattr(ns, "everyone", False))
     all_flag = bool(getattr(ns, "all", False))
-    if not (group or owner_flag or all_flag):
+    if not (group or owner_flag or all_flag or everyone):
         raise invalid("No target given.", "Pass a LEASE, --group G, --owner O or --all.")
     if group:
         ids.validate_value("group", group)
@@ -95,7 +111,8 @@ def resolve_target(ctx: Context, snap: Snapshot, ns: argparse.Namespace, write: 
 def resolve_lease(ctx: Context, snap: Snapshot, ref: str) -> CachedLease | Instance:
     """Resolve one id or name under the current owner, or an orphan by `i-` id.
 
-    Raise `lease_not_found`, `ambiguous_target` with the matching ids in
+    Raise `lease_not_found`, with other owners' matching ids in `details`
+    when they hold the name, `ambiguous_target` with the matching ids in
     `details`, or `invalid_arguments` for a malformed name.
     """
     instance_id = ids.parse_orphan_id(ref)
@@ -133,4 +150,7 @@ def resolve_lease(ctx: Context, snap: Snapshot, ref: str) -> CachedLease | Insta
         return active[0]
     if named:
         return max(named, key=lambda lease: (lease.history_since or 0, lease.lease))
+    others = sorted(lease.lease for lease in snap.active() if lease.label.name == ref)
+    if others:
+        raise _held_by_others(ref, owner, others)
     raise _not_found(ref, owner)

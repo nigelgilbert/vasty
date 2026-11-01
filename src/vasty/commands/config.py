@@ -1,8 +1,10 @@
 """`vasty config`.
 
-`show` returns `{values}`, each key mapped to `{value, source}`. `set` returns
-`{key, value}` and writes the user config file. `profiles` returns
-`{profiles}`, each name mapped to its merged fields.
+`show` returns `{values, api_key_source}`. `values` maps each key to
+`{value, source}`. `api_key_source` names the env var or key file the API key
+comes from, or is null when neither holds one; the key itself never prints.
+`set` returns `{key, value}` and writes the user config file. `profiles`
+returns `{profiles}`, each name mapped to its merged fields.
 """
 
 from __future__ import annotations
@@ -13,7 +15,14 @@ from decimal import Decimal
 from typing import Any
 
 from vasty.cli import Outcome
-from vasty.config import SHOWN, Settings, set_value, toml_value, user_config_path
+from vasty.config import (
+    SHOWN,
+    Settings,
+    api_key,
+    set_value,
+    toml_value,
+    user_config_path,
+)
 from vasty.context import Context
 from vasty.timeutil import format_duration_exact
 
@@ -29,6 +38,7 @@ class ConfigValue:
 @dataclass
 class ConfigShowResult:
     values: dict[str, ConfigValue]
+    api_key_source: str | None
 
 
 @dataclass
@@ -73,11 +83,14 @@ def _show(ctx: Context, args: argparse.Namespace) -> Outcome:
         ctx.flags["owner"] = args.owner
     settings = ctx.settings
     values = show_values(settings)
-    width = max(len(k) for k in values)
+    found = api_key(ctx.env, ctx.home, settings.api_key_env)
+    key_source = found[1] if found is not None else None
     rows = [(k, _human_value(k, v.value, settings), v.source) for k, v in values.items()]
+    rows.append(("api_key_source", key_source or "-", ""))
+    width = max(len(r[0]) for r in rows)
     vwidth = max(len(r[1]) for r in rows)
-    human = "\n".join(f"{k:<{width}}  {v:<{vwidth}}  {s}" for k, v, s in rows)
-    return Outcome(ConfigShowResult(values), human=human)
+    human = "\n".join(f"{k:<{width}}  {v:<{vwidth}}  {s}".rstrip() for k, v, s in rows)
+    return Outcome(ConfigShowResult(values, key_source), human=human)
 
 
 def _set(ctx: Context, args: argparse.Namespace) -> Outcome:

@@ -2,7 +2,9 @@
 
 Lease cost is the sum of Vast's charge rows for the instance, or None before
 Vast posts a row. Uptime runs from the first `running` sample and is None
-before it.
+before it. A `pending` lease has null `expires_at` and `ttl_remaining_s`. A
+history lease has null `ttl_remaining_s` and no `actual_status` in its
+`--verbose` extras.
 
 This module imports only the standard library and vasty modules that do.
 """
@@ -66,12 +68,20 @@ def lease_cost(instance_id: int, charges: Charges | None) -> Decimal | None:
 
 def burn_per_hr(live: Iterable[Instance]) -> Decimal:
     """Return the sum of `dph_total` over live leases and orphans."""
-    return sum((inst.dph_total for inst in live), Decimal("0"))
+    return sum((inst.dph_total for inst in live), Decimal(0))
 
 
 def show_jobs_unknown(state: str) -> bool:
     """Return True when live jobs show as `unknown`: the box is unreachable or gone."""
     return state == "unreachable" or state in HISTORY_STATES
+
+
+def job_duration(job: Job, now: int) -> int | None:
+    """Return seconds from `started_at` to `finished_at`, or to now while it is unset."""
+    if job.started_at is None:
+        return None
+    end = job.finished_at if job.finished_at is not None else now
+    return max(0, end - job.started_at)
 
 
 def job_view(job: Job, now: int, lease_state: str) -> JobView:
@@ -82,11 +92,9 @@ def job_view(job: Job, now: int, lease_state: str) -> JobView:
         state, exit_code = "unknown", None
     if job.state == "unknown":
         exit_code = None
-    duration = None
-    if job.started_at is not None:
-        end = job.finished_at if job.finished_at is not None else now
-        duration = max(0, end - job.started_at)
-    return JobView(id=job.id, cmd=job.cmd, state=state, exit=exit_code, duration_s=duration)
+    return JobView(
+        job=job.id, cmd=job.cmd, state=state, exit=exit_code, duration_s=job_duration(job, now)
+    )
 
 
 def ports_view(ports: dict[int, int]) -> dict[str, int]:
@@ -130,9 +138,12 @@ def _full_label(lease: CachedLease) -> str | None:
 
 
 def lease_verbose(lease: CachedLease) -> dict[str, Any]:
-    """Return the `--verbose` extras: label, guard layers, instance id, image, ports, skew, last error."""
+    """Return the `--verbose` extras: label, guard layers, instance id, image, ports, skew, last error.
+
+    `actual_status` is included for active leases only.
+    """
     _, missing = guard(lease)
-    return {
+    out: dict[str, Any] = {
         "label": _full_label(lease),
         "guard_layers": {
             layer: "missing" if layer in missing else "ok" for layer in GUARD_LAYERS
@@ -146,6 +157,9 @@ def lease_verbose(lease: CachedLease) -> dict[str, Any]:
         "running_at": iso(lease.running_at),
         "last_provider_error": lease.last_provider_error,
     }
+    if lease.state in HISTORY_STATES:
+        del out["actual_status"]
+    return out
 
 
 def lease_view(
@@ -157,6 +171,7 @@ def lease_view(
 ) -> LeaseView:
     """Build one `status.leases` entry for a managed lease."""
     expiry = effective_expiry(lease.label)
+    pending = lease.state == "pending"
     return LeaseView(
         lease=lease.lease,
         name=lease.label.name,
@@ -169,8 +184,8 @@ def lease_view(
         price_per_hr=lease.price_per_hr,
         cost=lease_cost(lease.instance_id, charges),
         uptime_s=uptime_s(lease, now),
-        expires_at=iso(expiry),
-        ttl_remaining_s=max(0, expiry - now),
+        expires_at=None if pending else iso(expiry),
+        ttl_remaining_s=None if pending or lease.state in HISTORY_STATES else max(0, expiry - now),
         busy=busy(lease),
         jobs=[job_view(job, now, lease.state) for job in lease.jobs],
         log_tail=log_tail,

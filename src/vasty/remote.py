@@ -149,13 +149,17 @@ def subprocess_runner(
 ) -> ExecResult:
     """Run a local process with `subprocess`."""
     if mode == "capture":
-        done = subprocess.run(argv, input=input, capture_output=True, text=True, timeout=timeout)
+        done = subprocess.run(
+            argv, input=input, capture_output=True, text=True, timeout=timeout, check=False
+        )
         return ExecResult(done.returncode, done.stdout, done.stderr)
     if mode == "inherit":
-        code = subprocess.run(argv, input=input, text=True, timeout=timeout).returncode
+        code = subprocess.run(argv, input=input, text=True, timeout=timeout, check=False).returncode
         return ExecResult(code, "", "")
     if mode == "stderr":
-        done = subprocess.run(argv, input=input, text=True, timeout=timeout, stdout=2)
+        done = subprocess.run(
+            argv, input=input, text=True, timeout=timeout, stdout=2, check=False
+        )
         return ExecResult(done.returncode, "", "")
     with tempfile.TemporaryFile() as err:
         proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err)
@@ -221,6 +225,26 @@ def local_rsync_version() -> tuple[int, int, int] | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return parse_rsync_version(done.stdout)
+
+
+def exec_last(command: str) -> str:
+    """Return `command` with its last line exec'd, so the job replaces the shell that runs it.
+
+    A last line that holds a shell operator (`;`, `|`, `&`, `(`, a redirection)
+    runs under `exec bash -c`, which keeps the operator's meaning. The callers
+    pass a simple command on that line: `run` joins its argv and `serve` puts
+    `vllm serve` after an `export`.
+    """
+    lines = command.rstrip("\n").split("\n")
+    last = lines[-1]
+    tokens = shlex.shlex(last, posix=True, punctuation_chars=True)
+    tokens.whitespace_split = True
+    try:
+        compound = any(set(tok) <= set("();<>|&") for tok in tokens)
+    except ValueError:
+        compound = True
+    lines[-1] = f"exec bash -c {shlex.quote(last)}" if compound else f"exec {last}"
+    return "\n".join(lines) + "\n"
 
 
 def _int(text: str | None) -> int | None:
@@ -542,7 +566,13 @@ class SshBox:
         return list(LAYERS)
 
     def start_script(self, job: Job, command: str) -> str:
-        """Return the shell that writes a job record and starts the job under tmux."""
+        """Return the shell that writes a job record and starts the job under tmux.
+
+        `run.sh` ignores INT, TERM and HUP, runs `script` and writes the exit
+        record. `script` execs its last line, so the job is `run.sh`'s child
+        and the recorded exit is the job's own. A signal to the group reaches
+        the job directly, and a job that ignores it keeps `run.sh` waiting.
+        """
         jdir = self._job_dir(job.id)
         j = shlex.quote(jdir)
         w = shlex.quote(self.workdir)
@@ -562,7 +592,7 @@ class SshBox:
             f"mkdir -p {shlex.quote(posixpath.dirname(jdir))} || exit 3",
             'mkdir "$J" || { [ -e "$J" ] && echo vasty_job=exists; exit 3; }',
             f'printf %s {_b64(job.cmd)} | base64 -d >"$J/cmd"',
-            f'(umask 077; printf %s {_b64(command)} | base64 -d >"$J/script")',
+            f'(umask 077; printf %s {_b64(exec_last(command))} | base64 -d >"$J/script")',
             f'printf %s {_b64(run_sh)} | base64 -d >"$J/run.sh"',
             f'echo {job.kind} >"$J/kind"',
         ]
@@ -571,8 +601,10 @@ class SshBox:
         lines += [
             ': >"$J/log"',
             'date +%s >"$J/started"',
-            f"{self.tmux} new-session -d -s {session} -c {w} {tmux_cmd}"
-            " || { echo vasty_job=tmux_failed; exit 0; }",
+            (
+                f"{self.tmux} new-session -d -s {session} -c {w} {tmux_cmd}"
+                " || { echo vasty_job=tmux_failed; exit 0; }"
+            ),
             'i=0; while [ ! -s "$J/pid" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done',
             'echo "started=$(cat "$J/started")"',
             'echo "pid=$(cat "$J/pid" 2>/dev/null)"',
@@ -717,8 +749,10 @@ class SshBox:
         """Return the rsync argv for one transfer over the lease's ssh options.
 
         A push with `delete` protects vasty's state directory when it sits
-        under the destination. The remote path goes through `-s` on rsync
-        3.0 or later and is shell-quoted on older rsync.
+        under the destination. A push runs `mkdir -p` of the destination's
+        parent through `--rsync-path`, so a missing parent on the box gets
+        created. The remote path goes through `-s` on rsync 3.0 or later and
+        is shell-quoted on older rsync.
         """
         protect = self._rsync_protect_args()
         argv = ["rsync", "-az", "--partial"]
@@ -731,6 +765,10 @@ class SshBox:
             rule = self._protect_rule(dest)
             if rule is not None:
                 argv.append(f"--filter=P {rule}")
+        if push:
+            parent = self._push_parent(dest)
+            if parent is not None:
+                argv.append(f"--rsync-path=mkdir -p {shlex.quote(parent)} && rsync")
         argv += ["-e", shlex.join(["ssh", *self.ssh_options(target)])]
         remote = f"{target.user}@{target.host}:"
         if push:
@@ -759,6 +797,27 @@ class SshBox:
         if protect:
             return resolved
         return shlex.quote(resolved)
+
+    def _push_parent(self, dest: str) -> str | None:
+        """Return the directory a push into `dest` writes into, or None when it always exists.
+
+        A trailing slash names the directory itself. Without one, `dest` is
+        the file or directory rsync creates and its parent is returned. A
+        `~` path becomes relative to the login home, as in `_rsync_path`.
+        `/`, `.` and the home directory return None.
+        """
+        check_remote_path(dest)
+        resolved = self.remote_path(dest)
+        if resolved == "~" or resolved.startswith("~/"):
+            resolved = "." + resolved[1:]
+        if resolved.endswith("/"):
+            parent = resolved.rstrip("/")
+        else:
+            parent = posixpath.dirname(resolved)
+        parent = posixpath.normpath(parent) if parent else ""
+        if parent in ("", "/", "."):
+            return None
+        return parent
 
     def _protect_rule(self, dest: str) -> str | None:
         """Return the anchored filter pattern for the state directory under `dest`, if any."""

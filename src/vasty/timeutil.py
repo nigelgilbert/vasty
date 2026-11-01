@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import calendar
 import re
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from typing import Callable, overload
+from typing import overload
 
 from vasty.errors import invalid
 
@@ -65,6 +66,11 @@ def format_duration(seconds: int, *, pad: bool = False) -> str:
     if minutes:
         return f"{minutes}m"
     return f"{secs}s"
+
+
+def format_minutes_up(seconds: int) -> str:
+    """Format seconds rounded up to the whole minute, so 174 reads `3m` and 3601 reads `1h1m`."""
+    return format_duration(-(-int(seconds) // 60) * 60)
 
 
 def format_duration_exact(seconds: int) -> str:
@@ -124,7 +130,7 @@ def iso(epoch: int | None) -> str | None:
     """Format epoch seconds as `2026-10-29T01:04:00Z`."""
     if epoch is None:
         return None
-    return datetime.fromtimestamp(int(epoch), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.fromtimestamp(int(epoch), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def day_start(epoch: int) -> int:
@@ -145,7 +151,7 @@ def parse_http_date(value: str | None) -> float | None:
     except (TypeError, ValueError, IndexError, OverflowError):
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed.timestamp()
 
 

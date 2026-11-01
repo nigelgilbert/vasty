@@ -9,6 +9,12 @@ Reconciliation keeps history leases in `Snapshot.leases` for 24h from the
 moment vasty first sees them gone. A lease listed by Vast is active unless it
 has `destroy_pending`.
 
+Job records. A live job on a lease the sweep expires, or on a lease a list
+call no longer shows, gets `finished_at` set to that sample's time, so its
+`duration_s` stops growing. `release` marks live jobs `killed` with a null
+exit. A probe replaces cached jobs with the box's records and keeps `killed`
+ones, which `release` and `stop` wrote.
+
 Destroy lifecycle. `destroy_pending` marks a lease whose row vasty has decided to
 destroy and a list call still shows. A destroy compares the re-read row's
 `expires` against the last value this command read for the lease: the listed
@@ -102,7 +108,14 @@ from vasty.models import (
     WarningItem,
 )
 from vasty.onstart import STARTUP_INTERRUPTED
-from vasty.state import GUARD_LAYERS, derive_state, effective_expiry, make_warning, resolve_state
+from vasty.state import (
+    GUARD_LAYERS,
+    LIVE_JOB_STATES,
+    derive_state,
+    effective_expiry,
+    make_warning,
+    resolve_state,
+)
 from vasty.timeutil import day_start, iso
 
 if TYPE_CHECKING:
@@ -327,6 +340,22 @@ def mark_destroy_sent(lease: CachedLease, now: int, error: str | None = None) ->
     lease.last_provider_error = None if error is None else f"destroy failed: {error}"
 
 
+def freeze_jobs(lease: CachedLease, now: int) -> None:
+    """Set `finished_at` to `now` on live jobs that have none, so `duration_s` stops growing."""
+    for job in lease.jobs:
+        if job.state in LIVE_JOB_STATES and job.finished_at is None:
+            job.finished_at = now
+
+
+def kill_jobs(lease: CachedLease, now: int) -> None:
+    """Finish every live job as `killed` with a null exit, frozen at `now`."""
+    freeze_jobs(lease, now)
+    for job in lease.jobs:
+        if job.state in LIVE_JOB_STATES:
+            job.state = "killed"
+            job.exit = None
+
+
 def mark_released(lease: CachedLease, now: int) -> None:
     """Record an accepted destroy for a lease this machine released."""
     lease.state = "released"
@@ -371,7 +400,9 @@ def _retry_destroy(
     mark_destroy_sent(lease, now, error)
     if error is None:
         return None
-    return SweptEntry(lease.lease, label.name, iso(min(now, effective_expiry(label))), False, error)
+    return SweptEntry(
+        lease.lease, label.name, label.owner, iso(min(now, effective_expiry(label))), False, error
+    )
 
 
 def _sweep(
@@ -413,17 +444,21 @@ def _sweep(
         lease.state = "expired"
         lease.expired_at = effective_expiry(label)
         lease.history_since = None
+        freeze_jobs(lease, now)
         mark_destroy_sent(lease, now, error)
         if error is None:
             destroyed.add(inst.id)
         leases[label.lease] = lease
         expired_at = iso(effective_expiry(label))
-        swept.append(SweptEntry(lease.lease, label.name, expired_at, error is None, error))
+        swept.append(
+            SweptEntry(lease.lease, label.name, label.owner, expired_at, error is None, error)
+        )
     return swept, replaced, destroyed
 
 
 def _to_history(lease: CachedLease, now: int) -> None:
-    """Move a lease whose row a list call no longer shows into history."""
+    """Move a lease whose row a list call no longer shows into history and freeze its live jobs."""
+    freeze_jobs(lease, now)
     if lease.state in HISTORY_STATES:
         if lease.destroy_pending or lease.history_since is None:
             _clear_destroy(lease)
@@ -544,9 +579,12 @@ def _keep_guard(lease: CachedLease) -> None:
 
 
 def _merge_jobs(cached: list[Job], fresh: list[Job]) -> list[Job]:
+    """Replace cached jobs with the box's records, keeping cached `killed` records."""
     by_id = {job.id: job for job in cached}
     for job in fresh:
-        by_id[job.id] = job
+        old = by_id.get(job.id)
+        if old is None or old.state != "killed":
+            by_id[job.id] = job
     return list(by_id.values())
 
 

@@ -82,7 +82,7 @@ def test_round_trip_billing(cache: Cache) -> None:
     charges = Charges(per_instance={55120: Decimal("1.20")}, today=Decimal("0.40"))
     cache.save(CacheData(
         charges=charges, charges_at=1793236500, charges_start=1793145600,
-        balance=Decimal("0"), credit=Decimal("19.9062"), balance_at=1793236490,
+        balance=Decimal(0), credit=Decimal("19.9062"), balance_at=1793236490,
     ))
     body = json.loads(cache.path.read_text())
     assert (body["balance"], body["credit"], body["charges_start"]) == ("0", "19.9062", 1793145600)
@@ -91,7 +91,7 @@ def test_round_trip_billing(cache: Cache) -> None:
     assert data.charges == charges
     assert (data.charges_at, data.charges_start) == (1793236500, 1793145600)
     assert (data.balance, data.credit, data.balance_at) == (
-        Decimal("0"), Decimal("19.9062"), 1793236490
+        Decimal(0), Decimal("19.9062"), 1793236490
     )
 
 
@@ -216,9 +216,8 @@ def test_lock_is_reentrant_and_nests_with_load_save(cache: Cache) -> None:
 
 
 def test_lock_released_after_exception(cache: Cache) -> None:
-    with pytest.raises(RuntimeError):
-        with cache.lock():
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), cache.lock():
+        raise RuntimeError("boom")
     assert _try_flock(cache.path.with_name("leases.json.lock"))
 
 

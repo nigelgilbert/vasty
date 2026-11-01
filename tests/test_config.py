@@ -409,7 +409,7 @@ def test_owner_flag_on_config_show(harness: Harness) -> None:
 # Removed keys.
 
 # Build the removed key's name so a repo grep for it stays empty.
-REMOVED_BUDGET_KEY = "_".join(["daily", "budget"])
+REMOVED_BUDGET_KEY = "_".join(["daily", "budget"])  # noqa: FLY002
 
 
 @pytest.mark.parametrize("table", ["[defaults]", "[profiles.big]"])
@@ -495,6 +495,13 @@ def test_config_show_json(harness: Harness) -> None:
     assert values["gpu"] == {"value": None, "source": "default"}
 
 
+def test_config_show_json_keeps_four_places_of_max_price(harness: Harness) -> None:
+    write(user_config_path(harness.home), "[defaults]\nmax_price = 0.272\n")
+    code, out, _ = harness.run("config", "show")
+    assert code == 0
+    assert json.loads(out)["values"]["max_price"] == {"value": 0.272, "source": "user"}
+
+
 def test_config_show_profile(harness: Harness) -> None:
     write(user_config_path(harness.home), '[profiles.big]\ngpu = "A100"\n')
     code, out, _ = harness.run("config", "show", "--profile", "big")
@@ -507,11 +514,42 @@ def test_config_show_human(harness: Harness) -> None:
     code, out, _ = harness.run("config", "show", "--plain")
     assert code == 0
     lines = out.strip().splitlines()
-    assert len(lines) == 16
+    assert len(lines) == 17
     rows = {line.split()[0]: line.split()[1:] for line in lines}
     assert rows["image"] == ["my/img", "project"]
     assert rows["ttl"] == ["30m", "default"]
     assert rows["max_price"] == ["0.60", "default"]
+    assert rows["api_key_source"] == ["-"]
+
+
+@pytest.mark.parametrize(
+    ("env_key", "file_key", "source"),
+    [
+        ("env-secret", None, "VAST_API_KEY"),
+        (None, "file-secret", "FILE"),
+        ("env-secret", "file-secret", "VAST_API_KEY"),
+        (None, None, None),
+    ],
+)
+def test_config_show_names_api_key_source(
+    harness: Harness, env_key: str | None, file_key: str | None, source: str | None
+) -> None:
+    key_file = harness.home / ".config" / "vastai" / "vast_api_key"
+    if env_key is not None:
+        harness.env["VAST_API_KEY"] = env_key
+    if file_key is not None:
+        write(key_file, file_key + "\n")
+    expected = str(key_file) if source == "FILE" else source
+    code, out, _ = harness.run("config", "show")
+    assert code == 0
+    assert json.loads(out)["api_key_source"] == expected
+    code, plain, _ = harness.run("config", "show", "--plain")
+    assert code == 0
+    row = next(line for line in plain.splitlines() if line.startswith("api_key_source"))
+    assert row.split()[1:] == [expected or "-"]
+    for text in (out, plain):
+        assert "env-secret" not in text
+        assert "file-secret" not in text
 
 
 def test_config_show_cuda_from_env(harness: Harness) -> None:
@@ -525,6 +563,25 @@ def test_config_show_cuda_flag(harness: Harness) -> None:
     code, out, _ = harness.run("config", "show", "--cuda", "12.8")
     assert code == 0
     assert json.loads(out)["values"]["cuda"] == {"value": 12.8, "source": "flag"}
+
+
+def test_config_show_cuda_from_base_image(harness: Harness) -> None:
+    code, out, _ = harness.run("config", "show")
+    assert code == 0
+    assert json.loads(out)["values"]["cuda"] == {"value": 12.6, "source": "image"}
+
+
+def test_config_show_vllm_profile_names_image_as_cuda_source(harness: Harness) -> None:
+    write(user_config_path(harness.home), '[profiles.vllm]\nimage = "vllm/vllm-openai:v0.32.0"\n')
+    code, out, _ = harness.run("config", "show", "--profile", "vllm")
+    assert code == 0
+    assert json.loads(out)["values"]["cuda"] == {"value": 13.0, "source": "image"}
+
+
+def test_config_show_custom_image_has_no_cuda(harness: Harness) -> None:
+    code, out, _ = harness.run("config", "show", "--image", "my/img")
+    assert code == 0
+    assert json.loads(out)["values"]["cuda"] == {"value": None, "source": "default"}
 
 
 def test_config_set_cuda(harness: Harness) -> None:

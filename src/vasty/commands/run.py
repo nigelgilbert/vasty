@@ -12,7 +12,8 @@ account: a lease now in history returns `lease_expired`, anything else
 `box_unreachable`, both with exit 2. Any other error from the attach counts
 as a lost attach and leaves the box up with the job running. A reader that
 closed the stream, as in `vasty run ... | head`, gets the stream pointed at
-`/dev/null` so the exit is clean. An exception from the attach prints
+`/dev/null` so the exit is clean. `duration_s` runs from the box's `started`
+to its `finished` record, the timestamps `status` reads. An exception from the attach prints
 the lease, job id, expiry and recovery commands on stderr, leaves the box up
 and propagates. SIGINT forwards `INT` to the job, waits
 up to 10s for it to exit, and exits 130. After the job exits or SIGINT
@@ -25,6 +26,7 @@ the lost-attach or release refresh.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import shlex
 from collections.abc import Iterator
@@ -45,6 +47,7 @@ from vasty.commands._common import (
     put_job,
     require_tools,
     save_lease,
+    signal_and_wait,
 )
 from vasty.context import Context
 from vasty.errors import VastyError, invalid
@@ -60,10 +63,9 @@ from vasty.models import (
 from vasty.onstart import WORKDIR
 from vasty.remote import SshTarget
 from vasty.state import effective_expiry, fix_for
-from vasty.timeutil import format_duration, iso
+from vasty.timeutil import format_duration, format_minutes_up, iso
 
 INTERRUPT_WAIT_S = 10.0
-INTERRUPT_POLL_S = 0.5
 INTERRUPT_EXIT = 130
 LOST_EXIT = 2
 
@@ -132,8 +134,8 @@ def warn_if_expiring(ctx: Context, lease: CachedLease, now: int) -> None:
     """Print a stderr warning and the `extend` command when the clock is under `warn_before_expiry`."""
     remaining = effective_expiry(lease.label) - now
     if remaining < ctx.settings.warn_before_expiry:
-        fix = fix_for("expiring_soon", lease.lease)
-        ctx.warn(f"vasty: lease {lease.lease} expires in {format_duration(remaining)}. Extend it: {fix}")
+        fix = fix_for("expiring_soon", lease.lease, lease.label.ttl)
+        ctx.warn(f"vasty: lease {lease.lease} expires in {format_minutes_up(remaining)}. Extend it: {fix}")
 
 
 def _check_sync_dir(ctx: Context, directory: str) -> Path:
@@ -214,23 +216,31 @@ def _attach(
         code = ctx.box.attach_job(target, job.id, out)
     except KeyboardInterrupt:
         return _interrupted(ctx, lease, target, job, release_on_exit, warnings, swept, started_at)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         _warn_attach_lost(ctx, lease, job)
         if isinstance(exc, BrokenPipeError):
             discard_stream(out)
         code = None
     now = ctx.clock.now()
-    duration = max(0, now - started_at)
     if code is None:
-        return _lost(ctx, lease, job, duration, warnings, swept)
+        return _lost(ctx, lease, job, max(0, now - started_at), warnings, swept)
     with _release_on_error(ctx, lease, release_on_exit):
-        save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, now))
+        finished = _box_finished(ctx, target, job.id) or now
+        save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, finished))
     released, swept = _released_swept(ctx, lease, release_on_exit, swept)
     result = RunAttachedResult(
-        lease=lease.lease, job=job.id, exit=code, duration_s=duration, released=released,
-        warnings=warnings, swept=swept,
+        lease=lease.lease, job=job.id, exit=code, duration_s=max(0, finished - started_at),
+        released=released, warnings=warnings, swept=swept,
     )
     return Outcome(result, exit_code=code, human=_human(result))
+
+
+def _box_finished(ctx: Context, target: SshTarget, job_id: str) -> int | None:
+    """Return the `finished_at` the box recorded for the job, or None when the read fails."""
+    try:
+        return ctx.box.job_status(target, job_id).finished_at
+    except VastyError:
+        return None
 
 
 def discard_stream(stream: TextIO) -> None:
@@ -256,10 +266,8 @@ def _warn_attach_lost(ctx: Context, lease: CachedLease, job: Job) -> None:
 
 def _warn_quietly(ctx: Context, message: str) -> None:
     """Write a warning to stderr and ignore a broken stderr."""
-    try:
+    with contextlib.suppress(Exception):
         ctx.warn(message)
-    except Exception:
-        pass
 
 
 def _lost(
@@ -302,26 +310,19 @@ def _interrupted(
 ) -> Outcome:
     exit_code: int | None = None
     with _release_on_error(ctx, lease, release_on_exit):
+        status: Job | None = None
         try:
-            ctx.box.signal_job(target, job.id, "INT")
-            deadline = ctx.mono() + INTERRUPT_WAIT_S
-            while True:
-                status = ctx.box.job_status(target, job.id)
-                if status.exit is not None:
-                    exit_code = status.exit
-                    break
-                if ctx.mono() >= deadline:
-                    break
-                ctx.sleep(INTERRUPT_POLL_S)
+            status = signal_and_wait(ctx, target, job.id, "INT", INTERRUPT_WAIT_S)
         except VastyError as err:
             ctx.warn(f"vasty: could not stop {job.id} on {lease.lease}: {err.message}")
-        now = ctx.clock.now()
-        if exit_code is not None:
-            code = exit_code
-            save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, now))
+        end = ctx.clock.now()
+        if status is not None and status.exit is not None:
+            code = exit_code = status.exit
+            end = status.finished_at or end
+            save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, end))
     released, swept = _released_swept(ctx, lease, release_on_exit, swept)
     result = RunAttachedResult(
-        lease=lease.lease, job=job.id, exit=exit_code, duration_s=max(0, now - started_at),
+        lease=lease.lease, job=job.id, exit=exit_code, duration_s=max(0, end - started_at),
         released=released, warnings=warnings, swept=swept,
     )
     return Outcome(result, exit_code=INTERRUPT_EXIT, human=_human(result))

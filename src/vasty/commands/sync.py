@@ -3,8 +3,8 @@
 `push SRC DEST` and `pull SRC DEST` run rsync over the lease's SSH options
 with the default excludes. `--delete` on push mirrors the local tree and
 keeps the box's `/workspace/.vasty`. A relative remote path resolves under
-`/workspace`, and rsync's trailing-slash rules apply. rsync output goes to
-stderr.
+`/workspace`, and rsync's trailing-slash rules apply. A push creates the
+destination's parent on the box. rsync output goes to stderr.
 """
 
 from __future__ import annotations
@@ -13,7 +13,12 @@ import argparse
 
 from vasty import engine
 from vasty.cli import Outcome
-from vasty.commands._common import DEFAULT_EXCLUDES, lease_warnings, pick_lease, require_tools
+from vasty.commands._common import (
+    DEFAULT_EXCLUDES,
+    lease_warnings,
+    pick_lease,
+    require_tools,
+)
 from vasty.context import Context
 from vasty.errors import VastyError
 from vasty.models import SyncResult

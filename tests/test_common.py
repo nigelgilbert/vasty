@@ -5,7 +5,7 @@ from vasty.models import SweptEntry
 
 
 def entry(expired_at: str, ok: bool, error: str | None) -> SweptEntry:
-    return SweptEntry("l-0000a001", "vasty-a", expired_at, ok, error)
+    return SweptEntry("l-0000a001", "vasty-a", "claude", expired_at, ok, error)
 
 
 def test_merge_swept_merges_failed_retries_with_moving_expired_at() -> None:

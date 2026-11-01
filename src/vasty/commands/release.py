@@ -3,7 +3,8 @@
 `release` destroys the box and returns once the provider accepts the destroy
 call. The lease is then `released` with `destroy_pending` until a list call
 shows it gone; `released_here` lets reconciliation record `released`.
-Uptime and jobs come from the local cache. Cost is Vast's billed sum for the
+Uptime and jobs come from the local cache. `release` marks every live job
+`killed` with a null exit and freezes its `duration_s` at the release. Cost is Vast's billed sum for the
 instance, the same figure `status` reports. The engine module docstring
 describes the destroy lifecycle.
 
@@ -13,7 +14,10 @@ no longer lists its row. While the row is listed, `release` sends the destroy
 again and keeps the history state. An orphan or unreadable row released by
 instance id needs `--yes` or a TTY confirmation. Before destroying, `release`
 re-reads the row and aborts with `provider_error` when its `expires` moved
-or its label became unreadable.
+or its label became unreadable. After a destroy, or when the lease is
+already absent, `release` sends TERM to the lease's recorded follower
+through `stop_follower`. A destroy left pending falls to the next command's
+sweep.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from typing import Any
 from vasty import engine, labels, views
 from vasty.cli import Outcome
 from vasty.commands._common import save_lease
+from vasty.commands.sweep import stop_follower
 from vasty.context import Context
 from vasty.engine import Snapshot
 from vasty.errors import VastyError
@@ -37,7 +42,6 @@ from vasty.models import (
     Instance,
     Label,
     ReleaseAbsent,
-    ReleaseJob,
     ReleaseSummary,
     SweptEntry,
     WarningItem,
@@ -93,8 +97,15 @@ def release_lease(ctx: Context, snap: Snapshot, lease: CachedLease) -> ReleaseSu
     vanished, returns its summary with `already_absent`. A lease in history
     whose row is still listed gets the destroy again. Raise `provider_error`
     when the destroy call fails, the row's `expires` moved since `lease` was
-    read, or the re-read label is unreadable.
+    read, or the re-read label is unreadable. Stop the lease's follower
+    before returning.
     """
+    summary = _destroy(ctx, snap, lease)
+    stop_follower(ctx, lease.lease)
+    return summary
+
+
+def _destroy(ctx: Context, snap: Snapshot, lease: CachedLease) -> ReleaseSummary:
     in_history = lease.state in HISTORY_STATES or lease.destroy_pending
     if in_history and snap.instance(lease.instance_id) is None:
         return summarize(lease, max(snap.now, ctx.clock.now()), snap, already_absent=True)
@@ -116,10 +127,16 @@ def release_lease(ctx: Context, snap: Snapshot, lease: CachedLease) -> ReleaseSu
                 )
             return summarize(lease, max(snap.now, ctx.clock.now()), snap, already_absent=True)
         now = ctx.clock.now()
-        if lease.state in HISTORY_STATES:
-            save_lease(ctx, lease, lambda found: engine.mark_destroy_sent(found, now))
-        else:
-            save_lease(ctx, lease, lambda found: engine.mark_released(found, now))
+        history = lease.state in HISTORY_STATES
+
+        def finish(found: CachedLease) -> None:
+            if history:
+                engine.mark_destroy_sent(found, now)
+            else:
+                engine.mark_released(found, now)
+            engine.kill_jobs(found, now)
+
+        save_lease(ctx, lease, finish)
     return summarize(lease, max(snap.now, ctx.clock.now()), snap)
 
 
@@ -127,10 +144,7 @@ def summarize(
     lease: CachedLease, now: int, snap: Snapshot, already_absent: bool = False
 ) -> ReleaseSummary:
     """Build the release summary from the cached lease."""
-    jobs = []
-    for job in lease.jobs:
-        view = views.job_view(job, now, lease.state)
-        jobs.append(ReleaseJob(view.id, view.cmd, view.exit, view.duration_s))
+    jobs = [views.job_view(job, now, lease.state) for job in lease.jobs]
     return ReleaseSummary(
         lease=lease.lease,
         name=lease.label.name,
@@ -196,9 +210,9 @@ def _summary_lines(summary: ReleaseSummary) -> list[str]:
         head += "  destroy pending"
     lines = [head]
     for job in summary.jobs:
-        code = "running" if job.exit is None else f"exit {job.exit}"
+        code = job.state if job.exit is None else f"exit {job.exit}"
         took = "" if job.duration_s is None else f"  {format_duration(job.duration_s)}"
-        lines.append(f"  {job.id} {job.cmd}  {code}{took}")
+        lines.append(f"  {job.job} {job.cmd}  {code}{took}")
     return lines
 
 

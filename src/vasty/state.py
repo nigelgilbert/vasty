@@ -1,7 +1,8 @@
 """Lease state, guard and per-lease warnings.
 
 The fix table lives here so every module builds warnings the same way. Fixes
-name a lease by its id, which resolves for every owner.
+name a lease by its id, which resolves for every owner. The `expiring_*`
+fixes extend by the lease's reserve ttl from the label.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from vasty.models import (
     ProbeResult,
     WarningItem,
 )
-from vasty.timeutil import format_duration
+from vasty.timeutil import format_duration, format_duration_exact, format_minutes_up
 
 if TYPE_CHECKING:
     from vasty.config import Settings
@@ -40,10 +41,11 @@ _LAYER_MESSAGES: dict[str, str] = {
 }
 
 _L = "{L}"
+_T = "{TTL}"
 _FIXES: dict[str, list[str]] = {
-    "expiring_soon": ["vasty", "extend", _L, "--by", "30m"],
-    "expiring_with_running_job": ["vasty", "extend", _L, "--by", "30m"],
-    "box_unreachable": ["vasty", "release", _L],
+    "expiring_soon": ["vasty", "extend", _L, "--by", _T],
+    "expiring_with_running_job": ["vasty", "extend", _L, "--by", _T],
+    "box_unreachable": ["vasty", "status", _L],
     "guard_partial": ["vasty", "release", _L],
     "clock_skew": ["vasty", "release", _L],
     "clock_skew_unknown": ["vasty", "release", _L],
@@ -115,19 +117,25 @@ def guard(lease: CachedLease) -> tuple[str, list[str]]:
     return ("partial" if missing else "full"), missing
 
 
-def fix_for(code: str, target: str | None) -> str:
-    """Return the shell-quoted fix command for a warning code."""
+def fix_for(code: str, target: str | None, ttl: int | None = None) -> str:
+    """Return the shell-quoted fix command for a warning code.
+
+    Pass the lease's label `ttl` in seconds for the `expiring_*` codes.
+    """
     template = _FIXES.get(code)
     if template is None:
         raise ValueError(f"unknown warning code {code!r}")
     if _L in template and target is None:
         raise ValueError(f"warning {code!r} needs a lease")
-    return shlex.join(target if part == _L and target is not None else part for part in template)
+    if _T in template and ttl is None:
+        raise ValueError(f"warning {code!r} needs a ttl")
+    fill = {_L: target, _T: format_duration_exact(ttl) if ttl is not None else None}
+    return shlex.join(fill.get(part) or part for part in template)
 
 
-def make_warning(code: str, lease: str | None, message: str) -> WarningItem:
+def make_warning(code: str, lease: str | None, message: str, ttl: int | None = None) -> WarningItem:
     """Build a warning whose fix comes from the shared table. Pass `lease` None for account warnings."""
-    return WarningItem(code=code, lease=lease, message=message, fix=fix_for(code, lease))
+    return WarningItem(code=code, lease=lease, message=message, fix=fix_for(code, lease, ttl))
 
 
 def live_jobs(lease: CachedLease) -> list[str]:
@@ -246,11 +254,13 @@ def lease_warnings(lease: CachedLease, now: int, warn_before_expiry: int) -> lis
         return out
     remaining = ttl_remaining(lease.label, now)
     if lease.state == "running" and 0 < remaining <= warn_before_expiry:
+        left = f"{format_minutes_up(remaining)} left"
+        ttl = lease.label.ttl
         if jobs:
-            message = f"{format_duration(remaining)} left, {', '.join(jobs)} running"
-            out.append(make_warning("expiring_with_running_job", target, message))
+            message = f"{left}, {', '.join(jobs)} running"
+            out.append(make_warning("expiring_with_running_job", target, message, ttl))
         else:
-            out.append(make_warning("expiring_soon", target, f"{format_duration(remaining)} left"))
+            out.append(make_warning("expiring_soon", target, left, ttl))
     if lease.state == "unreachable":
         if lease.reachable_at is None:
             message = "no answer"

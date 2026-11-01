@@ -23,7 +23,7 @@ from vasty.context import Context
 from vasty.errors import VastyError, invalid
 from vasty.models import HISTORY_STATES
 
-LEASE_VERBS = ("extend", "release", "status", "tag", "sync", "ssh")
+LEASE_VERBS = ("extend", "release", "status", "stop", "tag", "sync", "ssh")
 GROUP_OPTS = ("--group", "--set-group")
 LEASE_OPTS = ("--on", "--follow")
 PROFILE_OPTS = ("--profile",)

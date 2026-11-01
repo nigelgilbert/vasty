@@ -92,7 +92,7 @@ class Charges:
     """
 
     per_instance: dict[int, Decimal]
-    today: Decimal = Decimal("0")
+    today: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True)
@@ -121,7 +121,8 @@ class Label:
     extra: dict[str, str] = field(default_factory=dict)
 
 
-JobState = Literal["running", "exited", "unknown", "serving"]
+JobState = Literal["running", "exited", "unknown", "serving", "killed"]
+"""`killed` marks a job that `release` or `stop` ended."""
 
 
 @dataclass
@@ -179,7 +180,7 @@ class CachedLease:
     gpu: str | None = None
     gpus: int = 1
     vram_gb: float | None = None
-    price_per_hr: Decimal = Decimal("0")
+    price_per_hr: Decimal = Decimal(0)
     image: str | None = None
     actual_status: str | None = None
     ssh_host: str | None = None
@@ -218,6 +219,8 @@ class CachedLease:
     """Box clock minus provider clock in seconds, from the last probe under a verified clock."""
     clock_skew_unknown: bool = False
     """Set when the last probe returned no box time."""
+    follower_pid: int | None = None
+    """The pid of the last `vasty sweep --follow` this machine started for the lease."""
 
 
 # Output shapes.
@@ -235,6 +238,7 @@ class WarningItem:
 class SweptEntry:
     lease: str
     name: str | None
+    owner: str
     expired_at: str
     ok: bool
     error: str | None
@@ -242,7 +246,9 @@ class SweptEntry:
 
 @dataclass
 class JobView:
-    id: str
+    """One job entry in `status`, `release` and `stop` results."""
+
+    job: str
     cmd: str
     state: str
     exit: int | None
@@ -317,6 +323,7 @@ class ReserveResult:
 @dataclass
 class ExtendResult:
     lease: str
+    previous_expires_at: str
     expires_at: str
     ttl_remaining_s: int
     warnings: list[WarningItem]
@@ -341,20 +348,12 @@ class BulkResult:
 
 
 @dataclass
-class ReleaseJob:
-    id: str
-    cmd: str
-    exit: int | None
-    duration_s: int | None
-
-
-@dataclass
 class ReleaseSummary:
     lease: str
     name: str | None
     uptime_s: int | None
     cost: Decimal | None
-    jobs: list[ReleaseJob]
+    jobs: list[JobView]
     destroy_pending: bool | None = field(default=True, metadata=OMIT_NONE)
     already_absent: bool | None = field(default=None, metadata=OMIT_NONE)
     warnings: list[WarningItem] | None = field(default=None, metadata=OMIT_NONE)
@@ -414,6 +413,20 @@ class ServeResult:
     url: str
     api_key: str
     expires_at: str | None
+    warnings: list[WarningItem]
+    swept: list[SweptEntry]
+
+
+@dataclass
+class StopResult:
+    """The `stop` result: the lease and the stopped job's entry."""
+
+    lease: str
+    job: str
+    cmd: str
+    state: str
+    exit: int | None
+    duration_s: int | None
     warnings: list[WarningItem]
     swept: list[SweptEntry]
 

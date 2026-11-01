@@ -54,6 +54,20 @@ def test_run_on_streams_to_stderr_in_json_and_passes_exit(harness: Harness, box:
     assert box in harness.provider.instances
 
 
+def test_run_and_status_report_the_same_duration(harness: Harness, box: int) -> None:
+    state = harness.box.state(box)
+    state.job_runtime = 90
+    state.attach_lag = 3
+    code, data, _ = run(harness, "--on", "ft", "--", "python", "train.py")
+    assert code == 0
+    assert data["job"] == "j-1" and "id" not in data
+    assert data["duration_s"] == 90
+    _, out, _ = harness.run("status", "ft")
+    entry = json.loads(out)["leases"][0]["jobs"][0]
+    assert entry["job"] == "j-1" and "id" not in entry
+    assert entry["duration_s"] == data["duration_s"]
+
+
 def test_run_shell_joins_command(harness: Harness, box: int) -> None:
     run(harness, "--on", "ft", "--", "echo", "a b", "$HOME")
     assert harness.box.state(box).jobs["j-1"].cmd == "echo 'a b' '$HOME'"
@@ -90,10 +104,10 @@ def test_run_detach_returns_job_immediately(harness: Harness, box: int) -> None:
 
 
 def test_run_warns_when_clock_is_short(harness: Harness) -> None:
-    add_lease(harness, label={"name": "ft", "expires": NOW + 120})
+    add_lease(harness, label={"name": "ft", "expires": NOW + 170})
     code, data, err = run(harness, "--on", "ft", "--", "ls")
     assert code == 0
-    assert "vasty extend l-0000a001 --by 30m" in err
+    assert "vasty: lease l-0000a001 expires in 3m. Extend it: vasty extend l-0000a001 --by 1h" in err
     assert [w["code"] for w in data["warnings"]] == ["expiring_with_running_job"]
 
 

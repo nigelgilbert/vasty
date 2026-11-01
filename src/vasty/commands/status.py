@@ -1,15 +1,19 @@
 """`vasty status`.
 
 With no target, `status` lists every active lease, then orphans and
-unreadable rows. `--verbose` also lists history leases; a named lease in
-history always shows. Warnings cover the shown leases, `expired_with_running_jobs`
-for every history lease when no target is given, the account warnings from
-the refresh, `orphan` per shown orphan, and `spend_unavailable` when the
-balance or charges are unavailable. `totals` covers the whole account with Vast's
-own `balance`, `credit` and today's billed charges.
+unreadable rows. `--verbose` adds history leases: the current owner's,
+`--owner O`'s, or every owner's with `--everyone`, narrowed by `--group`.
+`--everyone` alone reads as `--all --everyone`. A named lease in history
+always shows. A single LEASE carries `log_tail` in every state, `[]` when
+the log is empty or unread. Warnings cover the shown leases,
+`expired_with_running_jobs` for every history lease when no target is
+given, the account warnings from the refresh, `orphan` per shown orphan,
+and `spend_unavailable` when the balance or charges are unavailable.
+`totals` covers the whole account with Vast's own `balance`, `credit` and
+today's billed charges.
 
 `--cached` reads `leases.json` only. It uses the local clock, returns
-`swept: []`, sets `cached_at` and skips the log tail. That path imports only
+`swept: []`, sets `cached_at` and skips the log read. That path imports only
 the standard library.
 """
 
@@ -66,11 +70,13 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         leases = resolved.leases
         rows = resolved.orphans
         single = not resolved.bulk
+        if verbose and resolved.bulk:
+            leases = leases + _history(snap, args, settings.owner)
     else:
-        leases = snap.active() + (snap.history() if verbose else [])
+        leases = snap.active() + (_history(snap, args, settings.owner) if verbose else [])
         rows = sorted(snap.orphans + snap.unreadable, key=lambda inst: inst.id)
 
-    tail = None
+    tail: list[str] = []
     if single and leases and not cached:
         tail = _log_tail(ctx, leases[0])
     lease_views = [
@@ -120,13 +126,24 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     return Outcome(result, human=human)
 
 
-def _log_tail(ctx: Context, lease: CachedLease) -> list[str] | None:
+def _history(snap: engine.Snapshot, args: argparse.Namespace, owner: str) -> list[CachedLease]:
+    """Return history leases of `--owner O`, else the current owner, or every owner with `--everyone`."""
+    scope = getattr(args, "owner", None) or (None if getattr(args, "everyone", False) else owner)
+    group = getattr(args, "group", None)
+    return [
+        lease for lease in snap.history()
+        if (scope is None or lease.label.owner == scope)
+        and (not group or lease.label.group == group)
+    ]
+
+
+def _log_tail(ctx: Context, lease: CachedLease) -> list[str]:
     if lease.state in HISTORY_STATES or lease.state in ("unreachable", "stopped"):
-        return None
+        return []
     try:
         return ctx.box.log_tail(engine.ssh_target(lease), None, LOG_LINES)
     except (VastyError, OSError):
-        return None
+        return []
 
 
 # Human rendering.
@@ -153,8 +170,7 @@ def gpu_text(gpu: str | None, gpus: int, vram_gb: float | None) -> str:
         return "?"
     name = gpu
     for prefix in ("RTX ", "GTX "):
-        if name.startswith(prefix):
-            name = name[len(prefix):]
+        name = name.removeprefix(prefix)
     vram = "?" if vram_gb is None else str(int(vram_gb))
     return f"{gpus}x{vram} {name}"
 
@@ -163,7 +179,7 @@ def _job_parts(view: JobView, lease: CachedLease | None) -> tuple[str, str]:
     kind, port = "run", None
     if lease is not None:
         for job in lease.jobs:
-            if job.id == view.id:
+            if job.id == view.job:
                 kind, port = job.kind, job.port
     return short_cmd(view.cmd, kind), str(port or SERVE_PORT)
 
@@ -177,11 +193,11 @@ def jobs_cell(view: LeaseView, lease: CachedLease | None) -> str:
     for job in _shown_jobs(view):
         name, port = _job_parts(job, lease)
         if job.state == "running":
-            parts.append(f"{job.id} {name} (running {format_duration(job.duration_s or 0, pad=True)})")
+            parts.append(f"{job.job} {name} (running {format_duration(job.duration_s or 0, pad=True)})")
         elif job.state == "serving":
-            parts.append(f"{job.id} {name} (serving :{port})")
+            parts.append(f"{job.job} {name} (serving :{port})")
         else:
-            parts.append(f"{job.id} {name} (unknown)")
+            parts.append(f"{job.job} {name} (unknown)")
     if parts:
         return ", ".join(parts)
     return "idle" if view.busy is False else DASH
@@ -192,9 +208,9 @@ def group_jobs_cell(view: LeaseView, lease: CachedLease | None) -> str:
     for job in _shown_jobs(view):
         name, _ = _job_parts(job, lease)
         if job.state == "running":
-            parts.append(f"{job.id} {name} running")
+            parts.append(f"{job.job} {name} running")
         else:
-            parts.append(f"{job.id} {job.state}")
+            parts.append(f"{job.job} {job.state}")
     return ", ".join(parts) if parts else "idle"
 
 
@@ -263,9 +279,9 @@ def group_lines(
         if ttls:
             low, high = format_duration(min(ttls)), format_duration(max(ttls))
             head.append(f"expiries {low}" if low == high else f"expiries {low}–{high}")
-        cost = sum((view.cost for view in managed if view.cost is not None), Decimal("0"))
+        cost = sum((view.cost for view in managed if view.cost is not None), Decimal(0))
         burn = sum((view.price_per_hr for view in managed if view.state not in HISTORY_STATES),
-                   Decimal("0"))
+                   Decimal(0))
         head.append(f"${money(cost):.2f} so far")
         head.append(f"${money(burn):.2f}/hr")
     lines = [" · ".join(head)]

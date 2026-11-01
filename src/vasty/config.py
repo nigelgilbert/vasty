@@ -2,13 +2,18 @@
 
 Layers, highest first: flags, `--config -` JSON, `--profile`, environment,
 project file, user file, built-in defaults. `resolve` returns the effective
-`Settings` and the source of each value.
+`Settings` and the source of each value. When no layer sets `cuda` and the
+image is one in `IMAGE_CUDA`, `cuda` takes that image's floor with source
+`image`.
 
 Bad flag values raise `invalid_arguments`. Bad file, environment or stdin
 values raise `invalid_config`. An unknown `--profile` name raises
 `invalid_arguments`. `startup` and `startup_file` are two spellings of one
 setting: the highest layer that sets either wins, and one table setting both
 raises `invalid_config`.
+
+`api_key` reads the env var named by `api_key_env`, then the vastai CLI key
+file at `~/.config/vastai/vast_api_key`.
 
 This module imports only the standard library, `vasty.errors`, `vasty.ids` and `vasty.timeutil`.
 """
@@ -22,10 +27,11 @@ import os
 import re
 import tempfile
 import tomllib
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from vasty import timeutil
 from vasty.errors import VastyError
@@ -60,6 +66,11 @@ SHOWN = (
     "startup",
 )
 
+BASE_IMAGE = "vastai/base-image:cuda-12.6.3-auto"
+VLLM_IMAGE = "vllm/vllm-openai:v0.32.0"
+# CUDA floor of each image vasty names.
+IMAGE_CUDA: dict[str, float] = {VLLM_IMAGE: 13.0, BASE_IMAGE: 12.6}
+
 BUILTIN: dict[str, Any] = {
     "api_key_env": "VAST_API_KEY",
     "ttl": 30 * 60,
@@ -68,7 +79,7 @@ BUILTIN: dict[str, Any] = {
     "warn_before_expiry": 5 * 60,
     "disk": 50,
     "gpus": 1,
-    "image": "vastai/base-image:cuda-12.6.3-auto",
+    "image": BASE_IMAGE,
 }
 
 _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
@@ -357,6 +368,29 @@ def user_config_path(home: Path) -> Path:
     return home / ".config" / "vasty" / "config.toml"
 
 
+def vastai_key_path(home: Path) -> Path:
+    """Return the file where the vastai CLI stores its API key."""
+    return home / ".config" / "vastai" / "vast_api_key"
+
+
+def api_key(env: Mapping[str, str], home: Path, key_env: str) -> tuple[str, str] | None:
+    """Return the API key and its source, the env var name or the vastai key file path.
+
+    The env var named by `key_env` wins. An unset or empty env var falls back
+    to the vastai CLI file with whitespace stripped. Return None when neither
+    holds a key.
+    """
+    key = env.get(key_env)
+    if key:
+        return key, key_env
+    path = vastai_key_path(home)
+    try:
+        key = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return (key, str(path)) if key else None
+
+
 def project_config_paths(cwd: Path) -> tuple[Path, Path]:
     """Return the project files, lower precedence first."""
     return cwd / ".vasty" / "config.toml", cwd / "vasty.toml"
@@ -480,6 +514,12 @@ def resolve(
     if spec is not None:
         startup, startup_path = _read_startup(spec, sources["startup"], stdin_text)
 
+    image = pick("image")
+    cuda = pick("cuda")
+    if cuda is None and image in IMAGE_CUDA:
+        cuda = IMAGE_CUDA[image]
+        sources["cuda"] = "image"
+
     return Settings(
         owner=owner,
         api_key_env=pick("api_key_env"),
@@ -490,10 +530,10 @@ def resolve(
         warn_before_expiry=pick("warn_before_expiry"),
         disk=pick("disk"),
         gpus=pick("gpus"),
-        image=pick("image"),
+        image=image,
         gpu=pick("gpu"),
         vram=pick("vram"),
-        cuda=pick("cuda"),
+        cuda=cuda,
         region=pick("region"),
         ports=list(pick("ports") or []),
         startup=startup,

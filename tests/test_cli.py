@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import argparse
 import io
 import json
 from dataclasses import replace
+from importlib.metadata import version
 from typing import Any
 
 import pytest
 from fakes import NOW, Harness, add_lease, make_offer
 
-from vasty.cli import parse
+from vasty.cli import build_parser, main, parse
 from vasty.context import Context
 from vasty.errors import EXIT_CODES, VastyError
 
@@ -88,11 +90,17 @@ def test_config_and_startup_stdin_conflict() -> None:
         ["release", "--all", "--group", "g"],
         ["release", "--everyone", "--owner", "o"],
         ["release", "--everyone"],
+        ["extend", "--everyone", "--by", "30m"],
+        ["status", "--everyone", "--owner", "o"],
     ],
 )
 def test_target_selector_rules(argv: list[str]) -> None:
     with pytest.raises(VastyError):
         parse(argv)
+
+
+def test_status_everyone_alone_is_allowed() -> None:
+    assert parse(["status", "--everyone"]).everyone
 
 
 def test_everyone_with_group_is_allowed() -> None:
@@ -126,8 +134,54 @@ def test_status_without_api_key_is_auth_missing(
     result = json.loads(out)
     assert code == 1
     assert result["error"] == "auth_missing"
-    assert key_env in result["hint"]
+    key_file = str(harness.home / ".config" / "vastai" / "vast_api_key")
+    for text in (result["message"], result["hint"]):
+        assert key_env in text
+        assert key_file in text
     assert harness.http_calls == []
+
+
+def _real_provider_key(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, env_key: str | None, file_text: str | None
+) -> str:
+    """Build the real provider path and return the API key VastProvider receives."""
+    import vasty.provider
+
+    keys: list[str] = []
+
+    def record(api_key: str, *args: Any, **kw: Any) -> Any:
+        keys.append(api_key)
+        return object()
+
+    monkeypatch.setattr(vasty.provider, "VastProvider", record)
+    harness.env.pop("VAST_API_KEY", None)
+    if env_key is not None:
+        harness.env["VAST_API_KEY"] = env_key
+    if file_text is not None:
+        path = harness.home / ".config" / "vastai" / "vast_api_key"
+        path.parent.mkdir(parents=True)
+        path.write_text(file_text)
+    ctx = replace(harness.context(), provider_factory=None)
+    assert ctx.provider is not None
+    return keys[0]
+
+
+def test_api_key_from_vastai_file(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _real_provider_key(harness, monkeypatch, None, "  file-key\n") == "file-key"
+
+
+def test_api_key_env_beats_vastai_file(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _real_provider_key(harness, monkeypatch, "env-key", "file-key\n") == "env-key"
+
+
+def test_empty_vastai_file_is_auth_missing(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(VastyError) as exc:
+        _real_provider_key(harness, monkeypatch, None, " \n")
+    assert exc.value.code == "auth_missing"
 
 
 # Sweep entries of a failing command.
@@ -192,3 +246,80 @@ def test_failing_run_with_closed_stderr_keeps_json_error(harness: Harness) -> No
     assert isinstance(out, io.StringIO)
     assert code == 1
     assert json.loads(out.getvalue())["error"] == "lease_not_found"
+
+
+def _walk(parser: argparse.ArgumentParser, path: str) -> list[tuple[str, argparse.Action]]:
+    """Return every action under `parser`, recursing into subparsers, with its command path."""
+    found: list[tuple[str, argparse.Action]] = []
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for word, child in action.choices.items():
+                found += _walk(child, f"{path} {word}")
+            continue
+        found.append((path, action))
+    return found
+
+
+def test_every_flag_and_positional_has_help() -> None:
+    actions = _walk(build_parser(), "vasty")
+    paths = {path for path, _ in actions}
+    assert {"vasty sync push", "vasty sync pull", "vasty config show", "vasty ssh"} <= paths
+    missing = [
+        f"{path} {'/'.join(action.option_strings) or action.dest}"
+        for path, action in actions
+        if not isinstance(action, argparse._HelpAction)
+        and action.help != argparse.SUPPRESS
+        and not (action.help or "").strip()
+    ]
+    assert missing == []
+
+
+def _verb_action(verb: str, flag: str) -> argparse.Action:
+    sub = next(a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction))
+    return next(a for a in sub.choices[verb]._actions if flag in a.option_strings)
+
+
+@pytest.mark.parametrize(
+    ("verb", "flag", "words"),
+    [
+        ("reserve", "--ttl", ["duration", "default: 30m"]),
+        ("run", "--ttl", ["duration", "default: run_ttl, 2h"]),
+        ("serve", "--ttl", ["duration", "default: run_ttl, 2h"]),
+        ("reserve", "--cuda", ["CUDA version", "12.6", "default: the image's floor"]),
+        ("reserve", "--max-price", ["dollars per hour", "default: 0.60"]),
+        ("reserve", "--image", ["default: vastai/base-image:cuda-12.6.3-auto"]),
+        ("reserve", "--disk", ["GB", "default: 50"]),
+        ("reserve", "--vram", ["GB", "default: any"]),
+        ("extend", "--by", ["duration", "default: none"]),
+        ("extend", "--until", ["ISO time"]),
+    ],
+)
+def test_help_names_unit_and_default(verb: str, flag: str, words: list[str]) -> None:
+    text = _verb_action(verb, flag).help or ""
+    for word in words:
+        assert word in text
+
+
+def _help(capsys: pytest.CaptureFixture[str], *argv: str) -> str:
+    with pytest.raises(SystemExit) as exc:
+        main([*argv, "--help"])
+    assert exc.value.code == 0
+    return capsys.readouterr().out
+
+
+def test_ssh_help_shows_command(capsys: pytest.CaptureFixture[str]) -> None:
+    assert "LEASE [-- COMMAND...]" in _help(capsys, "ssh")
+
+
+def test_sync_help_shows_direction_and_delete(capsys: pytest.CaptureFixture[str]) -> None:
+    text = _help(capsys, "sync")
+    assert "push|pull" in text
+    assert "SRC DEST" in text
+    assert "--delete" in text
+
+
+def test_version_prints_package_version(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out == f"vasty {version('vasty')}\n"

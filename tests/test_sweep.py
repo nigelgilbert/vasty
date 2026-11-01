@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import sys
 from typing import Any
 
@@ -9,6 +11,7 @@ from fakes import NOW, Harness, add_lease
 
 from vasty.commands import sweep
 from vasty.errors import VastyError
+from vasty.models import Job
 
 FOLLOW = [sys.executable, "-m", "vasty", "sweep", "--follow"]
 
@@ -29,7 +32,7 @@ def test_sweep_destroys_past_clock_without_probing(harness: Harness) -> None:
     assert code == 0, data
     assert set(data) == {"swept", "warnings"}
     assert data["swept"] == [{
-        "lease": "l-0000a001", "name": "old", "expired_at": "2026-10-29T00:59:50Z",
+        "lease": "l-0000a001", "name": "old", "owner": "claude", "expired_at": "2026-10-29T00:59:50Z",
         "ok": True, "error": None,
     }]
     assert data["warnings"] == []
@@ -37,6 +40,26 @@ def test_sweep_destroys_past_clock_without_probing(harness: Harness) -> None:
     assert kept.id in harness.provider.instances
     assert harness.box.probes == []
     assert harness.spawned == []
+
+
+def test_sweep_freezes_live_jobs_on_the_expired_lease(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": NOW + 600})
+    harness.box.state(row.id).jobs["j-1"] = Job(
+        id="j-1", cmd="python train.py", started_at=NOW - 60, exit=None, state="running"
+    )
+    harness.run("status")
+    harness.time.advance(700)
+    code, data = run_json(harness, "sweep")
+    assert code == 0 and [e["lease"] for e in data["swept"]] == ["l-0000a001"]
+    harness.time.advance(300)
+    for _ in range(2):
+        _, status = run_json(harness, "status", "l-0000a001")
+        assert status["leases"][0]["state"] == "expired"
+        assert status["leases"][0]["jobs"] == [{
+            "job": "j-1", "cmd": "python train.py", "state": "unknown", "exit": None,
+            "duration_s": 760,
+        }]
+        harness.time.advance(300)
 
 
 def test_sweep_carries_account_warnings(harness: Harness) -> None:
@@ -96,6 +119,32 @@ def add_label(harness: Harness, expires: int) -> str:
     from fakes import lease_label
 
     return lease_label(expires=expires)
+
+
+def test_follow_sweeps_at_an_expiry_shortened_mid_sleep(harness: Harness) -> None:
+    row = add_lease(harness, label={"expires": NOW + 3600})
+    sleeps: list[float] = []
+    destroyed_at: list[float] = []
+    sleep = harness.time.sleep
+    destroy = harness.provider.destroy
+
+    def record(seconds: float) -> None:
+        sleeps.append(seconds)
+        sleep(seconds)
+        if len(sleeps) == 1:
+            assert harness.run("extend", "l-0000a001", "--to", "5m")[0] == 0
+
+    def stamp(instance_id: int) -> None:
+        destroyed_at.append(harness.time.wall_now)
+        destroy(instance_id)
+
+    harness.time.sleep = record  # type: ignore[method-assign]
+    harness.provider.destroy = stamp  # type: ignore[method-assign]
+    code, _ = run_json(harness, "sweep", "--follow", "l-0000a001")
+    assert code == 0
+    assert sleeps[:3] == [sweep.SLEEP_CHUNK_S, sweep.SLEEP_CHUNK_S, 1]
+    assert harness.provider.destroyed == [row.id]
+    assert destroyed_at == [NOW + 601]
 
 
 def test_follow_retries_a_failed_destroy(harness: Harness) -> None:
@@ -269,6 +318,98 @@ def test_spawn_follow_starts_a_detached_sweep(harness: Harness) -> None:
     assert harness.spawned == [[*FOLLOW, "l-0000a001"]]
 
 
+def follower_pid(harness: Harness, lease_id: str = "l-0000a001") -> int | None:
+    return harness.context().cache.load().leases[lease_id].follower_pid
+
+
+def test_spawn_follow_records_the_pid(harness: Harness) -> None:
+    add_lease(harness)
+    harness.run("status")
+    assert sweep.spawn_follow(harness.context(), "l-0000a001") is None
+    assert follower_pid(harness) == 4001
+
+
+def test_spawn_follow_skips_a_running_follower(harness: Harness) -> None:
+    add_lease(harness)
+    harness.run("status")
+    sweep.spawn_follow(harness.context(), "l-0000a001")
+    assert sweep.spawn_follow(harness.context(), "l-0000a001") is None
+    assert len(harness.spawned) == 1
+    assert follower_pid(harness) == 4001
+
+
+def test_spawn_follow_replaces_an_exited_follower(harness: Harness) -> None:
+    add_lease(harness)
+    harness.run("status")
+    sweep.spawn_follow(harness.context(), "l-0000a001")
+    del harness.processes[4001]
+    sweep.spawn_follow(harness.context(), "l-0000a001")
+    assert len(harness.spawned) == 2
+    assert follower_pid(harness) == 4002
+
+
+@pytest.mark.parametrize("args", [
+    "/usr/bin/vim notes.txt",
+    f"{sys.executable} -m vasty sweep --follow l-0000a002",
+    f"{sys.executable} -m vasty status",
+])
+def test_spawn_follow_replaces_a_reused_pid(harness: Harness, args: str) -> None:
+    add_lease(harness)
+    harness.run("status")
+    sweep.spawn_follow(harness.context(), "l-0000a001")
+    harness.processes[4001] = args
+    sweep.spawn_follow(harness.context(), "l-0000a001")
+    assert len(harness.spawned) == 2
+    assert follower_pid(harness) == 4002
+
+
+def test_spawn_follow_knows_the_console_script(harness: Harness) -> None:
+    add_lease(harness)
+    harness.run("status")
+    sweep.spawn_follow(harness.context(), "l-0000a001")
+    harness.processes[4001] = "/usr/bin/python3 /home/me/.local/bin/vasty sweep --follow l-0000a001"
+    sweep.spawn_follow(harness.context(), "l-0000a001")
+    assert len(harness.spawned) == 1
+
+
+def test_stop_follower_terms_the_recorded_follower(harness: Harness) -> None:
+    add_lease(harness)
+    harness.run("status")
+    sweep.spawn_follow(harness.context(), "l-0000a001")
+    sweep.stop_follower(harness.context(), "l-0000a001")
+    assert harness.kills == [(4001, signal.SIGTERM)]
+
+
+def test_stop_follower_leaves_an_exited_pid_alone(harness: Harness) -> None:
+    add_lease(harness)
+    harness.run("status")
+    sweep.spawn_follow(harness.context(), "l-0000a001")
+    del harness.processes[4001]
+    sweep.stop_follower(harness.context(), "l-0000a001")
+    assert harness.kills == []
+
+
+def test_stop_follower_ignores_a_lease_without_a_follower(harness: Harness) -> None:
+    add_lease(harness)
+    harness.run("status")
+    sweep.stop_follower(harness.context(), "l-0000a001")
+    sweep.stop_follower(harness.context(), "l-0000ffff")
+    assert harness.kills == []
+
+
+def test_stop_follower_ignores_a_process_that_ended_before_the_kill(harness: Harness) -> None:
+    add_lease(harness)
+    harness.run("status")
+    sweep.spawn_follow(harness.context(), "l-0000a001")
+    ctx = harness.context()
+
+    def gone(pid: int, sig: int) -> None:
+        raise ProcessLookupError(pid)
+
+    ctx.kill = gone
+    sweep.stop_follower(ctx, "l-0000a001")
+
+
 def test_spawn_follow_warns_when_the_spawn_fails(harness: Harness) -> None:
     harness.spawn_error = OSError("no fork")
     warning = sweep.spawn_follow(harness.context(), "l-0000a001")
@@ -284,10 +425,44 @@ def test_default_spawn_detaches(monkeypatch: pytest.MonkeyPatch) -> None:
     from vasty.context import default_spawn
 
     calls: list[tuple[Any, dict[str, Any]]] = []
-    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: calls.append((argv, kw)))
-    default_spawn(["x"], {"A": "1"})
+
+    class Process:
+        pid = 4321
+
+    def popen(argv: list[str], **kw: Any) -> Process:
+        calls.append((argv, kw))
+        return Process()
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    assert default_spawn(["x"], {"A": "1"}) == 4321
     [(argv, kw)] = calls
     assert argv == ["x"]
     assert kw["env"] == {"A": "1"}
     assert kw["start_new_session"] is True
     assert kw["stdin"] is kw["stdout"] is kw["stderr"] is subprocess.DEVNULL
+
+
+def test_default_process_args_reads_a_running_process() -> None:
+    from vasty.context import default_process_args
+
+    args = default_process_args(os.getpid())
+    assert args is not None and "python" in args.lower()
+
+
+def test_default_process_args_returns_none_for_a_missing_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+
+    from vasty.context import default_process_args
+
+    monkeypatch.setattr(
+        subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", "")
+    )
+    assert default_process_args(4001) is None
+
+    def missing(argv: list[str], **kw: Any) -> None:
+        raise FileNotFoundError("ps")
+
+    monkeypatch.setattr(subprocess, "run", missing)
+    assert default_process_args(4001) is None
