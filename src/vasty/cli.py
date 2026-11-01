@@ -105,15 +105,16 @@ def _setting_help(ttl_default: str) -> dict[str, str]:
     }
 
 
-def _target_flags(p: argparse.ArgumentParser, lease_optional: bool = True) -> None:
+def _target_flags(p: argparse.ArgumentParser, lease_optional: bool = True,
+                  filters: bool = False) -> None:
     p.add_argument("target", nargs="?" if lease_optional else None, metavar="LEASE",
                    help="lease id or name")
-    p.add_argument("--group", help="select the leases in group G")
-    p.add_argument("--owner", help="select the leases of owner O")
-    p.add_argument("--all", action="store_true", help="select every lease of the current owner")
-    p.add_argument("--everyone", action="store_true",
-                   help="select every owner's leases; status takes it alone, "
-                        "other verbs with --all or --group")
+    if filters:
+        p.add_argument("--group", help="filter the account view to group G")
+        p.add_argument("--owner", help="filter the account view to owner O")
+    else:
+        p.add_argument("--group", help="select the leases in group G")
+        p.add_argument("--owner", help="select the leases of owner O")
 
 
 def _hardware_flags(p: argparse.ArgumentParser, h: dict[str, str]) -> None:
@@ -161,8 +162,6 @@ def build_parser() -> Parser:
                    help="add a duration such as 30m to the clock; default: none")
     p.add_argument("--to", metavar="DURATION",
                    help="set the clock to a duration from now such as 2h; default: none")
-    p.add_argument("--until", metavar="TIME",
-                   help="set the clock to an ISO time such as 2026-11-01T18:00Z; default: none")
 
     p = sub.add_parser("release", parents=[out], help="destroy a box now")
     _target_flags(p)
@@ -170,9 +169,7 @@ def build_parser() -> Parser:
                    help="skip the confirmation for an orphan instance id")
 
     p = sub.add_parser("status", parents=[out], help="show leases, spend and warnings")
-    _target_flags(p)
-    p.add_argument("--cached", action="store_true",
-                   help="read the local cache and skip provider calls")
+    _target_flags(p, filters=True)
 
     p = sub.add_parser("run", parents=[out], help="run a command on a box",
                        usage="%(prog)s [options] -- COMMAND...")
@@ -300,19 +297,6 @@ def check_combinations(ns: argparse.Namespace) -> None:
                 raise invalid(f"--on takes no creation flags: {flags}.", f"Drop {flags}.")
         elif ns.no_wait:
             raise invalid(f"{verb} without --on waits for the box.", "Drop --no-wait.")
-    if hasattr(ns, "everyone"):
-        _check_target(ns)
-
-
-def _check_target(ns: argparse.Namespace) -> None:
-    if ns.target is not None and (ns.group or ns.owner or ns.all or ns.everyone):
-        raise invalid("A LEASE takes no selector.", "Pass a LEASE or a selector.")
-    if ns.all and (ns.group or ns.owner):
-        raise invalid("--all takes no --group or --owner.", "Pass --all or a selector.")
-    if ns.everyone and ns.owner:
-        raise invalid("--everyone takes no --owner.", "Drop --owner or --everyone.")
-    if ns.everyone and not (ns.all or ns.group) and ns.verb != "status":
-        raise invalid("--everyone needs --all or --group.", "vasty status --all --everyone")
 
 
 def setting_flags(ns: argparse.Namespace) -> dict[str, Any]:

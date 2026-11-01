@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,8 +10,6 @@ from fakes import NOW, START, Harness, add_lease
 from vasty.errors import VastyError
 from vasty.models import Job
 from vasty.timeutil import iso
-
-SRC = Path(__file__).resolve().parents[1] / "src"
 
 LEASE_KEYS = {
     "lease", "name", "group", "owner", "state", "gpu", "gpus",
@@ -75,8 +69,7 @@ def account(harness: Harness) -> Harness:
 
 def test_status_json_shape(account: Harness) -> None:
     data = status(account)
-    assert set(data) == {"leases", "warnings", "totals", "swept", "cached_at"}
-    assert data["cached_at"] is None
+    assert set(data) == {"leases", "warnings", "totals", "swept"}
     assert data["swept"] == []
     for row in data["leases"]:
         assert set(row) == LEASE_KEYS
@@ -268,8 +261,6 @@ def test_status_verbose_leaves_out_the_follower_pid(harness: Harness) -> None:
     assert harness.context().cache.load().leases["l-0000a001"].follower_pid == 4001
     _, out, _ = harness.run("status", "--verbose")
     assert "follower" not in out
-    _, out, _ = harness.run("status", "--cached", "--verbose")
-    assert "follower" not in out
 
 
 def test_uptime_counts_from_first_running_sample(harness: Harness) -> None:
@@ -291,12 +282,12 @@ def test_uptime_null_before_running(harness: Harness) -> None:
     assert line[header.index("UPTIME"):].split()[0] == "—"
 
 
-def test_history_only_when_named_or_verbose(harness: Harness) -> None:
+def test_history_only_when_named(harness: Harness) -> None:
     row = add_lease(harness, label={"name": "ft"})
     harness.run("status")
     del harness.provider.instances[row.id]
     assert status(harness)["leases"] == []
-    assert [r["state"] for r in status(harness, "--verbose")["leases"]] == ["gone"]
+    assert status(harness, "--verbose")["leases"] == []
     named = status(harness, "ft")["leases"]
     assert [r["state"] for r in named] == ["gone"]
     assert (named[0]["busy"], named[0]["gpus"], named[0]["vram_gb"]) == (None, 1, 24.0)
@@ -322,50 +313,6 @@ def test_swept_line_in_human_mode(harness: Harness) -> None:
     add_lease(harness, label={"name": "ft", "expires": NOW - 30})
     _, out, _ = harness.run("status", "--plain")
     assert out.splitlines()[0] == "SWEPT  l-0000a001 ft  expired 2026-10-29T00:59:30Z  destroyed"
-
-
-def test_status_cached_makes_no_network_call(account: Harness) -> None:
-    account.provider.calls.clear()
-    data = status(account, "--cached")
-    assert account.provider.calls == []
-    assert data["cached_at"] == "2026-10-29T01:00:00Z"
-    assert data["swept"] == []
-    assert [row["lease"] for row in data["leases"]] == [
-        "l-7f3a", "l-8b10", "l-8b11", "l-8b12", "l-a003", "i-55120"
-    ]
-    assert (data["totals"]["charges_today"], data["totals"]["credit"]) == (7.12, 20.0)
-    assert by_lease(data)["l-7f3a"]["cost"] == 6.0
-    assert ("expiring_soon", "l-8b12") in codes(data)
-    assert ("orphan", "i-55120") in codes(data)
-    assert status(account, "--cached", "trainer")["leases"][0]["log_tail"] == []
-
-
-def test_status_cached_without_cache(harness: Harness) -> None:
-    data = status(harness, "--cached")
-    assert data["leases"] == [] and data["cached_at"] is None
-    assert harness.provider.calls == []
-    assert ("spend_unavailable", None) in codes(data)
-
-
-def test_status_cached_ages_with_local_clock(account: Harness) -> None:
-    account.time.advance(120)
-    row = by_lease(status(account, "--cached"))["l-8b12"]
-    assert row["ttl_remaining_s"] == 60
-
-
-def test_status_cached_reads_legacy_unprobed_entry_as_partial(harness: Harness) -> None:
-    add_lease(harness, reachable=False)
-    status(harness)
-    ctx = harness.context()
-    data = ctx.cache.load()
-    data.leases["l-0000a001"].guard_missing = []
-    ctx.cache.save(data)
-    cached = status(harness, "--cached", "--verbose")
-    row = by_lease(cached)["l-0000a001"]
-    assert row["verbose"]["guard_layers"] == {
-        "watchdog": "missing", "destroy_key": "missing", "clock_file": "missing"
-    }
-    assert ("guard_partial", "l-0000a001") not in codes(cached)
 
 
 def test_status_human_table(account: Harness) -> None:
@@ -402,32 +349,6 @@ def test_status_human_group_view(account: Harness) -> None:
     assert body["l-7f3a"].endswith("j-1 train.py running")
     assert body["l-8b11"].endswith("j-3 unknown")
     assert "⚠ 3m" in body["l-8b12"] and body["l-8b12"].endswith("idle")
-
-
-def test_status_human_cached_header(account: Harness) -> None:
-    _, out, _ = account.run("status", "--cached", "--plain")
-    assert out.splitlines()[0] == "CACHED  as of 2026-10-29T01:00:00Z"
-
-
-def test_status_cached_imports_stdlib_only(account: Harness) -> None:
-    probe = (
-        "import json, sys\n"
-        "before = set(sys.modules)\n"
-        "from vasty.cli import main\n"
-        "code = main(sys.argv[1:])\n"
-        "loaded = set(sys.modules) - before\n"
-        "third = sorted(m for m in loaded if m.split('.')[0] not in sys.stdlib_module_names"
-        " and m.split('.')[0] != 'vasty')\n"
-        "print(json.dumps({'code': code, 'vastai': 'vastai' in sys.modules,"
-        " 'provider': 'vasty.provider' in sys.modules, 'third': third}), file=sys.stderr)\n"
-    )
-    env = {"HOME": str(account.home), "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-           "PYTHONPATH": str(SRC), "USER": "nick", "VASTY_OWNER": "claude"}
-    result = subprocess.run([sys.executable, "-c", probe, "status", "--cached", "--json"],
-                            env=env, cwd=account.home, capture_output=True, text=True, check=True)
-    report = json.loads(result.stderr.strip().splitlines()[-1])
-    assert report == {"code": 0, "vastai": False, "provider": False, "third": []}
-    assert len(json.loads(result.stdout)["leases"]) == 6
 
 
 def _history_lease(harness: Harness, state: str) -> None:
@@ -483,13 +404,18 @@ def test_pending_clock_starts_at_running(harness: Harness) -> None:
     assert (lease["state"], lease["ttl_remaining_s"]) == ("running", 600)
 
 
-def test_status_everyone_lists_every_owner(account: Harness) -> None:
-    data = status(account, "--everyone")
+def test_status_lists_every_owner_and_orphans(account: Harness) -> None:
+    data = status(account)
     assert [row["lease"] for row in data["leases"]] == [
-        "l-7f3a", "l-8b10", "l-8b11", "l-8b12", "l-a003"
+        "l-7f3a", "l-8b10", "l-8b11", "l-8b12", "l-a003", "i-55120"
     ]
-    code, out, _ = account.run("release", "--everyone")
-    assert (code, json.loads(out)["error"]) == (1, "invalid_arguments")
+    assert ("orphan", "i-55120") in codes(data)
+
+
+def test_status_owner_filter_drops_orphans(account: Harness) -> None:
+    data = status(account, "--owner", "nick")
+    assert [row["lease"] for row in data["leases"]] == ["l-a003"]
+    assert ("orphan", "i-55120") not in codes(data)
 
 
 @pytest.fixture
@@ -503,14 +429,14 @@ def two_histories(harness: Harness) -> Harness:
     return harness
 
 
-def test_verbose_history_scoped_to_owner(two_histories: Harness) -> None:
+def test_verbose_adds_no_history(two_histories: Harness) -> None:
     def shown(*argv: str) -> list[str]:
         return [row["lease"] for row in status(two_histories, "--verbose", *argv)["leases"]]
 
-    assert shown() == ["l-0000b002", "l-0000a001"]
-    assert shown("--owner", "nick") == ["l-0000b002", "l-0000b001"]
-    assert shown("--everyone") == ["l-0000b002", "l-0000a001", "l-0000b001"]
-    assert shown("--group", "g") == ["l-0000a001"]
+    assert shown() == ["l-0000b002"]
+    assert shown("--owner", "nick") == ["l-0000b002"]
+    assert shown("--group", "g") == []
+    assert [row["state"] for row in status(two_histories, "l-0000b001")["leases"]] == ["gone"]
 
 
 def test_name_held_by_another_owner(account: Harness) -> None:

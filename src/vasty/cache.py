@@ -2,8 +2,7 @@
 
 The file holds `{"version": 1, "cached_at": EPOCH, "leases": {ID: LEASE}}` plus
 the last instance listing, the billed charges and the account balance and
-credit, which `status --cached` reads. Files without those keys load with
-empty values.
+credit. Files without those keys load with empty values.
 Each lease serializes every `CachedLease` field by its type hints: Decimal as a
 string, dataclasses as objects, int dict keys as strings. Load restores the
 types, fills defaults for absent fields and ignores unknown keys. A value of

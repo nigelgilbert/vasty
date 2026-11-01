@@ -295,7 +295,6 @@ class StatusResult:
     warnings: list[WarningItem]
     totals: Totals
     swept: list[SweptEntry]
-    cached_at: str | None
 
 
 @dataclass

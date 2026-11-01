@@ -131,13 +131,6 @@ def test_extend_to_counts_from_now(h: Harness) -> None:
     assert label_of(h, row.id).expires == NOW + 7200
 
 
-def test_extend_until_timestamp(h: Harness) -> None:
-    row = add_lease(h, label={"expires": NOW + 600})
-    _, data = run_json(h, "extend", "l-0000a001", "--until", "2026-10-29T03:00:00+01:00")
-    assert data["expires_at"] == "2026-10-29T02:00:00Z"
-    assert label_of(h, row.id).expires == NOW + 3600
-
-
 def test_extend_keeps_unknown_label_fields(h: Harness) -> None:
     row = add_lease(h, label={"expires": NOW + 600, "extra": {"note": "x"}})
     run_json(h, "extend", "l-0000a001", "--by", "10m")
@@ -160,21 +153,6 @@ def test_extend_uses_reserve_ttl_grammar(h: Harness, flag: str, text: str) -> No
     assert (code, data["error"]) == (1, "invalid_arguments")
     assert label_of(h, row.id).expires == NOW + 600
     code, data = run_json(h, "reserve", "--ttl", text)
-    assert (code, data["error"]) == (1, "invalid_arguments")
-
-
-def test_extend_to_past_points_at_release(h: Harness) -> None:
-    row = add_lease(h, label={"expires": NOW + 600})
-    code, data = run_json(h, "extend", "l-0000a001", "--until", "2026-10-29T00:30:00Z")
-    assert code == 1
-    assert data["error"] == "invalid_arguments"
-    assert data["hint"] == "vasty release l-0000a001"
-    assert label_of(h, row.id).expires == NOW + 600
-
-
-def test_extend_at_now_is_invalid(h: Harness) -> None:
-    add_lease(h, label={"expires": NOW + 600})
-    code, data = run_json(h, "extend", "l-0000a001", "--until", "2026-10-29T01:00:00Z")
     assert (code, data["error"]) == (1, "invalid_arguments")
 
 
@@ -231,9 +209,7 @@ def test_lengthen_restore_failure_names_both_values(
         "old_expires_at": "2026-10-29T01:10:00Z", "new_expires_at": "2026-10-29T01:40:00Z",
     }
     assert h.box.state(row.id).clock == NOW + 2400
-    code, out, _ = h.run("status", "--cached", "--verbose", "l-0000a001")
-    view = json.loads(out)["leases"][0]
-    assert view["verbose"]["guard_layers"]["clock_file"] == "missing"
+    assert "clock_file" in h.context().cache.load().leases["l-0000a001"].guard_missing
 
 
 def test_shorten_clock_failure_restores_label(h: Harness) -> None:
@@ -470,10 +446,10 @@ def test_bulk_by_extends_each_lease(h: Harness) -> None:
     assert label_of(h, b.id).expires == NOW + 3000
 
 
-def test_bulk_all_carries_the_previous_clock_on_each_entry(h: Harness) -> None:
+def test_bulk_owner_carries_the_previous_clock_on_each_entry(h: Harness) -> None:
     a = add_lease(h, "l-0000a001", label={"ttl": 1800, "expires": NOW + 600})
     add_lease(h, "l-0000a002", label={"expires": NOW + 1200})
-    code, data = run_json(h, "extend", "--all", "--by", "20m")
+    code, data = run_json(h, "extend", "--owner", "claude", "--by", "20m")
     assert code == 0, data
     assert [(r["lease"], r["previous_expires_at"], r["expires_at"]) for r in data["results"]] == [
         ("l-0000a001", "2026-10-29T01:10:00Z", "2026-10-29T01:30:00Z"),

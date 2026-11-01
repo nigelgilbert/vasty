@@ -12,7 +12,6 @@ from vasty.timeutil import (
     iso,
     parse_duration,
     parse_http_date,
-    parse_time,
 )
 
 
@@ -76,42 +75,10 @@ def test_format_duration_padded(seconds: int, text: str) -> None:
     assert format_duration(seconds, pad=True) == text
 
 
-@pytest.mark.parametrize(
-    ("text", "epoch"),
-    [
-        ("2026-10-29T01:04:00Z", 1793235840),
-        ("2026-10-29T01:04:00z", 1793235840),
-        ("2026-10-29t01:04:00Z", 1793235840),
-        ("2026-10-29T01:04:00.999Z", 1793235840),
-        ("2026-10-29T01:04:00+00:00", 1793235840),
-        ("2026-10-29T03:04:00+02:00", 1793235840),
-        ("2026-10-28T20:04:00-05:00", 1793235840),
-        ("2026-10-29T06:34:00+05:30", 1793235840),
-    ],
-)
-def test_parse_time(text: str, epoch: int) -> None:
-    assert parse_time(text) == epoch
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "2026-10-29T01:04:00", "2026-10-29", "2026-10-29T01:04Z", "2026-13-01T00:00:00Z",
-        "2026-02-30T00:00:00Z", "2026-10-29T24:00:00Z", "2026-10-29T01:04:00+2:00",
-        "2026-10-29T01:04:00+24:00", "1793235840", "tomorrow", "",
-    ],
-)
-def test_parse_time_rejects(text: str) -> None:
-    with pytest.raises(VastyError) as exc:
-        parse_time(text)
-    assert exc.value.code == "invalid_arguments"
-
-
 def test_iso() -> None:
     assert iso(1793235840) == "2026-10-29T01:04:00Z"
     assert iso(START) == "2026-10-29T00:00:00Z"
     assert iso(None) is None
-    assert parse_time(iso(1793235840)) == 1793235840
 
 
 @pytest.mark.parametrize(

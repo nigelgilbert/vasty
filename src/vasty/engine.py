@@ -2,8 +2,6 @@
 
 Every networked command calls `refresh` before it resolves its target. The
 billing helpers read Vast's charges and balance for `status` and `release`.
-`cached_snapshot` answers `status --cached` from the
-local file and imports only the standard library.
 
 Reconciliation keeps history leases in `Snapshot.leases` for 24h from
 `history_since`: the release call for a released lease, else the moment vasty
@@ -140,8 +138,7 @@ class Snapshot:
     `leases` holds active and history leases keyed by lease id. `instances` is
     the listing after the sweep. `charges` holds the cached charges after
     `refresh`, and `balance` is None. `read_charges` and `read_balance` set
-    them, and `cached_snapshot` sets both from the cache file. `cached_at` is
-    set when the snapshot comes from the cache file.
+    them.
     """
 
     now: int
@@ -153,7 +150,6 @@ class Snapshot:
     warnings: list[WarningItem] = field(default_factory=list)
     charges: Charges | None = None
     balance: Balance | None = None
-    cached_at: int | None = None
 
     def active(self) -> list[CachedLease]:
         """Return leases outside history, sorted by lease id."""
@@ -723,38 +719,6 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
             warnings=warnings,
             charges=_cached_charges(data, charges_start(leases.values(), now), now),
         )
-
-
-def cached_snapshot(ctx: Context) -> Snapshot:
-    """Build a snapshot from `leases.json` with no network call.
-
-    `now` comes from the local clock. Warnings cover `label_unreadable` and
-    `cache_rebuilt`. `charges` and `balance` hold the cached figures only when
-    they were read today in UTC, and `charges` only when it covers every lease.
-    """
-    data = ctx.cache.load()
-    now = ctx.clock.now()
-    for lease in data.leases.values():
-        _unprobed_guard(lease)
-    rows = classify(data.instances)
-    warnings = [unreadable_warning(inst, reason) for inst, reason in rows.unreadable]
-    if data.rebuilt:
-        warnings.append(make_warning(
-            "cache_rebuilt", None, "leases.json was unreadable; run vasty status to rebuild it"
-        ))
-    return Snapshot(
-        now=now,
-        instances=data.instances,
-        leases=data.leases,
-        orphans=rows.orphans,
-        unreadable=[inst for inst, _ in rows.unreadable],
-        warnings=warnings,
-        charges=_cached_charges(data, charges_start(data.leases.values(), now), now),
-        balance=_cached_balance(data)
-        if data.balance_at is not None and day_start(data.balance_at) == day_start(now)
-        else None,
-        cached_at=data.cached_at,
-    )
 
 
 def charges_start(leases: Iterable[CachedLease], now: int) -> int:

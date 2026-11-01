@@ -7,10 +7,7 @@ active lease matches, so callers can raise `lease_expired` or return
 `already_absent`. Selectors match active leases only and never orphans.
 
 Owner scope: writes act on the current owner (`ctx.settings.owner`) unless
-`--owner` or `--everyone` is given. Reads span owners unless `--owner`
-filters them. `--all` means the current owner's leases on reads too, and
-`--all --everyone` widens it to the account. `status --everyone` alone
-reads as `--all --everyone`.
+`--owner` is given. Reads span owners unless `--owner` filters them.
 
 A name that matches no lease of the current owner raises `lease_not_found`.
 When other owners hold active leases under that name, `details.matches`
@@ -47,8 +44,6 @@ def has_target(ns: argparse.Namespace) -> bool:
         getattr(ns, "target", None) is not None
         or getattr(ns, "group", None)
         or getattr(ns, "owner", None)
-        or getattr(ns, "all", False)
-        or getattr(ns, "everyone", False)
     )
 
 
@@ -83,23 +78,13 @@ def resolve_target(ctx: Context, snap: Snapshot, ns: argparse.Namespace, write: 
         return Resolved([found], [], bulk=False)
     group = getattr(ns, "group", None)
     owner_flag = getattr(ns, "owner", None)
-    everyone = bool(getattr(ns, "everyone", False))
-    all_flag = bool(getattr(ns, "all", False))
-    if not (group or owner_flag or all_flag or everyone):
-        raise invalid("No target given.", "Pass a LEASE, --group G, --owner O or --all.")
+    if not (group or owner_flag):
+        raise invalid("No target given.", "Pass a LEASE, --group G or --owner O.")
     if group:
         ids.validate_value("group", group)
     if owner_flag:
         ids.validate_value("owner", owner_flag)
-    owner: str | None
-    if owner_flag:
-        owner = owner_flag
-    elif everyone:
-        owner = None
-    elif write or all_flag:
-        owner = ctx.settings.owner
-    else:
-        owner = None
+    owner = owner_flag or (ctx.settings.owner if write else None)
     leases = [
         lease for lease in snap.active()
         if (not group or lease.label.group == group)

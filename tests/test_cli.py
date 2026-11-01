@@ -86,26 +86,23 @@ def test_config_and_startup_stdin_conflict() -> None:
 @pytest.mark.parametrize(
     "argv",
     [
-        ["release", "ft", "--group", "g"],
-        ["release", "--all", "--group", "g"],
-        ["release", "--everyone", "--owner", "o"],
-        ["release", "--everyone"],
-        ["extend", "--everyone", "--by", "30m"],
-        ["status", "--everyone", "--owner", "o"],
+        ["release", "--all"],
+        ["release", "--group", "g", "--everyone"],
+        ["extend", "--all", "--by", "30m"],
+        ["extend", "ft", "--until", "2026-10-29T03:00:00Z"],
+        ["status", "--everyone"],
+        ["status", "--all"],
+        ["status", "--cached"],
     ],
 )
-def test_target_selector_rules(argv: list[str]) -> None:
+def test_removed_flags_are_rejected(argv: list[str]) -> None:
     with pytest.raises(VastyError):
         parse(argv)
 
 
-def test_status_everyone_alone_is_allowed() -> None:
-    assert parse(["status", "--everyone"]).everyone
-
-
-def test_everyone_with_group_is_allowed() -> None:
-    ns = parse(["release", "--group", "g", "--everyone"])
-    assert ns.group == "g" and ns.everyone
+def test_status_filters_by_owner_and_group() -> None:
+    ns = parse(["status", "--owner", "o", "--group", "g"])
+    assert (ns.target, ns.owner, ns.group) == (None, "o", "g")
 
 
 @pytest.mark.parametrize(
@@ -291,7 +288,6 @@ def _verb_action(verb: str, flag: str) -> argparse.Action:
         ("reserve", "--disk", ["GB", "default: 50"]),
         ("reserve", "--vram", ["GB", "default: any"]),
         ("extend", "--by", ["duration", "default: none"]),
-        ("extend", "--until", ["ISO time"]),
     ],
 )
 def test_help_names_unit_and_default(verb: str, flag: str, words: list[str]) -> None:
