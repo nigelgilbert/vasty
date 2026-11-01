@@ -228,9 +228,15 @@ def _wait_ready(
     plan: _Plan,
 ) -> None:
     deadline = ctx.mono() + READY_DEADLINE_S
-    log_hint = f"Read the log: vasty ssh {lease.lease} -- tail -n 100 /workspace/.vasty/jobs/{job_id}/log"
+    tail = f"vasty ssh {lease.lease} -- tail -n 100 /workspace/.vasty/jobs/{job_id}/log"
+    log_hint = f"Read the log: {tail}"
+    ctx.warn(
+        f"vasty: {lease.lease} vllm started as {job_id}; polling /v1/models, "
+        f"up to {int(READY_DEADLINE_S // 60)}m. Log: {tail}"
+    )
     while True:
         if _ready(ctx, target, url, key, plan.bind_local):
+            ctx.warn(f"vasty: {lease.lease} /v1/models answers")
             return
         status = ctx.box.job_status(target, job_id)
         if status.exit is not None or status.state == "exited":

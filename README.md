@@ -91,7 +91,7 @@ Run `vasty status` before reserving. Reuse a lease with `--on` when it is yours,
 
 Owner comes from `--owner`, then `VASTY_OWNER`, then config, then `$USER`. An agent running under the human's login shares their owner unless it sets `VASTY_OWNER`. Each swarm worker sets its own `VASTY_OWNER` and cleans up with `release --owner "$VASTY_OWNER"`, which leaves other owners' boxes alone. A released box is gone; reserve a new one. A name resolves under the current owner. When other owners hold it, `lease_not_found` lists their lease ids in `details.matches`.
 
-In JSON mode stdout is one object per command. Remote output from `run` and `sync` goes to stderr. While `reserve`, `run` or `serve` waits on a new box, stderr gets one line per milestone: created, running on Vast, answers SSH, startup done. `ssh` passes remote output through and prints no object. Selected fields from `reserve`:
+In JSON mode stdout is one object per command. Remote output from `run` and `sync` goes to stderr. While `reserve`, `run` or `serve` waits on a new box, stderr gets one line per milestone: created, running on Vast, answers SSH, startup done. `serve` adds two: vLLM started, with the log command, and `/v1/models` answers. `ssh` passes remote output through and prints no object. Selected fields from `reserve`:
 
 ```sh
 vasty reserve --name ft --gpu A100 --ttl 3h --json

@@ -89,6 +89,16 @@ def test_serve_polls_until_200(harness: Harness, box: int) -> None:
     assert harness.time.mono_now - start == 3 * serve.POLL_INTERVAL_S
 
 
+def test_serve_reports_start_and_ready_on_stderr(harness: Harness, box: int) -> None:
+    code, _, err = run_serve(harness, "--on", "ft", "--model", QWEN)
+    assert code == 0
+    assert err.splitlines() == [
+        "vasty: l-0000a001 vllm started as j-1; polling /v1/models, up to 30m. "
+        "Log: vasty ssh l-0000a001 -- tail -n 100 /workspace/.vasty/jobs/j-1/log",
+        "vasty: l-0000a001 /v1/models answers",
+    ]
+
+
 def test_serve_fresh_key_per_job(harness: Harness, box: int) -> None:
     harness.hex_values = ["11" * 32, "22" * 32]
     _, first, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
