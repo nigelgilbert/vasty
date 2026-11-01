@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from vasty.context import Context
 
 VERBS = (
-    "reserve", "extend", "release", "status", "run", "serve",
+    "reserve", "extend", "release", "status", "run", "serve", "stop",
     "sync", "ssh", "tag", "sweep", "config", "completion",
 )
 
@@ -189,6 +189,10 @@ def build_parser() -> Parser:
     p.add_argument("--bind-local", action="store_true", dest="bind_local",
                    help="bind vLLM to 127.0.0.1 for use through vasty ssh -L")
     _reserve_flags(p, run_help)
+
+    p = sub.add_parser("stop", parents=[out], help="stop a job on a box")
+    p.add_argument("lease", metavar="LEASE", help="lease id or name")
+    p.add_argument("job", nargs="?", metavar="JOB", help="job id; required when several jobs run")
 
     p = sub.add_parser("sync", parents=[out], help="rsync files to or from a box",
                        usage="%(prog)s [options] LEASE push|pull [--delete] SRC DEST")

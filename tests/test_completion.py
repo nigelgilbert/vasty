@@ -148,8 +148,9 @@ def _clean_env(home: Path) -> dict[str, str]:
 @pytest.mark.parametrize(
     ("words", "expected"),
     [
-        (["vasty", "st"], ["status"]),
+        (["vasty", "st"], ["status", "stop"]),
         (["vasty", "status", ""], ["eval-0", "ft", "l-00000001", "l-00000002", "l-00000004"]),
+        (["vasty", "stop", ""], ["eval-0", "ft", "l-00000001", "l-00000002", "l-00000004"]),
         (["vasty", "release", "--group", ""], ["exp42"]),
         (["vasty", "run", "--on", "f"], ["ft"]),
         (["vasty", "sync", "ft", "p"], ["pull", "push"]),
@@ -231,6 +232,7 @@ def _bash_complete(harness: Harness, tmp_path: Path,
     [
         (["vasty", ""], list(VERBS)),
         (["vasty", "status", ""], ["eval-0", "ft", "l-00000001", "l-00000002", "l-00000004"]),
+        (["vasty", "stop", ""], ["eval-0", "ft", "l-00000001", "l-00000002", "l-00000004"]),
         (["vasty", "release", "--group", ""], ["exp42"]),
         (["vasty", "sync", "ft", ""], ["push", "pull"]),
         (["vasty", "reserve", "--startup", ""], ["FILES"]),

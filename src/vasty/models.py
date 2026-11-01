@@ -122,7 +122,7 @@ class Label:
 
 
 JobState = Literal["running", "exited", "unknown", "serving", "killed"]
-"""`killed` marks a job that `release` or `stop` ended; vasty wrote its exit record."""
+"""`killed` marks a job that `release` or `stop` ended."""
 
 
 @dataclass
@@ -412,6 +412,20 @@ class ServeResult:
     url: str
     api_key: str
     expires_at: str | None
+    warnings: list[WarningItem]
+    swept: list[SweptEntry]
+
+
+@dataclass
+class StopResult:
+    """The `stop` result: the lease and the stopped job's entry."""
+
+    lease: str
+    job: str
+    cmd: str
+    state: str
+    exit: int | None
+    duration_s: int | None
     warnings: list[WarningItem]
     swept: list[SweptEntry]
 
