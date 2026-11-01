@@ -44,7 +44,7 @@ from vasty.config import VLLM_IMAGE
 from vasty.context import Context
 from vasty.errors import VastyError, invalid
 from vasty.models import SERVE_PORT, CachedLease, Job, ServeResult, WarningItem
-from vasty.remote import LOG_LINES, SshTarget
+from vasty.remote import LOG_LINES, SshTarget, tail_lines
 from vasty.state import effective_expiry
 from vasty.timeutil import iso
 
@@ -53,7 +53,6 @@ POLL_INTERVAL_S = 5.0
 HTTP_TIMEOUT_S = 5.0
 PREFLIGHT_TIMEOUT_S = 30.0
 PREFLIGHT_COMMAND = "command -v vllm"
-LOG_TAIL_BYTES = 64 * 1024
 # vLLM flags that `serve` sets itself.
 OWNED_FLAGS = ("--host", "--port", "--api-key")
 
@@ -75,9 +74,8 @@ def server_argv(model: str, host: str, extra: list[str]) -> list[str]:
 
 
 def redact_tail(lines: list[str], key: str) -> list[str]:
-    """Replace `key` with `<redacted>` and keep the last `LOG_TAIL_BYTES` bytes of the lines."""
-    text = "\n".join(line.replace(key, "<redacted>") for line in lines)
-    return text.encode("utf-8")[-LOG_TAIL_BYTES:].decode("utf-8", errors="ignore").splitlines()
+    """Replace `key` with `<redacted>` and return `tail_lines` of the result."""
+    return tail_lines("\n".join(line.replace(key, "<redacted>") for line in lines), LOG_LINES)
 
 
 def probe_command(key: str) -> str:

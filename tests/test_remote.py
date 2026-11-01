@@ -33,6 +33,7 @@ from vasty.remote import (
     parse_rsync_version,
     probe_script,
     subprocess_runner,
+    tail_lines,
 )
 
 TARGET = SshTarget(instance_id=4242, host="198.51.100.7", port=41022)
@@ -890,3 +891,22 @@ def test_log_tail_defaults_to_newest_job(local: LocalBox) -> None:
 
 def test_log_tail_with_no_jobs(local: LocalBox) -> None:
     assert local.box.log_tail(TARGET, None, 10) == []
+
+
+def test_log_tail_collapses_carriage_return_frames(local: LocalBox) -> None:
+    local.write("jobs/j-1/started", "100\n")
+    local.write("jobs/j-1/log", "boot\n\r10%\r50%\r100%\ndone\r\n")
+    assert local.box.log_tail(TARGET, "j-1", 10) == ["boot", "100%", "done"]
+
+
+def test_tail_lines_keeps_the_last_lines() -> None:
+    assert tail_lines("a\nb\nc\n", 2) == ["b", "c"]
+    assert tail_lines("a\n\nb", 5) == ["a", "", "b"]
+    assert tail_lines("a\nb\n", 0) == []
+    assert tail_lines("", 5) == []
+
+
+def test_tail_lines_bounds_bytes_by_whole_lines() -> None:
+    assert tail_lines("aaaa\nbbbb\ncccc\n", 10, max_bytes=9) == ["bbbb", "cccc"]
+    assert tail_lines("aaaa\nbcdefgh\n", 10, max_bytes=4) == ["efgh"]
+    assert tail_lines("a\n" + "é" * 3, 10, max_bytes=5) == ["éé"]
