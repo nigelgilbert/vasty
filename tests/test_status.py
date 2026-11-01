@@ -297,7 +297,7 @@ def test_swept_lease_in_status(harness: Harness) -> None:
     harness.run("status")
     harness.time.advance(60)
     data = status(harness)
-    assert data["swept"] == [{"lease": "l-0000a001", "name": "ft",
+    assert data["swept"] == [{"lease": "l-0000a001", "name": "ft", "owner": "claude",
                               "expired_at": "2026-10-29T01:00:30Z", "ok": True, "error": None}]
     assert ("expired_with_running_jobs", "l-0000a001") in codes(data)
     assert ("expired_with_running_jobs", "l-0000a001") in codes(status(harness))
@@ -466,3 +466,46 @@ def test_pending_clock_starts_at_running(harness: Harness) -> None:
     harness.provider.instances[row.id].actual_status = "running"
     lease = status(harness, "ft")["leases"][0]
     assert (lease["state"], lease["ttl_remaining_s"]) == ("running", 600)
+
+
+def test_status_everyone_lists_every_owner(account: Harness) -> None:
+    data = status(account, "--everyone")
+    assert [row["lease"] for row in data["leases"]] == [
+        "l-7f3a", "l-8b10", "l-8b11", "l-8b12", "l-a003"
+    ]
+    code, out, _ = account.run("release", "--everyone")
+    assert (code, json.loads(out)["error"]) == (1, "invalid_arguments")
+
+
+@pytest.fixture
+def two_histories(harness: Harness) -> Harness:
+    mine = add_lease(harness, "l-0000a001", label={"name": "ft", "group": "g"})
+    theirs = add_lease(harness, "l-0000b001", label={"name": "ft", "owner": "nick"})
+    harness.run("status")
+    del harness.provider.instances[mine.id]
+    del harness.provider.instances[theirs.id]
+    add_lease(harness, "l-0000b002", label={"name": "live", "owner": "nick"})
+    return harness
+
+
+def test_verbose_history_scoped_to_owner(two_histories: Harness) -> None:
+    def shown(*argv: str) -> list[str]:
+        return [row["lease"] for row in status(two_histories, "--verbose", *argv)["leases"]]
+
+    assert shown() == ["l-0000b002", "l-0000a001"]
+    assert shown("--owner", "nick") == ["l-0000b002", "l-0000b001"]
+    assert shown("--everyone") == ["l-0000b002", "l-0000a001", "l-0000b001"]
+    assert shown("--group", "g") == ["l-0000a001"]
+
+
+def test_name_held_by_another_owner(account: Harness) -> None:
+    code, out, _ = account.run("status", "scratch")
+    data = json.loads(out)
+    assert (code, data["error"]) == (1, "lease_not_found")
+    assert data["details"] == {"matches": ["l-a003"]}
+    assert data["hint"] == "Run vasty status l-a003."
+
+
+def test_swept_entry_carries_owner(harness: Harness) -> None:
+    add_lease(harness, label={"name": "ft", "owner": "nick", "expires": NOW - 30})
+    assert [entry["owner"] for entry in status(harness)["swept"]] == ["nick"]

@@ -235,7 +235,7 @@ def _check_target(ns: argparse.Namespace) -> None:
         raise invalid("--all takes no --group or --owner.", "Pass --all or a selector.")
     if ns.everyone and ns.owner:
         raise invalid("--everyone takes no --owner.", "Drop --owner or --everyone.")
-    if ns.everyone and not (ns.all or ns.group):
+    if ns.everyone and not (ns.all or ns.group) and ns.verb != "status":
         raise invalid("--everyone needs --all or --group.", "vasty status --all --everyone")
 
 

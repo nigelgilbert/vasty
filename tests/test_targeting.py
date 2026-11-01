@@ -135,6 +135,25 @@ def test_all_means_current_owner(fleet: Harness) -> None:
     assert len(target(fleet, ["status", "--all", "--everyone"], write=False)) == 4
 
 
+def test_status_everyone_alone_reads_as_all_everyone(fleet: Harness) -> None:
+    assert len(target(fleet, ["status", "--everyone"], write=False)) == 4
+
+
+def test_other_owners_name_lists_matches(fleet: Harness) -> None:
+    with pytest.raises(VastyError) as exc:
+        lookup(fleet, "scratch")
+    assert exc.value.code == "lease_not_found"
+    assert exc.value.details == {"matches": ["l-0000b002"]}
+    assert exc.value.hint == "Run vasty status l-0000b002."
+
+
+def test_unknown_name_has_no_matches(fleet: Harness) -> None:
+    with pytest.raises(VastyError) as exc:
+        lookup(fleet, "nope")
+    assert exc.value.code == "lease_not_found"
+    assert not exc.value.details
+
+
 def test_bulk_never_includes_orphans_or_history(fleet: Harness) -> None:
     ctx = fleet.context()
     snap = engine.refresh(ctx)

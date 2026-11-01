@@ -83,7 +83,7 @@ A `TARGET` is a lease id or name, or a selector: `--group G`, `--owner O`, `--al
 
 Run `vasty status` before reserving. Reuse a lease with `--on` when it is yours, `state` is `running`, `busy` is false, `gpu`, `vram_gb` and `gpus` cover the job, and `ttl_remaining_s` covers the job or `extend` can. `run --on` leaves the lease up after the job. Auto-reserved attached `run` releases it.
 
-Owner comes from `--owner`, then `VASTY_OWNER`, then config, then `$USER`. An agent running under the human's login shares their owner unless it sets `VASTY_OWNER`. With its own owner, `release --all` from the agent leaves the human's boxes alone.
+Owner comes from `--owner`, then `VASTY_OWNER`, then config, then `$USER`. An agent running under the human's login shares their owner unless it sets `VASTY_OWNER`. With its own owner, `release --all` from the agent leaves the human's boxes alone. `status --verbose` lists the current owner's history, or `--owner O`'s, and `--everyone` widens it to the account. `status --everyone` alone reads as `--all --everyone`; `release` and `extend` need `--all` or `--group` with it. A name resolves under the current owner. When other owners hold it, `lease_not_found` lists their lease ids in `details.matches`.
 
 In JSON mode stdout is one object per command. Remote output from `run` and `sync` goes to stderr. `ssh` passes remote output through and prints no object. Selected fields from `reserve`:
 
@@ -127,7 +127,7 @@ When `reserve`, or `run` or `serve` without `--on`, creates a box, it warns `idl
 
 ### Result shapes
 
-Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry sweep destroyed during the command, each entry `{lease, name, expired_at, ok, error}`.
+Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry sweep destroyed during the command, each entry `{lease, name, owner, expired_at, ok, error}`.
 
 | Command | Returns |
 |---|---|
@@ -284,7 +284,7 @@ Any machine with the API key sees the same leases, owners and groups. An instanc
 | `gone` | Vanished with time left on its clock. Kept in history for 24h. |
 | `orphan` | An instance vasty did not create. No clock until `tag` gives it one. |
 
-`status` with no target lists active leases and orphans. History states show when named directly. A lease with the watchdog running, its destroy key present and the clock file matching the label has no `guard_partial` warning. Otherwise the warning names `watchdog`, `destroy_key` or `clock_file`.
+`status` with no target lists active leases and orphans. `--verbose` adds the current owner's history, or `--owner O`'s, or every owner's with `--everyone`. A named lease shows in any state. A lease with the watchdog running, its destroy key present and the clock file matching the label has no `guard_partial` warning. Otherwise the warning names `watchdog`, `destroy_key` or `clock_file`.
 
 ## Configuration
 

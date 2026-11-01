@@ -31,7 +31,7 @@ def test_sweep_destroys_past_clock_without_probing(harness: Harness) -> None:
     assert code == 0, data
     assert set(data) == {"swept", "warnings"}
     assert data["swept"] == [{
-        "lease": "l-0000a001", "name": "old", "expired_at": "2026-10-29T00:59:50Z",
+        "lease": "l-0000a001", "name": "old", "owner": "claude", "expired_at": "2026-10-29T00:59:50Z",
         "ok": True, "error": None,
     }]
     assert data["warnings"] == []

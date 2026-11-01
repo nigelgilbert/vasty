@@ -371,7 +371,9 @@ def _retry_destroy(
     mark_destroy_sent(lease, now, error)
     if error is None:
         return None
-    return SweptEntry(lease.lease, label.name, iso(min(now, effective_expiry(label))), False, error)
+    return SweptEntry(
+        lease.lease, label.name, label.owner, iso(min(now, effective_expiry(label))), False, error
+    )
 
 
 def _sweep(
@@ -418,7 +420,9 @@ def _sweep(
             destroyed.add(inst.id)
         leases[label.lease] = lease
         expired_at = iso(effective_expiry(label))
-        swept.append(SweptEntry(lease.lease, label.name, expired_at, error is None, error))
+        swept.append(
+            SweptEntry(lease.lease, label.name, label.owner, expired_at, error is None, error)
+        )
     return swept, replaced, destroyed
 
 

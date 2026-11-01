@@ -1,13 +1,16 @@
 """`vasty status`.
 
 With no target, `status` lists every active lease, then orphans and
-unreadable rows. `--verbose` also lists history leases; a named lease in
-history always shows. A single LEASE carries `log_tail` in every state,
-`[]` when the log is empty or unread. Warnings cover the shown leases,
+unreadable rows. `--verbose` adds history leases: the current owner's,
+`--owner O`'s, or every owner's with `--everyone`, narrowed by `--group`.
+`--everyone` alone reads as `--all --everyone`. A named lease in history
+always shows. A single LEASE carries `log_tail` in every state, `[]` when
+the log is empty or unread. Warnings cover the shown leases,
 `expired_with_running_jobs` for every history lease when no target is
 given, the account warnings from the refresh, `orphan` per shown orphan,
-and `spend_unavailable` when the balance or charges are unavailable. `totals` covers the whole account with Vast's
-own `balance`, `credit` and today's billed charges.
+and `spend_unavailable` when the balance or charges are unavailable.
+`totals` covers the whole account with Vast's own `balance`, `credit` and
+today's billed charges.
 
 `--cached` reads `leases.json` only. It uses the local clock, returns
 `swept: []`, sets `cached_at` and skips the log read. That path imports only
@@ -67,8 +70,10 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         leases = resolved.leases
         rows = resolved.orphans
         single = not resolved.bulk
+        if verbose and resolved.bulk:
+            leases = leases + _history(snap, args, settings.owner)
     else:
-        leases = snap.active() + (snap.history() if verbose else [])
+        leases = snap.active() + (_history(snap, args, settings.owner) if verbose else [])
         rows = sorted(snap.orphans + snap.unreadable, key=lambda inst: inst.id)
 
     tail: list[str] = []
@@ -119,6 +124,17 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         group = getattr(args, "group", None)
         human = render(result, by_id, group, cached)
     return Outcome(result, human=human)
+
+
+def _history(snap: engine.Snapshot, args: argparse.Namespace, owner: str) -> list[CachedLease]:
+    """Return history leases of `--owner O`, else the current owner, or every owner with `--everyone`."""
+    scope = getattr(args, "owner", None) or (None if getattr(args, "everyone", False) else owner)
+    group = getattr(args, "group", None)
+    return [
+        lease for lease in snap.history()
+        if (scope is None or lease.label.owner == scope)
+        and (not group or lease.label.group == group)
+    ]
 
 
 def _log_tail(ctx: Context, lease: CachedLease) -> list[str]:

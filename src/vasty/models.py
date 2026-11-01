@@ -237,6 +237,7 @@ class WarningItem:
 class SweptEntry:
     lease: str
     name: str | None
+    owner: str
     expired_at: str
     ok: bool
     error: str | None

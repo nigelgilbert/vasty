@@ -88,11 +88,17 @@ def test_config_and_startup_stdin_conflict() -> None:
         ["release", "--all", "--group", "g"],
         ["release", "--everyone", "--owner", "o"],
         ["release", "--everyone"],
+        ["extend", "--everyone", "--by", "30m"],
+        ["status", "--everyone", "--owner", "o"],
     ],
 )
 def test_target_selector_rules(argv: list[str]) -> None:
     with pytest.raises(VastyError):
         parse(argv)
+
+
+def test_status_everyone_alone_is_allowed() -> None:
+    assert parse(["status", "--everyone"]).everyone
 
 
 def test_everyone_with_group_is_allowed() -> None:
