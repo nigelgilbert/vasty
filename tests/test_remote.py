@@ -29,6 +29,7 @@ from vasty.remote import (
     RunMode,
     SshBox,
     SshTarget,
+    exec_last,
     parse_rsync_version,
     probe_script,
     subprocess_runner,
@@ -807,6 +808,35 @@ def test_signal_reaches_the_process_group(local: LocalBox) -> None:
     local.wait_exit("j-1")
     assert int(local.read("jobs/j-1/exit")) == 130
     assert local.box.job_status(TARGET, "j-1").exit == 130
+
+
+def test_exec_last_execs_a_simple_command_and_wraps_a_compound_one() -> None:
+    assert exec_last("python 'x y'") == "exec python 'x y'\n"
+    assert exec_last("export K=1\nvllm serve m\n") == "export K=1\nexec vllm serve m\n"
+    assert exec_last("a | b") == "exec bash -c 'a | b'\n"
+    assert exec_last("cd d && make") == "exec bash -c 'cd d && make'\n"
+    assert exec_last("echo x; exit 4") == "exec bash -c 'echo x; exit 4'\n"
+    assert exec_last("cmd >out") == "exec bash -c 'cmd >out'\n"
+
+
+def test_job_that_ignores_term_keeps_running_with_no_exit_record(local: LocalBox) -> None:
+    fixture = local.tmp / "stubborn.py"
+    fixture.write_text("import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                       "time.sleep(60)\n")
+    job = Job("j-1", "stubborn", None, None, "running")
+    started = local.box.start_job(TARGET, job, f"{sys.executable} {fixture}")
+    assert started.pid is not None
+    try:
+        time.sleep(0.5)
+        local.box.signal_job(TARGET, "j-1", "TERM")
+        time.sleep(0.5)
+        status = local.box.job_status(TARGET, "j-1")
+        assert (status.state, status.exit) == ("running", None)
+        assert not (local.root / "jobs" / "j-1" / "exit").exists()
+    finally:
+        subprocess.run(["pkill", "-9", "-P", str(started.pid)], check=False)
+    local.wait_exit("j-1")
+    assert local.box.job_status(TARGET, "j-1").exit == 137
 
 
 def test_log_tail_defaults_to_newest_job(local: LocalBox) -> None:

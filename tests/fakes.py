@@ -240,8 +240,10 @@ class BoxState:
     attach_lag: int = 0
     """Seconds `attach_job` takes to return after the job writes its exit record."""
     signals: list[tuple[str, str]] = field(default_factory=list)
-    signal_exits: dict[str, int] = field(default_factory=dict)
+    signal_exits: dict[str, int] = field(default_factory=lambda: {"TERM": 143})
     """Exit codes a live job records when it gets the named signal; other signals leave it running."""
+    ignores_term: bool = False
+    """Set for a job that ignores TERM: the record keeps no exit and the job stays live."""
     tails: list[str | None] = field(default_factory=list)
     """Job ids `log_tail` read, in call order."""
     execs: list[str] = field(default_factory=list)
@@ -374,7 +376,7 @@ class FakeBox:
         box = self._get(target)
         box.signals.append((job_id, signal))
         job = box.jobs.get(job_id)
-        code = box.signal_exits.get(signal)
+        code = None if signal == "TERM" and box.ignores_term else box.signal_exits.get(signal)
         if job is not None and code is not None and job.state in ("running", "serving"):
             job.exit = code
             job.state = "exited"

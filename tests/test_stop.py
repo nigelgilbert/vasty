@@ -22,9 +22,7 @@ def live_job(job_id: str, started: int) -> Job:
 
 @pytest.fixture
 def box(harness: Harness) -> int:
-    row = add_lease(harness, label={"name": "ft"})
-    harness.box.state(row.id).signal_exits = {"TERM": 143}
-    return row.id
+    return add_lease(harness, label={"name": "ft"}).id
 
 
 def status_jobs(harness: Harness) -> dict[str, Any]:
@@ -74,7 +72,7 @@ def test_stop_named_job_leaves_the_other_running(harness: Harness, box: int) -> 
 
 def test_stop_job_that_ignores_term_stays_running(harness: Harness, box: int) -> None:
     state = harness.box.state(box)
-    state.signal_exits = {}
+    state.ignores_term = True
     state.jobs["j-1"] = live_job("j-1", NOW - 300)
     start = harness.time.mono_now
     code, data = run_json(harness, "stop", "ft")

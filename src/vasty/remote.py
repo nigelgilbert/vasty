@@ -227,6 +227,26 @@ def local_rsync_version() -> tuple[int, int, int] | None:
     return parse_rsync_version(done.stdout)
 
 
+def exec_last(command: str) -> str:
+    """Return `command` with its last line exec'd, so the job replaces the shell that runs it.
+
+    A last line that holds a shell operator (`;`, `|`, `&`, `(`, a redirection)
+    runs under `exec bash -c`, which keeps the operator's meaning. The callers
+    pass a simple command on that line: `run` joins its argv and `serve` puts
+    `vllm serve` after an `export`.
+    """
+    lines = command.rstrip("\n").split("\n")
+    last = lines[-1]
+    tokens = shlex.shlex(last, posix=True, punctuation_chars=True)
+    tokens.whitespace_split = True
+    try:
+        compound = any(set(tok) <= set("();<>|&") for tok in tokens)
+    except ValueError:
+        compound = True
+    lines[-1] = f"exec bash -c {shlex.quote(last)}" if compound else f"exec {last}"
+    return "\n".join(lines) + "\n"
+
+
 def _int(text: str | None) -> int | None:
     if text is None or not re.fullmatch(r"-?[0-9]+", text.strip()):
         return None
@@ -546,7 +566,13 @@ class SshBox:
         return list(LAYERS)
 
     def start_script(self, job: Job, command: str) -> str:
-        """Return the shell that writes a job record and starts the job under tmux."""
+        """Return the shell that writes a job record and starts the job under tmux.
+
+        `run.sh` ignores INT, TERM and HUP, runs `script` and writes the exit
+        record. `script` execs its last line, so the job is `run.sh`'s child
+        and the recorded exit is the job's own. A signal to the group reaches
+        the job directly, and a job that ignores it keeps `run.sh` waiting.
+        """
         jdir = self._job_dir(job.id)
         j = shlex.quote(jdir)
         w = shlex.quote(self.workdir)
@@ -566,7 +592,7 @@ class SshBox:
             f"mkdir -p {shlex.quote(posixpath.dirname(jdir))} || exit 3",
             'mkdir "$J" || { [ -e "$J" ] && echo vasty_job=exists; exit 3; }',
             f'printf %s {_b64(job.cmd)} | base64 -d >"$J/cmd"',
-            f'(umask 077; printf %s {_b64(command)} | base64 -d >"$J/script")',
+            f'(umask 077; printf %s {_b64(exec_last(command))} | base64 -d >"$J/script")',
             f'printf %s {_b64(run_sh)} | base64 -d >"$J/run.sh"',
             f'echo {job.kind} >"$J/kind"',
         ]
