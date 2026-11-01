@@ -6,13 +6,13 @@ Vasty does two things: provisioning comes with a TTL and cleans up after itself,
 
 - Name the caller, input or failing test that needs a change today. Without one, drop it.
 - Make the smallest change that serves that caller. Reuse the local, branch or helper already in reach.
-- Ground scope in a real scenario from a live run. Cut speculative items instead of carrying them forward.
+- Ground scope in a real scenario from a live run. Cut speculative items.
 
 ## One correct way to do each thing
 
 - Verbs are cheap. Flags, duplicate paths and flag-combination rules are the cost.
 - For every flag, ask whether another flag or config key already reaches the result, and whether it adds a combination rule. Merge or drop on a yes.
-- Prefer removing a flag to adding an escalation option.
+- Remove a flag before adding an escalation option.
 - Stop cutting when a fresh agent would need a long or obtuse command chain for a common scenario.
 
 ## TTL bounds spend
@@ -29,11 +29,11 @@ Vasty does two things: provisioning comes with a TTL and cleans up after itself,
 
 ## Pass through the provider
 
-- Return what the Vast API reports for balance, billing and offers. Avoid local re-derivation.
+- Return what the Vast API reports for balance, billing and offers.
 
 ## Fix the guarantee
 
-- When a documented guarantee breaks, fix the cause. A warning with the real fix deferred leaves the guarantee broken.
+- When a documented guarantee breaks, fix the cause.
 - Point recovery hints at the safest action available at that stage.
 
 ## Code is the record
