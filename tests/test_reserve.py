@@ -195,8 +195,8 @@ def test_no_offers_names_constraints_and_hint(h: Harness) -> None:
     code, data = run_json(h, "reserve", "--gpu", "4090", "--max-price", "0.30")
     assert code == 1
     assert data["error"] == "no_offers"
-    assert data["message"] == "No offers match gpu=4090 cuda>=12.6 under $0.30/hr."
-    assert data["hint"] == "Try a higher --max-price, another --gpu, or a lower --cuda."
+    assert data["message"] == "No offers match gpu=4090 disk>=50GB cuda>=12.6 under $0.30/hr."
+    assert data["hint"] == "Try a higher --max-price, another --gpu, a lower --disk, or a lower --cuda."
     assert calls(h, "create") == []
 
 
@@ -269,6 +269,14 @@ def test_custom_image_without_cuda_sends_no_filter(h: Harness) -> None:
     code, _ = run_json(h, "reserve", "--image", "ubuntu:24.04")
     assert code == 0
     assert "cuda_max_good" not in build_offer_query(calls(h, "search_offers")[0])
+
+
+def test_no_offers_names_disk(h: Harness) -> None:
+    h.provider.offers = []
+    code, data = run_json(h, "reserve", "--disk", "200")
+    assert code == 1
+    assert "disk>=200GB" in data["message"]
+    assert "a lower --disk" in data["hint"]
 
 
 def test_no_offers_names_cuda(h: Harness) -> None:

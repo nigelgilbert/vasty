@@ -118,8 +118,8 @@ Errors are one object:
 ```json
 {
   "error": "no_offers",
-  "message": "No offers match gpu=4090 region=US under $0.40/hr.",
-  "hint": "Try a higher --max-price, another --gpu, or relax --region."
+  "message": "No offers match gpu=4090 disk>=50GB region=US under $0.40/hr.",
+  "hint": "Try a higher --max-price, another --gpu, a lower --disk, or relax --region."
 }
 ```
 

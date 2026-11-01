@@ -270,18 +270,20 @@ def _no_offers(query: OfferQuery) -> VastyError:
         parts.append(f"gpu={query.gpu}")
     if query.vram_min_gb is not None:
         parts.append(f"vram>={query.vram_min_gb:g}GB")
+    parts.append(f"disk>={query.disk_gb}GB")
     if query.gpus != 1:
         parts.append(f"gpus={query.gpus}")
     if query.region:
         parts.append(f"region={query.region}")
     if query.cuda is not None:
         parts.append(f"cuda>={query.cuda:g}")
-    what = " ".join(parts) or "the request"
+    what = " ".join(parts)
     tips = ["a higher --max-price"]
     if query.gpu:
         tips.append("another --gpu")
     if query.vram_min_gb is not None:
         tips.append("a lower --vram")
+    tips.append("a lower --disk")
     if query.region:
         tips.append("relax --region")
     if query.cuda is not None:
