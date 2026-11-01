@@ -222,6 +222,29 @@ def test_failed_destroy_backs_off_capped_at_60s(wd: Watchdog) -> None:
     assert wd.sleep_args() == ["2", "4", "8", "16", "32", "60", "60", "60"]
 
 
+@pytest.mark.parametrize("code", ["401", "403"])
+def test_refused_destroy_marks_destroy_key(wd: Watchdog, code: str) -> None:
+    wd.set_env()
+    wd.set_clock("900\n")
+    wd.run(max_loops=1)
+    assert wd.guard() == []
+    wd.set_code(code)
+    (wd.stubs / "curl_exit").write_text("22\n")
+    done = wd.run(max_loops=2)
+    assert wd.guard() == ["destroy_key"]
+    assert f"destroy failed; HTTP {code}" in done.stdout
+    assert len(wd.curl_calls()) == 3
+
+
+def test_failed_destroy_without_refusal_keeps_destroy_key_clear(wd: Watchdog) -> None:
+    wd.set_env()
+    wd.set_clock("900\n")
+    wd.set_code("500")
+    (wd.stubs / "curl_exit").write_text("22\n")
+    wd.run(max_loops=2)
+    assert wd.guard() == []
+
+
 def test_unreadable_clock_is_logged_and_reread_within_60s(wd: Watchdog) -> None:
     wd.set_env()
     wd.set_clock("garbage\n")
