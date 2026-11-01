@@ -171,9 +171,9 @@ A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fie
 | `no_offers` | 1 | no offer matches |
 | `lease_not_found` | 1 | unknown id or name |
 | `ambiguous_target` | 1 | a name or id matches more than one active lease |
-| `orphan_unmanaged` | 1 | an orphan id is passed to `extend`, `run`, `serve`, `sync` or `ssh` |
+| `orphan_unmanaged` | 1 | an orphan id is passed to `extend`, `run`, `serve`, `sync`, `ssh` or `stop` |
 | `lease_expired` | 1 | the lease is in history |
-| `lease_pending` | 1 | `extend`, `run --on`, `serve --on`, `sync` or `ssh` on a lease SSH cannot reach yet |
+| `lease_pending` | 1 | `extend`, `run --on`, `serve --on`, `sync`, `ssh` or `stop` on a lease SSH cannot reach yet |
 | `name_conflict` | 1 | a new name matches another active lease of the same owner |
 | `confirmation_required` | 1 | orphan `release` without `--yes` in non-TTY mode |
 | `image_unsupported` | 1 | the image lacks bash, root or apt-get |
