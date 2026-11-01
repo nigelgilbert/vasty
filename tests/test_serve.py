@@ -118,6 +118,43 @@ def test_serve_job_exit_before_ready_is_serve_failed(harness: Harness, box: int)
     assert box in harness.provider.instances
 
 
+def test_serve_failed_804_on_box_names_lease_image_and_cuda(harness: Harness) -> None:
+    box = add_lease(harness, label={"name": "ft"}, image="my/vllm:1").id
+    harness.http_status = 0
+    exit_job(harness, box)
+    harness.box.state(box).logs["j-1"] = ["loading", "RuntimeError: Error 804: forward compat"]
+    code, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
+    assert code == 2 and data["error"] == "serve_failed"
+    assert data["hint"] == (
+        "The host driver is below the image's CUDA. Serve on a new box: "
+        f"vasty serve --model {QWEN} --image my/vllm:1 --cuda 13."
+    )
+
+
+def test_serve_failed_804_keeps_ttl_name_and_falls_back_to_vllm_image(
+    harness: Harness, reserve: FakeReserve
+) -> None:
+    harness.http_status = 0
+    exit_job(harness, 1001)
+    harness.box.state(1001).logs["j-1"] = ["Error 804"]
+    code, data, _ = run_serve(harness, "--model", "M", "--ttl", "2h", "--name", "n")
+    assert code == 2 and data["error"] == "serve_failed"
+    assert data["hint"] == (
+        "The host driver is below the image's CUDA. Serve on a new box: "
+        "vasty serve --model M --image vllm/vllm-openai:v0.32.0 --cuda 13 --ttl 2h --name n."
+    )
+
+
+def test_serve_failed_without_804_keeps_log_hint(harness: Harness, box: int) -> None:
+    harness.http_status = 0
+    exit_job(harness, box)
+    harness.box.state(box).logs["j-1"] = ["loading", "CUDA out of memory"]
+    _, data, _ = run_serve(harness, "--on", "ft", "--model", QWEN)
+    assert data["hint"] == (
+        "Read the log: vasty ssh l-0000a001 -- tail -n 100 /workspace/.vasty/jobs/j-1/log"
+    )
+
+
 def test_serve_deadline_is_serve_failed(harness: Harness, box: int) -> None:
     harness.http_status = 503
     state = harness.box.state(box)

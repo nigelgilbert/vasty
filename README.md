@@ -170,7 +170,7 @@ A `--no-wait` reserve returns `state: "pending"` with the clock and endpoint fie
 | `provider_error` | 2 | a provider call fails |
 | `box_unreachable` | 2 | the box does not answer SSH |
 | `sync_failed` | 2 | rsync fails |
-| `serve_failed` | 2 | the inference server exits or times out before `/v1/models` answers; `details` carries `exit` and `lease`, plus `log_tail` when the read succeeds |
+| `serve_failed` | 2 | the inference server exits or times out before `/v1/models` answers; `details` carries `exit` and `lease`, plus `log_tail` when the read succeeds. When `log_tail` holds `Error 804`, the host driver is below the image's CUDA, and the hint reads `vasty serve --model M --image IMAGE --cuda 13` with the caller's `--ttl` and `--name` |
 | `port_mapping_missing` | 2 | a required port has no external mapping at the readiness deadline |
 
 A bulk command exits with the highest exit code among its failed entries. Parser errors use the same error object.
