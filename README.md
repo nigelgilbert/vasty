@@ -333,7 +333,7 @@ Done:
 
 - Every verb above, in `src/vasty/`.
 - 1392 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
-- Two funded live runs on Vast, 2026-10-29 and 2026-10-31. The second covered `serve` end to end. See [docs/live-test-report.md](docs/live-test-report.md).
+- Funded live runs on Vast from 2026-10-29 to 2026-11-01, `serve` end to end included.
 
 Not done:
 

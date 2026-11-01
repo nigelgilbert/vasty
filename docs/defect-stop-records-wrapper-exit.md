@@ -1,6 +1,6 @@
 # Defect: `vasty stop` records the wrapper's exit as the job's
 
-Found on 2026-11-01 in live run 6, phase 1 steps 17 and 18, on a real RTX 3060 box. Reopens issue 004 (`vasty stop LEASE [JOB]`).
+Found on 2026-11-01 in live run 6, phase 1 steps 17 and 18, on a real RTX 3060 box. The README's `stop` result row holds the contract.
 
 ## Summary
 
@@ -45,7 +45,7 @@ Box state after the stop, from `ssh p1 -- ps -eo pid,pgid,stat,etime,args` and t
   started   1793510780
 ```
 
-Expected per issue 004: `state: running`, process exit code 2, and the python still in `ps`. Observed: `killed`, 143, exit 0, python gone.
+Expected per the README: `state: running`, process exit code 2, and the python still in `ps`. Observed: `killed`, 143, exit 0, python gone.
 
 The same TERM path on a job that honours TERM (step 15, `sleeper.py`) returned `killed`, 143, which is what the spec wants for that case. Phase 4 step 05 and phase 5 step 06 on vLLM serve jobs behaved the same way. Those results are correct; the defect is only visible on a job that survives TERM.
 
@@ -88,7 +88,7 @@ Step 7 is incidental. Nothing vasty does checks for it, and a job that ignores H
 ## Impact
 
 - `stop` on a job that ignores TERM reports success with a code that belongs to the wrapper. The job's own exit is never recorded.
-- The "still running after 10 s, exit 2" contract from issue 004 is dead code on a real box.
+- The "still running after 10 s, exit 2" contract in the README is dead code on a real box.
 - `status` reads `busy: false` while the job may still hold the GPU. `run --on` and `serve --on` then treat the box as free.
 - `release` destroys the instance without signalling jobs, so the job dies with the box either way. The wrong record, and the `busy: false` that follows from it, is the whole defect.
 - vLLM, python, and shell jobs that take the default TERM action are unaffected.
