@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from fakes import NOW, START, Harness, add_lease
+
 from vasty.errors import VastyError
 from vasty.models import Job
 from vasty.timeutil import iso

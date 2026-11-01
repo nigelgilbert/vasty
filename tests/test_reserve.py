@@ -9,8 +9,8 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-
 from fakes import NOW, Harness, add_lease, make_offer, rejected_error, timeout_error
+
 from vasty import engine
 from vasty.commands import reserve
 from vasty.config import user_config_path

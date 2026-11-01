@@ -4,8 +4,8 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-
 from fakes import NOW, START, Harness, add_lease, lease_label
+
 from vasty import engine
 from vasty.errors import VastyError
 from vasty.labels import parse

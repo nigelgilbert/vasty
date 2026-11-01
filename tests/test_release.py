@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from fakes import NOW, START, Harness, add_lease
+
 from vasty.errors import VastyError
 from vasty.models import Instance, Job
 

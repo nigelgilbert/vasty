@@ -7,11 +7,11 @@ import sys
 from typing import Any
 
 import pytest
-
 from fakes import NOW, Harness, add_lease
-from vasty.models import Job
+
 from vasty.commands import sweep
 from vasty.errors import VastyError
+from vasty.models import Job
 
 FOLLOW = [sys.executable, "-m", "vasty", "sweep", "--follow"]
 
@@ -239,7 +239,7 @@ def test_follow_retries_through_an_outage_of_every_retry(harness: Harness) -> No
 
 
 def test_follow_gives_up_after_the_last_retry(harness: Harness) -> None:
-    row = add_lease(harness, label={"expires": NOW + 60})
+    add_lease(harness, label={"expires": NOW + 60})
     harness.provider.fail["list_instances"] = [
         VastyError("provider_error", "Vast list returned HTTP 401", "Check the Vast API key.")
         for _ in range(sweep.FOLLOW_RETRIES + 1)

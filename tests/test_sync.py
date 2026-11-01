@@ -4,7 +4,6 @@ import json
 from typing import Any
 
 import pytest
-
 from fakes import NOW, Harness, add_lease
 
 EXCLUDES = [".git", "__pycache__", ".venv", "node_modules"]

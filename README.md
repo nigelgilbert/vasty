@@ -344,8 +344,11 @@ Not done:
 ```sh
 uv sync
 uv run pytest
+uv run ruff check .
 uv run mypy
 ```
+
+CI runs the same three commands on every pull request. See `.github/workflows/`.
 
 `src/vasty/provider.py` is the only file that imports `vastai`. `tests/fakes.py` holds the fake provider and fake box the suite runs on.
 

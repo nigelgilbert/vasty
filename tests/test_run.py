@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any, TextIO
 
 import pytest
-
 from fakes import NOW, FakeReserve, Harness, add_lease
+
 from vasty import engine
 from vasty.context import Context
 from vasty.errors import VastyError

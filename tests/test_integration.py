@@ -7,8 +7,8 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-
 from fakes import Harness, add_lease, make_offer
+
 from vasty.labels import parse
 from vasty.models import CreateRequest, Instance, Label
 from vasty.provider import build_offer_query

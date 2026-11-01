@@ -8,8 +8,8 @@ from importlib.metadata import version
 from typing import Any
 
 import pytest
-
 from fakes import NOW, Harness, add_lease, make_offer
+
 from vasty.cli import build_parser, main, parse
 from vasty.context import Context
 from vasty.errors import EXIT_CODES, VastyError

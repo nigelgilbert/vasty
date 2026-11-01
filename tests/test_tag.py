@@ -6,8 +6,8 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-
 from fakes import NOW, Harness, add_lease, lease_label
+
 from vasty.errors import VastyError
 from vasty.labels import parse
 from vasty.models import Label

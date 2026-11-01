@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from fakes import Harness
+
 from vasty.config import (
     Settings,
     emit_toml,
