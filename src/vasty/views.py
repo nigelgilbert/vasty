@@ -44,7 +44,11 @@ from vasty.timeutil import iso
 
 
 def uptime_end(lease: CachedLease, now: int) -> int:
-    """Return when the box stopped billing: now for active leases, else when vasty saw it go."""
+    """Return when the box stopped billing.
+
+    Active leases use now, expired leases `expired_at`, and other history
+    leases `history_since`.
+    """
     if lease.state not in HISTORY_STATES:
         return now
     if lease.state == "expired" and lease.expired_at is not None:

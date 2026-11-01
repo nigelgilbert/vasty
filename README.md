@@ -126,7 +126,7 @@ Exit codes: 0 success, 1 bad input or lookup, 2 provider or box failure. Once a 
 
 `status` returns a `warnings` array. Each entry has a code, the lease, a message and `fix`, one runnable `vasty` command. An agent can loop over the warnings and run the fixes. A `guard_partial` warning names the missing layer, so an agent knows how much to trust that box's clock. `status --verbose` lists each layer under `guard_layers`.
 
-Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `expired_with_running_jobs`, `startup_failed`, `flag_mismatch`, `idle_box_available`, `clock_skew`, `clock_skew_unknown`, `sweep_not_spawned`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
+Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, `orphan`, `guard_partial`, `startup_failed`, `flag_mismatch`, `idle_box_available`, `clock_skew`, `clock_skew_unknown`, `sweep_not_spawned`, `clock_unverified`, `label_unreadable`, `spend_unavailable`, `cache_rebuilt`.
 
 | Warning | Fix |
 |---|---|
@@ -143,7 +143,7 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 |---|---|
 | `reserve` | the lease: `lease`, `name`, `owner`, `group`, `state`, `reused`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `expires_at`, `ttl_remaining_s`, `ssh`, `rsync_target`, `ssh_port`, `ports` |
 | `extend` on one lease | `lease`, `previous_expires_at`, `expires_at`, `ttl_remaining_s`. The label's `ttl` keeps the reserve's value |
-| `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending`, and `already_absent` when the lease was already gone |
+| `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending`, and `already_absent` when the lease was already gone. `destroy_pending` is true from the destroy call until a refresh sees the instance gone from the provider listing |
 | bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error`; `extend` adds `previous_expires_at` and `expires_at`; `release` adds `name`, `uptime_s`, `cost`, `jobs`, `destroy_pending` and `already_absent`, or `name` and `message` when it fails |
 | `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s` |
 | `status` | `leases`, `totals`, `cached_at`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
@@ -151,7 +151,7 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 | attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `error`. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
 | `run --detach` | `lease`, `job`, `log_path`, `expires_at` |
 | `serve` | `lease`, `job`, `model`, `url`, `api_key`, `expires_at` |
-| `stop` | `lease`, `job`, `cmd`, `state`, `exit`, `duration_s`. `stop` sends TERM to the job's process group and waits up to 10s. JOB is required when several jobs run. A job still live after the wait keeps its `state` and `stop` exits 2 |
+| `stop` | `lease`, `job`, `cmd`, `state`, `exit`, `duration_s`. `stop` sends TERM to the job's process group, waits up to 10s, then KILL and waits up to 5s. JOB is required when several jobs run. A job still live after KILL keeps its `state` and `stop` exits 2 |
 | `sync` | `lease`, `direction`, `src`, `dest` |
 | `sweep` | `swept`, `warnings` |
 | `config` | `values`, `{key, value}` or `profiles` |

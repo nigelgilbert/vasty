@@ -141,7 +141,21 @@ def test_release_stays_destroy_pending_until_gone(harness: Harness) -> None:
     harness.run("status")
     lease = cached(harness, "l-0000a001")
     assert (lease.state, lease.destroy_pending) == ("released", False)
-    assert lease.history_since == NOW + 30
+    assert lease.history_since == NOW
+
+
+def test_release_freezes_uptime_while_destroy_pending(harness: Harness) -> None:
+    add_lease(harness)
+    harness.provider.keep_rows = True
+    harness.run("status")
+    harness.time.advance(118)
+    code, data, _ = release(harness, "l-0000a001")
+    assert (code, data["uptime_s"], data["destroy_pending"]) == (0, 118, True)
+    harness.time.advance(60)
+    _, out, _ = harness.run("status", "l-0000a001")
+    [row] = json.loads(out)["leases"]
+    assert (row["state"], row["uptime_s"]) == ("released", 118)
+    assert cached(harness, "l-0000a001").destroy_pending is True
 
 
 def test_reconciliation_records_released(harness: Harness) -> None:

@@ -240,10 +240,10 @@ class BoxState:
     attach_lag: int = 0
     """Seconds `attach_job` takes to return after the job writes its exit record."""
     signals: list[tuple[str, str]] = field(default_factory=list)
-    signal_exits: dict[str, int] = field(default_factory=lambda: {"TERM": 143})
+    signal_exits: dict[str, int] = field(default_factory=lambda: {"TERM": 143, "KILL": 137})
     """Exit codes a live job records when it gets the named signal; other signals leave it running."""
     ignores_term: bool = False
-    """Set for a job that ignores TERM: the record keeps no exit and the job stays live."""
+    """Set for a job that ignores TERM: TERM leaves the job live and KILL still lands."""
     tails: list[str | None] = field(default_factory=list)
     """Job ids `log_tail` read, in call order."""
     execs: list[str] = field(default_factory=list)

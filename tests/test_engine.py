@@ -117,7 +117,7 @@ def test_sweep_failed_destroy_reports_error(harness: Harness) -> None:
 
 def release_in_cache(harness: Harness, lease_id: str = "l-0000a001") -> None:
     edit_cache(harness, lease_id, state="released", released_here=True, destroy_pending=True,
-               destroy_attempts=1, destroy_at=NOW)
+               destroy_attempts=1, destroy_at=NOW, history_since=NOW)
 
 
 def test_retry_delay_doubles_and_caps_at_60s() -> None:
@@ -166,11 +166,11 @@ def test_released_lease_retries_until_row_gone(harness: Harness) -> None:
     assert harness.provider.destroyed == [row.id]
     lease = snap.leases["l-0000a001"]
     assert (lease.state, lease.destroy_pending, lease.destroy_attempts) == ("released", True, 2)
-    assert lease.history_since is None
+    assert lease.history_since == NOW
     del harness.provider.instances[row.id]
     harness.time.advance(1)
     lease = refresh(harness).leases["l-0000a001"]
-    assert (lease.state, lease.destroy_pending, lease.history_since) == ("released", False, NOW + 6)
+    assert (lease.state, lease.destroy_pending, lease.history_since) == ("released", False, NOW)
     assert (lease.destroy_attempts, lease.destroy_at) == (0, None)
 
 
@@ -354,7 +354,7 @@ def test_reconcile_released_clears_destroy_pending(harness: Harness) -> None:
     row = add_lease(harness)
     refresh(harness)
     edit_cache(harness, "l-0000a001", state="released", released_here=True, destroy_pending=True,
-               destroy_attempts=1, destroy_at=NOW)
+               destroy_attempts=1, destroy_at=NOW, history_since=NOW)
     still = refresh(harness)
     assert still.leases["l-0000a001"].state == "released"
     assert still.leases["l-0000a001"].destroy_pending is True
@@ -362,7 +362,8 @@ def test_reconcile_released_clears_destroy_pending(harness: Harness) -> None:
     harness.time.advance(30)
     snap = refresh(harness)
     lease = snap.leases["l-0000a001"]
-    assert (lease.state, lease.destroy_pending, lease.history_since) == ("released", False, NOW + 30)
+    assert (lease.state, lease.destroy_pending, lease.history_since) == ("released", False, NOW)
+    assert (lease.destroy_attempts, lease.destroy_at) == (0, None)
 
 
 def test_reconcile_released_here_moves_to_released(harness: Harness) -> None:

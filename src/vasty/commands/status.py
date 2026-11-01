@@ -5,10 +5,9 @@ unreadable rows. `--verbose` adds history leases: the current owner's,
 `--owner O`'s, or every owner's with `--everyone`, narrowed by `--group`.
 `--everyone` alone reads as `--all --everyone`. A named lease in history
 always shows. A single LEASE carries `log_tail` in every state, `[]` when
-the log is empty or unread. Warnings cover the shown leases,
-`expired_with_running_jobs` for every history lease when no target is
-given, the account warnings from the refresh, `orphan` per shown orphan,
-and `spend_unavailable` when the balance or charges are unavailable.
+the log is empty or unread. Warnings cover the shown leases, the account
+warnings from the refresh, `orphan` per shown orphan, and
+`spend_unavailable` when the balance or charges are unavailable.
 `totals` covers the whole account with Vast's own `balance`, `credit` and
 today's billed charges.
 
@@ -86,13 +85,6 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     lease_views += [views.orphan_view(inst, verbose, snap.charges) for inst in rows]
 
     warnings = views.warnings_for(leases, now, settings.warn_before_expiry)
-    if not targeted:
-        shown = {lease.lease for lease in leases}
-        extra = [lease for lease in snap.history() if lease.lease not in shown]
-        warnings += [
-            w for w in views.warnings_for(extra, now, settings.warn_before_expiry)
-            if w.code == "expired_with_running_jobs"
-        ]
     unreadable_ids = {inst.id for inst in snap.unreadable}
     warnings += [views.orphan_warning(inst) for inst in rows if inst.id not in unreadable_ids]
     warnings += snap.warnings

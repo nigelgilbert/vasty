@@ -1,12 +1,13 @@
 """`vasty stop LEASE [JOB]`.
 
 `stop` sends TERM to the job's process group and polls its box record for up
-to 10s. LEASE resolves like `status`. JOB is implied when one job is live and
-required when several are; the `invalid_arguments` error lists the live jobs
-in `details.jobs`. A job that exits in the grace is recorded `killed` with the
-exit code and finish time the box wrote, so `status` reports the same `exit`
-and `duration_s`. A job still running after the grace returns
-its live state, `running` or `serving`, and exit code 2.
+to 10s. A job still live after that gets KILL and up to 5s more. LEASE
+resolves like `status`. JOB is implied when one job is live and required when
+several are; the `invalid_arguments` error lists the live jobs in
+`details.jobs`. A job that exits is recorded `killed` with the exit code and
+finish time the box wrote, so `status` reports the same `exit` and
+`duration_s`. A job still live after KILL returns its live state, `running` or
+`serving`, and exit code 2.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from vasty.state import LIVE_JOB_STATES
 from vasty.timeutil import format_duration
 
 STOP_WAIT_S = 10.0
+KILL_WAIT_S = 5.0
 RUNNING_EXIT = 2
 
 
@@ -69,9 +71,12 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     snap = engine.refresh(ctx)
     lease = pick_lease(ctx, snap, args.lease)
     job = pick_job(lease, args.job)
-    record = signal_and_wait(ctx, engine.ssh_target(lease), job.id, "TERM", STOP_WAIT_S)
+    target = engine.ssh_target(lease)
+    record = signal_and_wait(ctx, target, job.id, "TERM", STOP_WAIT_S)
+    if _live(record):
+        record = signal_and_wait(ctx, target, job.id, "KILL", KILL_WAIT_S)
     now = ctx.clock.now()
-    running = record.exit is None and record.state in LIVE_JOB_STATES
+    running = _live(record)
     if not running:
         code = record.exit
         finished = record.finished_at or now
@@ -91,10 +96,15 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     return Outcome(result, exit_code=RUNNING_EXIT if running else 0, human=_human(result, running))
 
 
+def _live(record: Job) -> bool:
+    """Return whether the box record has no exit and a live state."""
+    return record.exit is None and record.state in LIVE_JOB_STATES
+
+
 def _human(result: StopResult, running: bool) -> str:
     took = format_duration(result.duration_s or 0)
     if running:
-        return (f"{result.job} on {result.lease} still runs {STOP_WAIT_S:g}s after TERM. "
+        return (f"{result.job} on {result.lease} still runs {KILL_WAIT_S:g}s after KILL. "
                 f"Check it with vasty status {result.lease}.")
     code = "no exit code" if result.exit is None else f"exit {result.exit}"
     return f"Stopped {result.job} on {result.lease}: {code} after {took}"
