@@ -1,6 +1,6 @@
 """The local cache `~/.local/state/vasty/leases.json`.
 
-The file holds `{"version": 1, "cached_at": EPOCH, "leases": {ID: LEASE}}` plus
+The file holds `{"version": 1, "leases": {ID: LEASE}}` plus
 the last instance listing, the billed charges and the account balance and
 credit. Files without those keys load with empty values.
 Each lease serializes every `CachedLease` field by its type hints: Decimal as a
@@ -33,7 +33,6 @@ FORMAT_VERSION = 1
 @dataclass
 class CacheData:
     leases: dict[str, CachedLease] = field(default_factory=dict)
-    cached_at: int | None = None
     rebuilt: bool = False
     instances: list[Instance] = field(default_factory=list)
     charges: Charges | None = None
@@ -127,7 +126,6 @@ def encode(data: CacheData) -> str:
     """Render `CacheData` as the file's JSON text."""
     body = {
         "version": FORMAT_VERSION,
-        "cached_at": data.cached_at,
         "leases": {key: _to_json(lease) for key, lease in data.leases.items()},
         "instances": _to_json(data.instances),
         "charges": _to_json(data.charges),
@@ -148,14 +146,12 @@ def decode(text: str) -> CacheData:
         raise CorruptCache(str(exc)) from None
     if not isinstance(body, dict) or body.get("version") != FORMAT_VERSION:
         raise CorruptCache("unknown cache version")
-    cached_at = _from_json(body.get("cached_at"), int | None)
     raw_leases = body.get("leases")
     if not isinstance(raw_leases, dict):
         raise CorruptCache("leases is not an object")
     leases = {str(k): _from_json(v, CachedLease) for k, v in raw_leases.items()}
     return CacheData(
         leases=leases,
-        cached_at=cached_at,
         instances=_from_json(body.get("instances", []), list[Instance]),
         charges=_from_json(body.get("charges"), Charges | None),
         charges_at=_from_json(body.get("charges_at"), int | None),

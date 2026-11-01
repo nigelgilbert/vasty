@@ -450,11 +450,10 @@ def test_clock_unverified_warning(harness: Harness) -> None:
     ]
 
 
-def test_cache_saved_with_cached_at(harness: Harness) -> None:
+def test_cache_saved_with_instances(harness: Harness) -> None:
     add_lease(harness)
     refresh(harness)
     data = harness.context().cache.load()
-    assert data.cached_at == NOW
     assert len(data.instances) == 1
 
 

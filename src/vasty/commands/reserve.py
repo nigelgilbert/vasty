@@ -552,8 +552,7 @@ def reserve_result(
     warnings: list[WarningItem],
     swept: list[SweptEntry],
 ) -> ReserveResult:
-    """Build the `reserve` output. A `pending` lease has null clock and endpoint fields."""
-    pending = lease.state == "pending"
+    """Build the `reserve` output."""
     expiry = effective_expiry(lease.label)
     endpoint = views.endpoint_fields(lease)
     return ReserveResult(
@@ -567,12 +566,12 @@ def reserve_result(
         gpus=lease.gpus,
         vram_gb=lease.vram_gb,
         price_per_hr=lease.price_per_hr,
-        expires_at=None if pending else iso(expiry),
-        ttl_remaining_s=None if pending else max(0, expiry - now),
-        ssh=None if pending else endpoint.ssh,
-        rsync_target=None if pending else endpoint.rsync_target,
-        ssh_port=None if pending else endpoint.ssh_port,
-        ports=None if pending else endpoint.ports,
+        expires_at=iso(expiry),
+        ttl_remaining_s=max(0, expiry - now),
+        ssh=endpoint.ssh,
+        rsync_target=endpoint.rsync_target,
+        ssh_port=endpoint.ssh_port,
+        ports=endpoint.ports,
         warnings=warnings,
         swept=swept,
     )
@@ -589,15 +588,12 @@ def render(result: ReserveResult) -> str:
     head.append(result.state)
     head.append(f"{result.gpus}× {result.gpu}" if result.gpus > 1 else str(result.gpu or "?"))
     head.append(f"${money(result.price_per_hr):.2f}/hr")
-    if result.ttl_remaining_s is not None:
-        head.append(f"expires in {format_duration(result.ttl_remaining_s)}")
+    head.append(f"expires in {format_duration(result.ttl_remaining_s)}")
     if result.reused:
         head.append("reused")
     lines = ["  ".join(head)]
     if result.ssh:
         lines.append(result.ssh)
-    elif result.state == "pending":
-        lines.append(f"booting; run vasty status {result.lease}")
     blocks = [lines, swept_lines(result.swept), warning_lines(result.warnings)]
     return "\n\n".join("\n".join(block) for block in blocks if block)
 

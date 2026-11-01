@@ -706,7 +706,6 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
             ))
         data.leases = leases
         data.instances = instances
-        data.cached_at = now
         data.rebuilt = False
         ctx.cache.save(data)
         return Snapshot(

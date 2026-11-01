@@ -899,6 +899,16 @@ def test_log_tail_collapses_carriage_return_frames(local: LocalBox) -> None:
     assert local.box.log_tail(TARGET, "j-1", 10) == ["boot", "100%", "done"]
 
 
+def test_log_tail_with_text_on_stdout_is_empty(
+    local: LocalBox, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def banner(*args: object, **kwargs: object) -> ExecResult:
+        return ExecResult(0, "Welcome to the box!\n", "")
+
+    monkeypatch.setattr(local.box, "_script", banner)
+    assert local.box.log_tail(TARGET, "j-1", 10) == []
+
+
 def test_tail_lines_keeps_the_last_lines() -> None:
     assert tail_lines("a\nb\nc\n", 2) == ["b", "c"]
     assert tail_lines("a\n\nb", 5) == ["a", "", "b"]

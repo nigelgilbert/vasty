@@ -311,8 +311,8 @@ class ReserveResult:
     gpus: int
     vram_gb: float | None
     price_per_hr: Decimal
-    expires_at: str | None
-    ttl_remaining_s: int | None
+    expires_at: str
+    ttl_remaining_s: int
     ssh: str | None
     rsync_target: str | None
     ssh_port: int | None

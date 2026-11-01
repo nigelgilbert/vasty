@@ -117,7 +117,7 @@ Errors are one object:
 ```json
 {
   "error": "no_offers",
-  "message": "No offers match gpu=4090 under $0.40/hr.",
+  "message": "No offers match gpu=4090 region=US under $0.40/hr.",
   "hint": "Try a higher --max-price, another --gpu, or relax --region."
 }
 ```
@@ -334,7 +334,7 @@ The API key comes from `VAST_API_KEY`. When that is unset, vasty reads `~/.confi
 Done:
 
 - Every verb above, in `src/vasty/`.
-- 1427 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
+- 1428 unit tests pass against a fake provider and a fake box. `mypy --strict` is clean.
 - Funded live runs on Vast from 2026-10-29 to 2026-11-01, `serve` end to end included.
 
 Not done:

@@ -8,6 +8,7 @@ in-memory fake in `tests/fakes.py`.
 from __future__ import annotations
 
 import base64
+import binascii
 import codecs
 import dataclasses
 import functools
@@ -777,7 +778,11 @@ class SshBox:
             " | base64\n"
             "exit 0\n"
         )
-        raw = base64.b64decode(self._script(target, script, timeout=15.0).stdout)
+        try:
+            raw = base64.b64decode(self._script(target, script, timeout=15.0).stdout)
+        except binascii.Error:
+            # A shell banner or other text on stdout leaves no readable tail.
+            return []
         return tail_lines(raw.decode("utf-8", errors="replace"), lines)
 
     def exec(self, target: SshTarget, command: str, timeout: float | None = None) -> ExecResult:
