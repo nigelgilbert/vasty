@@ -699,16 +699,24 @@ class SshBox:
         return None
 
     def signal_job(self, target: SshTarget, job_id: str, signal: str) -> None:
-        """Send `signal` to the job's process group; a job with no pid is left alone."""
+        """Send `signal` to the job's process group; a job with no pid is left alone.
+
+        KILL goes to every process in the group except `run.sh`, the leader,
+        so `run.sh` lives to write `finished` and `exit`. Other signals go to
+        the whole group at once and `run.sh` traps INT, TERM and HUP.
+        """
         sig = signal.upper().removeprefix("SIG")
         if not _SIGNAL.match(sig):
             raise ValueError(f"invalid signal {signal!r}")
         j = shlex.quote(self._job_dir(job_id))
-        script = (
-            f'p=$(cat {j}/pid 2>/dev/null); [ -n "$p" ] || exit 0\n'
-            f'kill -s {sig} -- "-$p" 2>/dev/null || kill -s {sig} "$p" 2>/dev/null\n'
-            "exit 0\n"
-        )
+        if sig == "KILL":
+            send = (
+                """ps -eo pid=,pgid= | awk -v g="$p" '$2==g && $1!=g {print $1}'"""
+                " | xargs -r kill -KILL 2>/dev/null\n"
+            )
+        else:
+            send = f'kill -s {sig} -- "-$p" 2>/dev/null || kill -s {sig} "$p" 2>/dev/null\n'
+        script = f'p=$(cat {j}/pid 2>/dev/null); [ -n "$p" ] || exit 0\n{send}exit 0\n'
         self._script(target, script, timeout=15.0)
 
     def job_status(self, target: SshTarget, job_id: str) -> Job:

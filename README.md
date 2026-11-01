@@ -151,7 +151,7 @@ Every JSON result carries `warnings` and `swept`. `swept` lists what the expiry 
 | attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `error`. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
 | `run --detach` | `lease`, `job`, `log_path`, `expires_at` |
 | `serve` | `lease`, `job`, `model`, `url`, `api_key`, `expires_at` |
-| `stop` | `lease`, `job`, `cmd`, `state`, `exit`, `duration_s`. `stop` sends TERM to the job's process group and waits up to 10s. JOB is required when several jobs run. A job still live after the wait keeps its `state` and `stop` exits 2 |
+| `stop` | `lease`, `job`, `cmd`, `state`, `exit`, `duration_s`. `stop` sends TERM to the job's process group, waits up to 10s, then KILL and waits up to 5s. JOB is required when several jobs run. A job still live after KILL keeps its `state` and `stop` exits 2 |
 | `sync` | `lease`, `direction`, `src`, `dest` |
 | `sweep` | `swept`, `warnings` |
 | `config` | `values`, `{key, value}` or `profiles` |

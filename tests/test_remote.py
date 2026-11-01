@@ -819,7 +819,7 @@ def test_exec_last_execs_a_simple_command_and_wraps_a_compound_one() -> None:
     assert exec_last("cmd >out") == "exec bash -c 'cmd >out'\n"
 
 
-def test_job_that_ignores_term_keeps_running_with_no_exit_record(local: LocalBox) -> None:
+def test_kill_ends_a_job_that_ignores_term_and_run_sh_records_137(local: LocalBox) -> None:
     fixture = local.tmp / "stubborn.py"
     fixture.write_text("import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
                        "time.sleep(60)\n")
@@ -833,10 +833,49 @@ def test_job_that_ignores_term_keeps_running_with_no_exit_record(local: LocalBox
         status = local.box.job_status(TARGET, "j-1")
         assert (status.state, status.exit) == ("running", None)
         assert not (local.root / "jobs" / "j-1" / "exit").exists()
+        local.box.signal_job(TARGET, "j-1", "KILL")
+        local.wait_exit("j-1")
     finally:
         subprocess.run(["pkill", "-9", "-P", str(started.pid)], check=False)
-    local.wait_exit("j-1")
+    assert int(local.read("jobs/j-1/exit")) == 137
+    assert (local.root / "jobs" / "j-1" / "finished").exists()
     assert local.box.job_status(TARGET, "j-1").exit == 137
+
+
+def test_kill_ends_a_job_and_its_forked_child(local: LocalBox) -> None:
+    fixture = local.tmp / "forker.py"
+    child_pid = local.tmp / "child.pid"
+    fixture.write_text(
+        "import os, signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "if os.fork() == 0:\n"
+        f"    open({str(child_pid)!r}, 'w').write(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+    )
+    job = Job("j-1", "forker", None, None, "running")
+    started = local.box.start_job(TARGET, job, f"{sys.executable} {fixture}")
+    assert started.pid is not None
+    deadline = time.monotonic() + 10
+    while not child_pid.exists() or not child_pid.read_text():
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    child = int(child_pid.read_text())
+    try:
+        local.box.signal_job(TARGET, "j-1", "KILL")
+        local.wait_exit("j-1")
+        assert int(local.read("jobs/j-1/exit")) == 137
+        while _alive(child):
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+    finally:
+        subprocess.run(["kill", "-9", str(child)], check=False, capture_output=True)
+        subprocess.run(["pkill", "-9", "-P", str(started.pid)], check=False)
+
+
+def _alive(pid: int) -> bool:
+    """Return whether `pid` names a process that is not a zombie."""
+    result = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return result.returncode == 0 and not result.stdout.strip().startswith("Z")
 
 
 def test_log_tail_defaults_to_newest_job(local: LocalBox) -> None:

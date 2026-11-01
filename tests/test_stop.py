@@ -70,15 +70,33 @@ def test_stop_named_job_leaves_the_other_running(harness: Harness, box: int) -> 
     assert jobs["j-2"]["state"] == "killed"
 
 
-def test_stop_job_that_ignores_term_stays_running(harness: Harness, box: int) -> None:
+def test_stop_job_that_ignores_term_gets_kill(harness: Harness, box: int) -> None:
     state = harness.box.state(box)
     state.ignores_term = True
     state.jobs["j-1"] = live_job("j-1", NOW - 300)
     start = harness.time.mono_now
     code, data = run_json(harness, "stop", "ft")
-    assert code == stop.RUNNING_EXIT == 2
-    assert (data["state"], data["exit"], data["duration_s"]) == ("running", None, 310)
+    assert code == 0
+    assert (data["state"], data["exit"]) == ("killed", 137)
     assert harness.time.mono_now - start >= stop.STOP_WAIT_S
+    assert state.signals == [("j-1", "TERM"), ("j-1", "KILL")]
+    entry = status_jobs(harness)["j-1"]
+    assert (entry["state"], entry["exit"]) == ("killed", 137)
+
+
+def test_stop_job_that_survives_kill_stays_running(harness: Harness, box: int) -> None:
+    state = harness.box.state(box)
+    state.signal_exits = {}
+    state.jobs["j-1"] = live_job("j-1", NOW - 300)
+    start = harness.time.mono_now
+    code, out, _ = harness.run("stop", "ft", "--plain")
+    assert code == stop.RUNNING_EXIT == 2
+    assert out.startswith("j-1 on l-0000a001 still runs 5s after KILL.")
+    assert harness.time.mono_now - start >= stop.STOP_WAIT_S + stop.KILL_WAIT_S
+    assert state.signals == [("j-1", "TERM"), ("j-1", "KILL")]
+    code, data = run_json(harness, "stop", "ft")
+    assert code == 2
+    assert (data["state"], data["exit"]) == ("running", None)
     assert status_jobs(harness)["j-1"]["state"] == "running"
 
 
