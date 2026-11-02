@@ -1097,6 +1097,25 @@ def _sleep_error(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(h.time, "sleep", sleep)
 
 
+def test_lease_gone_after_running_reports_ended_before_ready(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h.provider.on_create = None
+    real_sleep = h.time.sleep
+
+    def sleep(seconds: float) -> None:
+        real_sleep(seconds)
+        if h.time.wall_now > NOW + 60:
+            h.provider.instances.clear()
+
+    monkeypatch.setattr(h.time, "sleep", sleep)
+    code, data = run_json(h, "reserve", "--ttl", "30m")
+    assert code == 2
+    assert data["error"] == "box_unreachable"
+    assert data["message"] == "Lease l-abababab ended before it became ready."
+    assert data["details"] == {"lease": "l-abababab", "destroyed": True}
+
+
 @pytest.mark.parametrize(("setup", "error", "destroyed"), [
     (_rejected_with_row, "provider_error", True),
     (_rejected_without_row, "provider_error", False),
