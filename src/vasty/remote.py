@@ -8,6 +8,7 @@ in-memory fake in `tests/fakes.py`.
 from __future__ import annotations
 
 import base64
+import binascii
 import codecs
 import dataclasses
 import functools
@@ -98,7 +99,7 @@ class BoxAccess(Protocol):
     def job_status(self, target: SshTarget, job_id: str) -> Job: ...
 
     def log_tail(self, target: SshTarget, job_id: str | None, lines: int) -> list[str]:
-        """Return the last lines of a job log, or the newest job's log when `job_id` is None."""
+        """Return `tail_lines` of a job log, or of the newest job's log when `job_id` is None."""
         ...
 
     def exec(self, target: SshTarget, command: str, timeout: float | None = None) -> ExecResult: ...
@@ -186,6 +187,41 @@ JOB_CLAIM_TRIES = 10
 """How many job ids `SshBox.start_job` tries before it reports the id as taken."""
 LOG_LINES = 100
 """How many job log lines `status` and `serve` read."""
+LOG_TAIL_BYTES = 16 * 1024
+"""How many bytes of job log `status` and `serve` keep."""
+
+
+def tail_lines(text: str, lines: int, max_bytes: int = LOG_TAIL_BYTES) -> list[str]:
+    """Return the last `lines` lines of `text` within `max_bytes` UTF-8 bytes.
+
+    Each line keeps the last non-empty frame of its carriage-return updates,
+    so a tqdm bar shows its final state. Lines split on `\\n` only. The byte
+    bound, 16 KiB by default, counts newline separators and drops the oldest
+    whole lines first. A newest line longer than the bound keeps its last
+    `max_bytes` bytes.
+    """
+    rows = text.split("\n")
+    if rows and rows[-1] == "":
+        rows.pop()
+    frames = [_last_frame(row) for row in rows[-lines:]] if lines > 0 else []
+    kept: list[str] = []
+    size = 0
+    for line in reversed(frames):
+        cost = len(line.encode("utf-8")) + (1 if kept else 0)
+        if size + cost > max_bytes:
+            if not kept:
+                tail = line.encode("utf-8")[-max_bytes:] if max_bytes > 0 else b""
+                kept.append(tail.decode("utf-8", errors="ignore"))
+            break
+        kept.append(line)
+        size += cost
+    kept.reverse()
+    return kept
+
+
+def _last_frame(line: str) -> str:
+    frames = [frame for frame in line.split("\r") if frame]
+    return frames[-1] if frames else ""
 
 
 def _b64(text: str) -> str:
@@ -730,6 +766,7 @@ class SshBox:
 
     def log_tail(self, target: SshTarget, job_id: str | None, lines: int) -> list[str]:
         jid = "" if job_id is None else _job_id(job_id)
+        # Pass the tail through base64 so carriage returns survive text-mode capture.
         script = (
             f"R={shlex.quote(self.root)}; id={jid}\n"
             'if [ -z "$id" ]; then\n'
@@ -737,10 +774,16 @@ class SshBox:
             ' echo "$(tr -cd 0-9 2>/dev/null <"$d/started") ${d##*/}"; done'
             " | sort -n | tail -n 1 | cut -d' ' -f2)\n"
             "fi\n"
-            f'[ -n "$id" ] && [ -f "$R/jobs/$id/log" ] && tail -n {max(0, int(lines))} "$R/jobs/$id/log"\n'
+            f'[ -n "$id" ] && [ -f "$R/jobs/$id/log" ] && tail -n {max(0, int(lines))} "$R/jobs/$id/log"'
+            " | base64\n"
             "exit 0\n"
         )
-        return self._script(target, script, timeout=15.0).stdout.splitlines()
+        try:
+            raw = base64.b64decode(self._script(target, script, timeout=15.0).stdout)
+        except binascii.Error:
+            # A shell banner or other text on stdout leaves no readable tail.
+            return []
+        return tail_lines(raw.decode("utf-8", errors="replace"), lines)
 
     def exec(self, target: SshTarget, command: str, timeout: float | None = None) -> ExecResult:
         return self._ssh(target, command, timeout=timeout)

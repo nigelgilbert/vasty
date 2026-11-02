@@ -80,24 +80,24 @@ def show_jobs_unknown(state: str) -> bool:
     return state == "unreachable" or state in HISTORY_STATES
 
 
-def job_duration(job: Job, now: int) -> int | None:
-    """Return seconds from `started_at` to `finished_at`, or to now while it is unset."""
+def job_duration(job: Job, lease: CachedLease, now: int) -> int | None:
+    """Return seconds from `started_at` to `finished_at`, or to `uptime_end` while it is unset."""
     if job.started_at is None:
         return None
-    end = job.finished_at if job.finished_at is not None else now
+    end = job.finished_at if job.finished_at is not None else uptime_end(lease, now)
     return max(0, end - job.started_at)
 
 
-def job_view(job: Job, now: int, lease_state: str) -> JobView:
+def job_view(job: Job, now: int, lease: CachedLease) -> JobView:
     """Build a job entry. Live jobs on an unreachable or destroyed box report `unknown`."""
     state: str = job.state
     exit_code = job.exit
-    if job.state in LIVE_JOB_STATES and show_jobs_unknown(lease_state):
+    if job.state in LIVE_JOB_STATES and show_jobs_unknown(lease.state):
         state, exit_code = "unknown", None
     if job.state == "unknown":
         exit_code = None
     return JobView(
-        job=job.id, cmd=job.cmd, state=state, exit=exit_code, duration_s=job_duration(job, now)
+        job=job.id, cmd=job.cmd, state=state, exit=exit_code, duration_s=job_duration(job, lease, now)
     )
 
 
@@ -191,7 +191,7 @@ def lease_view(
         expires_at=None if pending else iso(expiry),
         ttl_remaining_s=None if pending or lease.state in HISTORY_STATES else max(0, expiry - now),
         busy=busy(lease),
-        jobs=[job_view(job, now, lease.state) for job in lease.jobs],
+        jobs=[job_view(job, now, lease) for job in lease.jobs],
         log_tail=log_tail,
         destroy_pending=True if lease.destroy_pending else None,
         verbose=lease_verbose(lease) if verbose else None,
@@ -199,11 +199,12 @@ def lease_view(
 
 
 def orphan_view(
-    inst: Instance, verbose: bool = False, charges: Charges | None = None
+    inst: Instance, now: int, verbose: bool = False, charges: Charges | None = None
 ) -> LeaseView:
     """Build a `status.leases` entry for an orphan or unreadable row.
 
-    Cost is the instance's billed sum, else null.
+    Cost is the instance's billed sum, else null. Uptime runs from the row's
+    `start_date`, else null.
     """
     extras: dict[str, Any] | None = None
     if verbose:
@@ -225,7 +226,7 @@ def orphan_view(
         vram_gb=inst.gpu_ram_gb,
         price_per_hr=inst.dph_total,
         cost=lease_cost(inst.id, charges),
-        uptime_s=None,
+        uptime_s=None if inst.start_date is None else max(0, now - inst.start_date),
         expires_at=None,
         ttl_remaining_s=None,
         busy=None,
@@ -248,12 +249,12 @@ def tag_entry(lease: CachedLease, now: int) -> TagEntry:
 
 
 def warnings_for(
-    leases: Iterable[CachedLease], now: int, warn_before_expiry: int
+    leases: Iterable[CachedLease], now: int
 ) -> list[WarningItem]:
     """Return the per-lease warnings for each lease in order."""
     out: list[WarningItem] = []
     for lease in leases:
-        out.extend(lease_warnings(lease, now, warn_before_expiry))
+        out.extend(lease_warnings(lease, now))
     return out
 
 

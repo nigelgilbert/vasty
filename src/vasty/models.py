@@ -74,6 +74,8 @@ class Instance:
     runtype: str | None = None
     cuda_max_good: float | None = None
     """The highest CUDA version the host driver supports."""
+    start_date: int | None = None
+    """When the instance started, in epoch seconds."""
 
 
 @dataclass(frozen=True)
@@ -285,6 +287,7 @@ class Totals:
     credit: Decimal | None
     charges_today: Decimal | None
     burn_per_hr: Decimal
+    burn_per_hr_mine: Decimal
     live: int
     live_mine: int
 
@@ -295,7 +298,6 @@ class StatusResult:
     warnings: list[WarningItem]
     totals: Totals
     swept: list[SweptEntry]
-    cached_at: str | None
 
 
 @dataclass
@@ -310,8 +312,8 @@ class ReserveResult:
     gpus: int
     vram_gb: float | None
     price_per_hr: Decimal
-    expires_at: str | None
-    ttl_remaining_s: int | None
+    expires_at: str
+    ttl_remaining_s: int
     ssh: str | None
     rsync_target: str | None
     ssh_port: int | None
@@ -387,8 +389,11 @@ class TagResult:
 class RunDetachedResult:
     lease: str
     job: str
+    gpu: str | None
+    price_per_hr: Decimal
     log_path: str
     expires_at: str | None
+    ttl_remaining_s: int | None
     warnings: list[WarningItem]
     swept: list[SweptEntry]
 
@@ -400,6 +405,8 @@ class RunAttachedResult:
     exit: int | None
     duration_s: int | None
     released: bool
+    expires_at: str | None
+    ttl_remaining_s: int | None
     warnings: list[WarningItem]
     swept: list[SweptEntry]
     error: str | None = None
@@ -412,7 +419,10 @@ class ServeResult:
     model: str
     url: str
     api_key: str
+    gpu: str | None
+    price_per_hr: Decimal
     expires_at: str | None
+    ttl_remaining_s: int | None
     warnings: list[WarningItem]
     swept: list[SweptEntry]
 

@@ -24,7 +24,7 @@ from vasty.errors import VastyError, invalid
 from vasty.models import HISTORY_STATES
 
 LEASE_VERBS = ("extend", "release", "status", "stop", "tag", "sync", "ssh")
-GROUP_OPTS = ("--group", "--set-group")
+GROUP_OPTS = ("--group",)
 LEASE_OPTS = ("--on", "--follow")
 PROFILE_OPTS = ("--profile",)
 FILE_OPTS = ("--startup", "--sync")

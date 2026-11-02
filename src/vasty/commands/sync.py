@@ -4,12 +4,15 @@
 with the default excludes. `--delete` on push mirrors the local tree and
 keeps the box's `/workspace/.vasty`. A relative remote path resolves under
 `/workspace`, and rsync's trailing-slash rules apply. A push creates the
-destination's parent on the box. rsync output goes to stderr.
+destination's parent on the box and a pull creates it locally. rsync output
+goes to stderr.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+from pathlib import Path
 
 from vasty import engine
 from vasty.cli import Outcome
@@ -33,6 +36,10 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     target = engine.ssh_target(lease)
     push = args.direction == "push"
     delete = bool(getattr(args, "delete", False))
+    if not push:
+        # Let rsync report a parent it cannot write on stderr.
+        with contextlib.suppress(OSError):
+            Path(args.dest).parent.mkdir(parents=True, exist_ok=True)
     code = ctx.box.rsync(target, push, args.src, args.dest, delete, list(DEFAULT_EXCLUDES))
     if code != 0:
         raise VastyError(

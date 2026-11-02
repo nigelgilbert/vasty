@@ -273,6 +273,7 @@ def normalize_instance(row: dict[str, Any]) -> Instance | None:
         image=_to_str(row.get("image_uuid")),
         runtype=_to_str(row.get("image_runtype")),
         cuda_max_good=_to_float(row.get("cuda_max_good")),
+        start_date=_to_int(row.get("start_date")),
     )
 
 

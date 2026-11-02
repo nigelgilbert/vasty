@@ -44,6 +44,7 @@ def test_run_on_streams_to_stderr_in_json_and_passes_exit(harness: Harness, box:
     assert code == 3
     assert data == {
         "lease": "l-0000a001", "job": "j-1", "exit": 3, "duration_s": 0, "released": False,
+        "expires_at": "2026-10-29T01:50:00Z", "ttl_remaining_s": 3000,
         "warnings": [], "swept": [], "error": None,
     }
     assert "started python train.py --lr 1e-4" in err
@@ -74,7 +75,7 @@ def test_run_shell_joins_command(harness: Harness, box: int) -> None:
 
 
 def test_run_human_mode_streams_to_stdout(harness: Harness, box: int) -> None:
-    code, out, err = harness.run("run", "--on", "ft", "--plain", "--", "ls")
+    code, out, err = harness.run("run", "--on", "ft", "--", "ls", tty=True)
     assert code == 0
     assert out.startswith("started ls\n")
     assert "j-1 on l-0000a001 exited 0" in out
@@ -96,8 +97,9 @@ def test_run_detach_returns_job_immediately(harness: Harness, box: int) -> None:
     code, data, _ = run(harness, "--on", "ft", "--detach", "--", "python", "train.py")
     assert code == 0
     assert data == {
-        "lease": "l-0000a001", "job": "j-1", "log_path": "/workspace/.vasty/jobs/j-1/log",
-        "expires_at": "2026-10-29T01:50:00Z", "warnings": [], "swept": [],
+        "lease": "l-0000a001", "job": "j-1", "gpu": "RTX 3090", "price_per_hr": 0.22,
+        "log_path": "/workspace/.vasty/jobs/j-1/log", "expires_at": "2026-10-29T01:50:00Z",
+        "ttl_remaining_s": 3000, "warnings": [], "swept": [],
     }
     assert attached == []
     assert cached(harness, "l-0000a001").jobs[0].state == "running"
@@ -318,10 +320,10 @@ def test_os_error_before_job_keeps_existing_box(harness: Harness, box: int) -> N
     assert harness.provider.destroyed == []
 
 
-def test_auto_run_uses_run_ttl_and_releases(harness: Harness, reserve: FakeReserve) -> None:
+def test_auto_run_uses_ttl_default_and_releases(harness: Harness, reserve: FakeReserve) -> None:
     code, data, _ = run(harness, "--", "python", "train.py")
     assert code == 0
-    assert reserve.calls[0]["ttl"] == 7200 and reserve.calls[0]["wait"] is True
+    assert reserve.calls[0]["ttl"] == 1800
     assert data["lease"] == "l-0000b001"
     assert data["released"] is True
     assert harness.provider.destroyed == [1001]
@@ -363,9 +365,9 @@ def test_sigint_reports_release_refresh_sweep(harness: Harness, reserve: FakeRes
 def _expire_other_lease_during_wait(
     harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def wait(ctx: Any, args: Any, snap: Any, *, ttl: int, wait: bool = True) -> Any:
+    def wait(ctx: Any, args: Any, snap: Any, *, ttl: int) -> Any:
         add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
-        return reserve(ctx, args, snap, ttl=ttl, wait=wait)
+        return reserve(ctx, args, snap, ttl=ttl)
 
     monkeypatch.setattr("vasty.commands.reserve.reserve_lease", wait)
 
@@ -434,17 +436,25 @@ def test_failed_auto_release_reports_release_refresh_sweep(
     assert "could not release l-0000b001" in err
 
 
-def test_auto_run_ttl_flag_overrides_run_ttl(harness: Harness, reserve: FakeReserve) -> None:
-    run(harness, "--ttl", "45m", "--", "ls")
-    assert reserve.calls[0]["ttl"] == 2700
-
-
-def test_auto_run_profile_ttl_does_not_override_run_ttl(
-    harness: Harness, reserve: FakeReserve
+@pytest.mark.parametrize(
+    ("argv", "env_ttl", "expected"),
+    [
+        ([], None, 1200),
+        ([], "10m", 600),
+        (["--profile", "p"], "10m", 900),
+        (["--profile", "p", "--ttl", "45m"], "10m", 2700),
+    ],
+)
+def test_auto_run_ttl_follows_config_order(
+    harness: Harness, reserve: FakeReserve, argv: list[str], env_ttl: str | None, expected: int
 ) -> None:
-    harness.env["VASTY_TTL"] = "10m"
-    run(harness, "--", "ls")
-    assert reserve.calls[0]["ttl"] == 7200
+    path = harness.home / ".config" / "vasty" / "config.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('[defaults]\nttl = "20m"\n[profiles.p]\nttl = "15m"\n')
+    if env_ttl is not None:
+        harness.env["VASTY_TTL"] = env_ttl
+    run(harness, *argv, "--", "ls")
+    assert reserve.calls[0]["ttl"] == expected
 
 
 def test_auto_run_passes_remote_exit(harness: Harness, reserve: FakeReserve) -> None:
@@ -469,17 +479,37 @@ def test_auto_run_named_leaves_box(harness: Harness, reserve: FakeReserve) -> No
     assert reserve.calls[0]["name"] == "trainer"
 
 
+def test_auto_run_named_box_reports_its_clock(harness: Harness, reserve: FakeReserve) -> None:
+    code, data, _ = run(harness, "--name", "trainer", "--", "ls")
+    assert code == 0 and data["released"] is False
+    assert (data["expires_at"], data["ttl_remaining_s"]) == ("2026-10-29T01:30:00Z", 1800)
+
+
+def test_auto_run_released_box_reports_no_clock(harness: Harness, reserve: FakeReserve) -> None:
+    code, data, _ = run(harness, "--", "ls")
+    assert code == 0 and data["released"] is True
+    assert data["expires_at"] is None and data["ttl_remaining_s"] is None
+
+
+def test_lost_attach_reports_the_clock(harness: Harness, box: int) -> None:
+    harness.box.state(box).job_exit = None
+    code, data, _ = run(harness, "--on", "ft", "--", "ls")
+    assert code == 2 and data["released"] is False
+    assert (data["expires_at"], data["ttl_remaining_s"]) == ("2026-10-29T01:50:00Z", 3000)
+
+
+def test_sigint_on_kept_box_reports_the_clock(harness: Harness, box: int) -> None:
+    harness.box.attach_job = lambda t, j, o: (_ for _ in ()).throw(KeyboardInterrupt)  # type: ignore[method-assign,assignment,return-value]
+    code, data, _ = run(harness, "--on", "ft", "--", "ls")
+    assert code == 130 and data["released"] is False
+    assert (data["expires_at"], data["ttl_remaining_s"]) == ("2026-10-29T01:50:00Z", 2990)
+
+
 def test_auto_run_reuses_named_box(harness: Harness, reserve: FakeReserve, box: int) -> None:
     code, data, _ = run(harness, "--name", "ft", "--", "ls")
     assert code == 0
     assert data["lease"] == "l-0000a001" and data["released"] is False
     assert harness.provider.destroyed == []
-
-
-def test_auto_run_rejects_no_wait(harness: Harness, reserve: FakeReserve) -> None:
-    code, data, _ = run(harness, "--no-wait", "--", "ls")
-    assert code == 1 and data["error"] == "invalid_arguments"
-    assert reserve.calls == []
 
 
 def test_auto_run_reserve_failure_propagates(harness: Harness, reserve: FakeReserve) -> None:
@@ -513,7 +543,7 @@ def test_auto_run_attach_error_keeps_box_and_prints_recovery(
     assert isinstance(err, io.StringIO)
     text = err.getvalue()
     assert "j-1 on l-0000b001" in text
-    assert "2026-10-29T03:00:00Z" in text
+    assert "2026-10-29T01:30:00Z" in text
     assert "vasty status l-0000b001" in text and "vasty release l-0000b001" in text
 
 

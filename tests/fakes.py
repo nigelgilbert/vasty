@@ -37,6 +37,7 @@ from vasty.remote import (
     ExecResult,
     SshTarget,
     following_job_id,
+    tail_lines,
 )
 from vasty.timeutil import day_start
 
@@ -392,7 +393,7 @@ class FakeBox:
             if not box.jobs:
                 return []
             job_id = list(box.jobs)[-1]
-        return box.logs.get(job_id, [])[-lines:]
+        return tail_lines("\n".join(box.logs.get(job_id, [])), lines)
 
     def exec(self, target: SshTarget, command: str, timeout: float | None = None) -> ExecResult:
         box = self._get(target)
@@ -486,7 +487,7 @@ class Harness:
         return Context(
             env=self.env, cwd=self.home / "project", home=self.home,
             stdin=io.StringIO(stdin), stdout=io.StringIO(), stderr=io.StringIO(),
-            stdin_tty=tty, stdout_tty=tty,
+            stdout_tty=tty,
             wall=self.time.wall, mono=self.time.mono, sleep=self.time.sleep,
             random_hex=self.random_hex,
             which=lambda name: None if name in self.missing_tools else f"/usr/bin/{name}",
@@ -564,7 +565,7 @@ class FakeReserve:
     Each call adds a running lease to the fake provider and box with
     `add_lease`, refreshes, and returns `Reserved`. A `--name` that matches an
     active lease of the current owner returns that lease with `reused`.
-    `calls` records `ttl`, `wait`, `name` and the resolved `vram`, `gpu` and
+    `calls` records `ttl`, `name` and the resolved `vram`, `gpu` and
     `image`. Set `fail` to raise that error instead. `row` adds instance fields.
     """
 
@@ -579,7 +580,7 @@ class FakeReserve:
         return self
 
     def __call__(
-        self, ctx: Context, args: Any, snap: Any, *, ttl: int, wait: bool = True,
+        self, ctx: Context, args: Any, snap: Any, *, ttl: int,
     ) -> Any:
         from vasty import engine
         from vasty.commands.reserve import Reserved
@@ -587,7 +588,7 @@ class FakeReserve:
         settings = ctx.settings
         name = getattr(args, "name", None)
         self.calls.append({
-            "ttl": ttl, "wait": wait, "name": name,
+            "ttl": ttl, "name": name,
             "vram": settings.vram, "gpu": settings.gpu, "image": settings.image,
         })
         if self.fail is not None:

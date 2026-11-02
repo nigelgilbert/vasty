@@ -1,19 +1,20 @@
 """Configuration resolution.
 
-Layers, highest first: flags, `--config -` JSON, `--profile`, environment,
-project file, user file, built-in defaults. `resolve` returns the effective
-`Settings` and the source of each value. When no layer sets `cuda` and the
-image is one in `IMAGE_CUDA`, `cuda` takes that image's floor with source
-`image`.
+Layers, highest first: flags, `--profile`, environment, project file, user
+file, built-in defaults. Every command reads every key through this order.
+`resolve` returns the effective `Settings` and the source of each value. When
+no layer sets `cuda` and the image is one in `IMAGE_CUDA`, `cuda` takes that
+image's floor with source `image`.
 
-Bad flag values raise `invalid_arguments`. Bad file, environment or stdin
-values raise `invalid_config`. An unknown `--profile` name raises
-`invalid_arguments`. `startup` and `startup_file` are two spellings of one
-setting: the highest layer that sets either wins, and one table setting both
-raises `invalid_config`.
+Bad flag values raise `invalid_arguments`. Bad file or environment values
+raise `invalid_config`. An unknown `--profile` name raises
+`invalid_arguments`. The `startup` key holds script text. The `--startup`
+flag names a script file, or `-` for stdin. A `gpu` or `region` of `any` or
+the empty string clears the key in its layer, and lower layers' values for it
+do not apply.
 
-`api_key` reads the env var named by `api_key_env`, then the vastai CLI key
-file at `~/.config/vastai/vast_api_key`.
+`api_key` reads `VAST_API_KEY`, then the vastai CLI key file at
+`~/.config/vastai/vast_api_key`.
 
 This module imports only the standard library, `vasty.errors`, `vasty.ids` and `vasty.timeutil`.
 """
@@ -40,9 +41,7 @@ from vasty.ids import VALUE
 # Value kinds for every key a config table accepts.
 DEFAULT_KEYS: dict[str, str] = {
     "ttl": "duration",
-    "run_ttl": "duration",
     "max_price": "money",
-    "warn_before_expiry": "duration",
     "image": "str",
     "disk": "int",
     "gpus": "int",
@@ -52,18 +51,19 @@ DEFAULT_KEYS: dict[str, str] = {
     "region": "str",
     "ports": "ports",
     "startup": "text",
-    "startup_file": "path",
 }
 PROFILE_KEYS: dict[str, str] = dict(DEFAULT_KEYS)
-TOP_KEYS: dict[str, str] = {"api_key_env": "str", "owner": "owner", "ssh_key": "path"}
+TOP_KEYS: dict[str, str] = {"owner": "owner", "ssh_key": "path"}
 TABLE_KEYS = ("defaults", "profiles")
 FLAG_KEYS: dict[str, str] = {**PROFILE_KEYS, "owner": "owner"}
+# Keys that `any` or an empty string clears.
+CLEARABLE_KEYS = ("gpu", "region")
+API_KEY_ENV = "VAST_API_KEY"
 
 # Keys `config show` reports, in display order.
 SHOWN = (
-    "owner", "api_key_env", "ssh_key", "ttl", "run_ttl", "max_price",
-    "warn_before_expiry", "disk", "gpus", "image", "gpu", "vram", "cuda", "region", "ports",
-    "startup",
+    "owner", "ssh_key", "ttl", "max_price", "disk", "gpus", "image", "gpu", "vram", "cuda",
+    "region", "ports", "startup",
 )
 
 BASE_IMAGE = "vastai/base-image:cuda-12.6.3-auto"
@@ -72,11 +72,8 @@ VLLM_IMAGE = "vllm/vllm-openai:v0.32.0"
 IMAGE_CUDA: dict[str, float] = {VLLM_IMAGE: 13.0, BASE_IMAGE: 12.6}
 
 BUILTIN: dict[str, Any] = {
-    "api_key_env": "VAST_API_KEY",
     "ttl": 30 * 60,
-    "run_ttl": 2 * 3600,
     "max_price": Decimal("0.60"),
-    "warn_before_expiry": 5 * 60,
     "disk": 50,
     "gpus": 1,
     "image": BASE_IMAGE,
@@ -90,12 +87,9 @@ class Settings:
     """Effective values for one invocation. Durations are seconds."""
 
     owner: str
-    api_key_env: str
     ssh_key: str | None
     ttl: int
-    run_ttl: int
     max_price: Decimal
-    warn_before_expiry: int
     disk: int
     gpus: int
     image: str
@@ -270,41 +264,28 @@ def _convert_table(
     prefix: str,
     home: Path,
 ) -> dict[str, Any]:
-    """Check a table's keys and values. Fold `startup` and `startup_file` into one key."""
-    if "startup" in table and "startup_file" in table:
-        raise VastyError(
-            "invalid_config",
-            f"{origin.name(prefix + 'startup')} and {origin.name(prefix + 'startup_file')}"
-            " are both set.",
-            "Keep one of startup or startup_file.",
-        )
+    """Check a table's keys and values.
+
+    `startup` becomes a text `StartupSpec`. A clearable key set to `any` or
+    the empty string becomes None.
+    """
     out: dict[str, Any] = {}
     for key, value in table.items():
         full = prefix + key
         kind = allowed.get(key)
         if kind is None:
             raise origin.fail(full, "is not a known key")
-        if key == "startup_file" and origin.source == "flag" and value == "-":
-            out["startup"] = StartupSpec("stdin")
+        if key in CLEARABLE_KEYS and isinstance(value, str) and value.strip().lower() in ("", "any"):
+            out[key] = None
             continue
         converted = _convert(kind, full, value, origin, home)
-        if key == "startup":
-            out["startup"] = StartupSpec("text", text=converted)
-        elif key == "startup_file":
-            out["startup"] = StartupSpec("file", path=converted)
-        else:
-            out[key] = converted
+        out[key] = StartupSpec("text", text=converted) if key == "startup" else converted
     return out
 
 
 def overlay(low: Mapping[str, Any], high: Mapping[str, Any]) -> dict[str, Any]:
-    """Merge two tables by field. A high `startup` or `startup_file` drops both from low."""
-    out = dict(low)
-    if "startup" in high or "startup_file" in high:
-        out.pop("startup", None)
-        out.pop("startup_file", None)
-    out.update(high)
-    return out
+    """Merge two tables by field. `high` wins."""
+    return {**low, **high}
 
 
 @dataclass
@@ -373,16 +354,15 @@ def vastai_key_path(home: Path) -> Path:
     return home / ".config" / "vastai" / "vast_api_key"
 
 
-def api_key(env: Mapping[str, str], home: Path, key_env: str) -> tuple[str, str] | None:
+def api_key(env: Mapping[str, str], home: Path) -> tuple[str, str] | None:
     """Return the API key and its source, the env var name or the vastai key file path.
 
-    The env var named by `key_env` wins. An unset or empty env var falls back
-    to the vastai CLI file with whitespace stripped. Return None when neither
-    holds a key.
+    `VAST_API_KEY` wins. An unset or empty variable falls back to the vastai
+    CLI file with whitespace stripped. Return None when neither holds a key.
     """
-    key = env.get(key_env)
+    key = env.get(API_KEY_ENV)
     if key:
-        return key, key_env
+        return key, API_KEY_ENV
     path = vastai_key_path(home)
     try:
         key = path.read_text(encoding="utf-8").strip()
@@ -409,9 +389,13 @@ def _env_layer(env: Mapping[str, str], cwd: Path, home: Path) -> dict[str, Any]:
 def _flag_layer(flags: Mapping[str, Any], cwd: Path, home: Path) -> dict[str, Any]:
     origin = _Origin("flag", "flags", cwd, code="invalid_arguments", text=True)
     raw = {k: v for k, v in flags.items() if k in FLAG_KEYS and v is not None}
-    if "startup" in raw:
-        raw["startup_file"] = raw.pop("startup")
-    return _convert_table(raw, FLAG_KEYS, origin, "", home)
+    startup = raw.pop("startup", None)
+    out = _convert_table(raw, FLAG_KEYS, origin, "", home)
+    if startup == "-":
+        out["startup"] = StartupSpec("stdin")
+    elif startup is not None:
+        out["startup"] = StartupSpec("file", path=_convert("path", "startup", startup, origin, home))
+    return out
 
 
 def _read_startup(
@@ -435,7 +419,6 @@ def _read_startup(
 
 def resolve(
     flags: Mapping[str, Any],
-    stdin_json: Mapping[str, Any] | None,
     profile: str | None,
     env: Mapping[str, str],
     cwd: Path,
@@ -470,14 +453,8 @@ def resolve(
                            "Run vasty config profiles.")
         selected = profiles[profile]
 
-    stdin_layer: dict[str, Any] = {}
-    if stdin_json is not None:
-        origin = _Origin("stdin", "--config - JSON", cwd)
-        stdin_layer = _convert_table(stdin_json, PROFILE_KEYS, origin, "", home)
-
     layers: list[tuple[str, Mapping[str, Any]]] = [
         ("flag", _flag_layer(flags, cwd, home)),
-        ("stdin", stdin_layer),
         ("profile", selected),
         ("env", _env_layer(env, cwd, home)),
         ("project", project),
@@ -522,12 +499,9 @@ def resolve(
 
     return Settings(
         owner=owner,
-        api_key_env=pick("api_key_env"),
         ssh_key=str(ssh_path) if ssh_path is not None else None,
         ttl=pick("ttl"),
-        run_ttl=pick("run_ttl"),
         max_price=pick("max_price"),
-        warn_before_expiry=pick("warn_before_expiry"),
         disk=pick("disk"),
         gpus=pick("gpus"),
         image=image,
@@ -593,7 +567,7 @@ def key_kind(parts: list[str]) -> str:
     if kind is None:
         raise VastyError(
             "invalid_config", f"Unknown config key {dotted!r}.",
-            "Pass api_key_env, owner, ssh_key, defaults.KEY or profiles.NAME.KEY.",
+            "Pass owner, ssh_key, defaults.KEY or profiles.NAME.KEY.",
         )
     return kind
 
@@ -627,10 +601,7 @@ def set_value(home: Path, key_text: str, value_text: str) -> Any:
         if not isinstance(child, dict):
             raise VastyError("invalid_config", f"{part} in {path} is not a table.", f"Fix {path}.")
         node = child
-    leaf = parts[-1]
-    if leaf in ("startup", "startup_file"):
-        node.pop("startup_file" if leaf == "startup" else "startup", None)
-    node[leaf] = value
+    node[parts[-1]] = value
     check_document(doc, path, "user", home)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".config.", suffix=".toml")

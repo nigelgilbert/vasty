@@ -450,11 +450,10 @@ def test_clock_unverified_warning(harness: Harness) -> None:
     ]
 
 
-def test_cache_saved_with_cached_at(harness: Harness) -> None:
+def test_cache_saved_with_instances(harness: Harness) -> None:
     add_lease(harness)
     refresh(harness)
     data = harness.context().cache.load()
-    assert data.cached_at == NOW
     assert len(data.instances) == 1
 
 
@@ -934,33 +933,6 @@ def test_read_balance_caches_balance_and_credit(harness: Harness) -> None:
     engine.read_balance(ctx, engine.refresh(ctx))
     data = ctx.cache.load()
     assert (data.balance, data.credit, data.balance_at) == (Decimal(0), Decimal("19.90"), NOW)
-
-
-def test_cached_snapshot_keeps_billing_read_today_only(harness: Harness) -> None:
-    harness.provider.billed = {999: Decimal("1.00")}
-    ctx = harness.context()
-    snap = engine.refresh(ctx)
-    engine.read_charges(ctx, snap)
-    engine.read_balance(ctx, snap)
-    cached = engine.cached_snapshot(ctx)
-    assert cached.charges == snap.charges
-    assert cached.balance == snap.balance
-    harness.time.advance(86_400)
-    cached = engine.cached_snapshot(ctx)
-    assert cached.charges is None
-    assert cached.balance is None
-
-
-def test_cached_snapshot_keeps_balance_read_earlier_today(harness: Harness) -> None:
-    harness.provider.account_credit = Decimal("19.90")
-    ctx = harness.context()
-    snap = engine.refresh(ctx)
-    engine.read_balance(ctx, snap)
-    harness.time.advance(6 * 3600)
-    engine.refresh(ctx)
-    cached = engine.cached_snapshot(ctx)
-    assert cached.cached_at == NOW + 6 * 3600
-    assert cached.balance == snap.balance
 
 
 # Guard of a lease no probe on this machine has answered.

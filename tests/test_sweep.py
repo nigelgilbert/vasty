@@ -70,10 +70,10 @@ def test_sweep_carries_account_warnings(harness: Harness) -> None:
 
 def test_sweep_human_output(harness: Harness) -> None:
     add_lease(harness, label={"expires": NOW - 10})
-    code, out, _ = harness.run("sweep", "--plain")
+    code, out, _ = harness.run("sweep", tty=True)
     assert code == 0
     assert out.startswith("SWEPT  l-0000a001  expired 2026-10-29T00:59:50Z  destroyed")
-    assert harness.run("sweep", "--plain") == (0, "nothing swept\n", "")
+    assert harness.run("sweep", tty=True) == (0, "nothing swept\n", "")
 
 
 # Follow.

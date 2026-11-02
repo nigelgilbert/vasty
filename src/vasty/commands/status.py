@@ -1,19 +1,15 @@
 """`vasty status`.
 
-With no target, `status` lists every active lease, then orphans and
-unreadable rows. `--verbose` adds history leases: the current owner's,
-`--owner O`'s, or every owner's with `--everyone`, narrowed by `--group`.
-`--everyone` alone reads as `--all --everyone`. A named lease in history
-always shows. A single LEASE carries `log_tail` in every state, `[]` when
-the log is empty or unread. Warnings cover the shown leases, the account
-warnings from the refresh, `orphan` per shown orphan, and
+With no target, `status` is the account view: every owner's active leases,
+then orphans and unreadable rows. `--owner O` and `--group G` filter the
+active leases. `--verbose` adds fields to each row. A lease named by id or
+name shows in any state, history included. A single LEASE carries
+`log_tail` in every state, `[]` when the log is empty or unread. Warnings
+cover the shown leases, the account warnings from the refresh, `orphan` per
+shown orphan, and
 `spend_unavailable` when the balance or charges are unavailable.
 `totals` covers the whole account with Vast's own `balance`, `credit` and
 today's billed charges.
-
-`--cached` reads `leases.json` only. It uses the local clock, returns
-`swept: []`, sets `cached_at` and skips the log read. That path imports only
-the standard library.
 """
 
 from __future__ import annotations
@@ -42,7 +38,7 @@ from vasty.output import money
 from vasty.remote import LOG_LINES
 from vasty.state import LIVE_JOB_STATES, make_warning
 from vasty.targeting import has_target, resolve_target
-from vasty.timeutil import format_duration, iso
+from vasty.timeutil import format_duration
 
 DASH = "—"
 WARN_MARK = "⚠ "
@@ -51,40 +47,31 @@ SHORT_SKIP = frozenset({"python", "python3", "uv", "uvx", "run", "bash", "sh", "
 
 
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
-    cached = bool(args.cached)
-    if cached:
-        snap = engine.cached_snapshot(ctx)
-    else:
-        snap = engine.refresh(ctx)
-        engine.read_charges(ctx, snap)
-        engine.read_balance(ctx, snap)
+    snap = engine.refresh(ctx)
+    engine.read_charges(ctx, snap)
+    engine.read_balance(ctx, snap)
     verbose = bool(args.verbose)
     now = snap.now
     settings = ctx.settings
 
-    targeted = has_target(args)
     single = False
-    if targeted:
+    if has_target(args):
         resolved = resolve_target(ctx, snap, args, write=False)
         leases = resolved.leases
         rows = resolved.orphans
         single = not resolved.bulk
-        if verbose and resolved.bulk:
-            leases = leases + _history(snap, args, settings.owner)
     else:
-        leases = snap.active() + (_history(snap, args, settings.owner) if verbose else [])
+        leases = snap.active()
         rows = sorted(snap.orphans + snap.unreadable, key=lambda inst: inst.id)
 
-    tail: list[str] = []
-    if single and leases and not cached:
-        tail = _log_tail(ctx, leases[0])
+    tail = _log_tail(ctx, leases[0]) if single and leases else []
     lease_views = [
         views.lease_view(lease, now, verbose, snap.charges, tail if single else None)
         for lease in leases
     ]
-    lease_views += [views.orphan_view(inst, verbose, snap.charges) for inst in rows]
+    lease_views += [views.orphan_view(inst, now, verbose, snap.charges) for inst in rows]
 
-    warnings = views.warnings_for(leases, now, settings.warn_before_expiry)
+    warnings = views.warnings_for(leases, now)
     unreadable_ids = {inst.id for inst in snap.unreadable}
     warnings += [views.orphan_warning(inst) for inst in rows if inst.id not in unreadable_ids]
     warnings += snap.warnings
@@ -95,11 +82,14 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         ))
 
     active = snap.active()
+    live = snap.live_instances()
+    mine = {lease.instance_id for lease in active if lease.label.owner == settings.owner}
     totals = Totals(
         balance=snap.balance.balance if snap.balance is not None else None,
         credit=snap.balance.credit if snap.balance is not None else None,
         charges_today=snap.charges.today if snap.charges is not None else None,
-        burn_per_hr=views.burn_per_hr(snap.live_instances()),
+        burn_per_hr=views.burn_per_hr(live),
+        burn_per_hr_mine=views.burn_per_hr(inst for inst in live if inst.id in mine),
         live=len(active),
         live_mine=sum(1 for lease in active if lease.label.owner == settings.owner),
     )
@@ -107,26 +97,14 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         leases=lease_views,
         warnings=warnings,
         totals=totals,
-        swept=[] if cached else snap.swept,
-        cached_at=iso(snap.cached_at) if cached else None,
+        swept=snap.swept,
     )
     human = None
     if ctx.mode == "human":
         by_id = {lease.lease: lease for lease in leases}
         group = getattr(args, "group", None)
-        human = render(result, by_id, group, cached)
+        human = render(result, by_id, group)
     return Outcome(result, human=human)
-
-
-def _history(snap: engine.Snapshot, args: argparse.Namespace, owner: str) -> list[CachedLease]:
-    """Return history leases of `--owner O`, else the current owner, or every owner with `--everyone`."""
-    scope = getattr(args, "owner", None) or (None if getattr(args, "everyone", False) else owner)
-    group = getattr(args, "group", None)
-    return [
-        lease for lease in snap.history()
-        if (scope is None or lease.label.owner == scope)
-        and (not group or lease.label.group == group)
-    ]
 
 
 def _log_tail(ctx: Context, lease: CachedLease) -> list[str]:
@@ -311,7 +289,7 @@ def today_line(totals: Totals) -> str:
         f"TODAY  charged {_dollars(totals.charges_today)}  ·  "
         f"credit {_dollars(totals.credit)}  ·  balance {_dollars(totals.balance)}  ·  "
         f"{totals.live} {noun} live ({totals.live_mine} yours)  ·  "
-        f"burning ${money(totals.burn_per_hr):.2f}/hr"
+        f"burning ${money(totals.burn_per_hr):.2f}/hr (${money(totals.burn_per_hr_mine):.2f} yours)"
     )
 
 
@@ -328,14 +306,10 @@ def verbose_lines(result: StatusResult) -> list[str]:
     return out
 
 
-def render(
-    result: StatusResult, by_id: dict[str, CachedLease], group: str | None, cached: bool
-) -> str:
+def render(result: StatusResult, by_id: dict[str, CachedLease], group: str | None) -> str:
     """Render the human table, or the group view for `--group`, then warnings and totals."""
     expiring = {w.lease for w in result.warnings if w.code in EXPIRING_CODES and w.lease}
     blocks: list[list[str]] = []
-    if cached:
-        blocks.append([f"CACHED  as of {result.cached_at or 'never'}"])
     if result.swept:
         blocks.append(swept_lines(result.swept))
     if group:

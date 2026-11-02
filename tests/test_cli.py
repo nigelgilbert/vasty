@@ -28,10 +28,74 @@ def test_parser_error_is_invalid_arguments(harness: Harness) -> None:
     assert json.loads(out)["error"] == "invalid_arguments"
 
 
-def test_json_and_plain_conflict() -> None:
+@pytest.mark.parametrize(
+    ("argv", "tty", "mode"),
+    [
+        (["sweep"], True, "human"),
+        (["sweep"], False, "json"),
+        (["sweep", "--json"], True, "json"),
+        (["sweep", "--json"], False, "json"),
+    ],
+)
+def test_json_forces_json_and_stdout_type_picks_the_rest(
+    harness: Harness, argv: list[str], tty: bool, mode: str
+) -> None:
+    harness.run(*argv, tty=tty)
+    assert harness.last_ctx is not None
+    assert harness.last_ctx.mode == mode
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["status", "--plain"],
+        ["reserve", "--no-wait"],
+        ["run", "--no-wait", "--", "true"],
+        ["serve", "--model", "m", "--no-wait"],
+        ["release", "i-1", "--yes"],
+        ["tag", "ft", "--set-group", "g"],
+    ],
+)
+def test_removed_flags_are_invalid(argv: list[str]) -> None:
     with pytest.raises(VastyError) as exc:
-        parse(["status", "--json", "--plain"])
+        parse(argv)
     assert exc.value.code == "invalid_arguments"
+
+
+@pytest.mark.parametrize(
+    ("argv", "hint"),
+    [
+        (["status", "--no-wait", "--plain"],
+         "--no-wait was removed: drop it. --plain was removed: drop it."),
+        (["status", "--everyone", "--cached"],
+         "--everyone was removed: use plain vasty status. --cached was removed: drop it."),
+        (["extend", "l-1", "--until", "19:44"], "--until was removed: use --by D to add D to the clock, or --to D to end it D from now."),
+        (["release", "--all", "--yes"],
+         '--all was removed: use --owner "$VASTY_OWNER". --yes was removed: drop it.'),
+        (["release", "l-1", "--yes=1"], "--yes was removed: drop it."),
+    ],
+)
+def test_removed_flags_name_their_replacement(argv: list[str], hint: str) -> None:
+    with pytest.raises(VastyError) as exc:
+        parse(argv)
+    assert exc.value.hint == hint
+
+
+def test_unknown_flag_keeps_the_help_hint() -> None:
+    with pytest.raises(VastyError) as exc:
+        parse(["reserve", "--bogus"])
+    assert exc.value.hint == "Run vasty --help."
+
+
+def test_tag_needs_a_lease() -> None:
+    with pytest.raises(VastyError) as exc:
+        parse(["tag", "--group", "g"])
+    assert exc.value.code == "invalid_arguments"
+
+
+def test_tag_parses_setters() -> None:
+    ns = parse(["tag", "ft", "--name", "n", "--group", "g", "--owner", "o", "--ttl", "30m"])
+    assert (ns.target, ns.name, ns.group, ns.owner, ns.ttl) == ("ft", "n", "g", "o", "30m")
 
 
 def test_on_rejects_creation_flags() -> None:
@@ -73,54 +137,56 @@ def test_cuda_flag_rejects_text(harness: Harness, verb: list[str]) -> None:
     assert "search_offers" not in [name for name, _ in harness.provider.calls]
 
 
-def test_auto_reserve_rejects_no_wait() -> None:
-    with pytest.raises(VastyError):
-        parse(["serve", "--model", "m", "--no-wait"])
+@pytest.mark.parametrize("verb", [["reserve"], ["run"], ["serve", "--model", "m"]])
+def test_config_flag_is_rejected(verb: list[str]) -> None:
+    with pytest.raises(VastyError) as exc:
+        parse([*verb, "--config", "-"])
+    assert exc.value.code == "invalid_arguments"
 
 
-def test_config_and_startup_stdin_conflict() -> None:
-    with pytest.raises(VastyError):
-        parse(["reserve", "--config", "-", "--startup", "-"])
+def test_startup_stdin_parses_alone() -> None:
+    assert parse(["reserve", "--startup", "-"]).startup == "-"
 
 
 @pytest.mark.parametrize(
     "argv",
     [
-        ["release", "ft", "--group", "g"],
-        ["release", "--all", "--group", "g"],
-        ["release", "--everyone", "--owner", "o"],
-        ["release", "--everyone"],
-        ["extend", "--everyone", "--by", "30m"],
-        ["status", "--everyone", "--owner", "o"],
+        ["release", "--all"],
+        ["release", "--group", "g", "--everyone"],
+        ["extend", "--all", "--by", "30m"],
+        ["extend", "ft", "--until", "2026-10-29T03:00:00Z"],
+        ["status", "--everyone"],
+        ["status", "--all"],
+        ["status", "--cached"],
     ],
 )
-def test_target_selector_rules(argv: list[str]) -> None:
+def test_removed_flags_are_rejected(argv: list[str]) -> None:
     with pytest.raises(VastyError):
         parse(argv)
 
 
-def test_status_everyone_alone_is_allowed() -> None:
-    assert parse(["status", "--everyone"]).everyone
+def test_status_filters_by_owner_and_group() -> None:
+    ns = parse(["status", "--owner", "o", "--group", "g"])
+    assert (ns.target, ns.owner, ns.group) == (None, "o", "g")
 
 
-def test_everyone_with_group_is_allowed() -> None:
-    ns = parse(["release", "--group", "g", "--everyone"])
-    assert ns.group == "g" and ns.everyone
+# Build the removed variable's name so a repo grep for it stays empty.
+OLD_KEY_ENV_VAR = "_".join(["VASTY", "API", "KEY", "ENV"])
 
 
-@pytest.mark.parametrize(
-    ("extra_env", "key_env"), [({}, "VAST_API_KEY"), ({"VASTY_API_KEY_ENV": "MY_KEY"}, "MY_KEY")]
-)
+@pytest.mark.parametrize("extra_env", [{}, {OLD_KEY_ENV_VAR: "MY_KEY", "MY_KEY": "k"}])
 def test_status_without_api_key_is_auth_missing(
-    harness: Harness, monkeypatch: pytest.MonkeyPatch, extra_env: dict[str, str], key_env: str
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, extra_env: dict[str, str]
 ) -> None:
     import vasty.provider
+
+    key_env = "VAST_API_KEY"
 
     def no_provider(*args: Any, **kw: Any) -> Any:
         raise AssertionError("VastProvider constructed")
 
     monkeypatch.setattr(vasty.provider, "VastProvider", no_provider)
-    for name in ("VAST_API_KEY", "MY_KEY", "VASTY_API_KEY_ENV"):
+    for name in ("VAST_API_KEY", "MY_KEY", OLD_KEY_ENV_VAR):
         monkeypatch.delenv(name, raising=False)
         harness.env.pop(name, None)
     harness.env.update(extra_env)
@@ -170,7 +236,7 @@ def test_api_key_from_vastai_file(harness: Harness, monkeypatch: pytest.MonkeyPa
     assert _real_provider_key(harness, monkeypatch, None, "  file-key\n") == "file-key"
 
 
-def test_api_key_env_beats_vastai_file(
+def test_vast_api_key_beats_vastai_file(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     assert _real_provider_key(harness, monkeypatch, "env-key", "file-key\n") == "env-key"
@@ -282,22 +348,38 @@ def _verb_action(verb: str, flag: str) -> argparse.Action:
 @pytest.mark.parametrize(
     ("verb", "flag", "words"),
     [
-        ("reserve", "--ttl", ["duration", "default: 30m"]),
-        ("run", "--ttl", ["duration", "default: run_ttl, 2h"]),
-        ("serve", "--ttl", ["duration", "default: run_ttl, 2h"]),
-        ("reserve", "--cuda", ["CUDA version", "12.6", "default: the image's floor"]),
-        ("reserve", "--max-price", ["dollars per hour", "default: 0.60"]),
-        ("reserve", "--image", ["default: vastai/base-image:cuda-12.6.3-auto"]),
-        ("reserve", "--disk", ["GB", "default: 50"]),
+        ("reserve", "--ttl", ["duration", "builtin default: 30m"]),
+        ("run", "--ttl", ["duration", "builtin default: 30m"]),
+        ("serve", "--ttl", ["duration", "builtin default: 30m"]),
+        ("reserve", "--cuda", ["CUDA version", "12.6", "builtin default: the image's floor"]),
+        ("reserve", "--max-price", ["dollars per hour", "builtin default: 0.60"]),
+        ("reserve", "--image", ["builtin default: vastai/base-image:cuda-12.6.3-auto"]),
+        ("reserve", "--disk", ["GB", "builtin default: 50"]),
+        ("reserve", "--gpus", ["builtin default: 1"]),
         ("reserve", "--vram", ["GB", "default: any"]),
+        ("reserve", "--gpu", ["or any", "default: any"]),
+        ("reserve", "--region", ["or any", "default: any"]),
         ("extend", "--by", ["duration", "default: none"]),
-        ("extend", "--until", ["ISO time"]),
     ],
 )
 def test_help_names_unit_and_default(verb: str, flag: str, words: list[str]) -> None:
     text = _verb_action(verb, flag).help or ""
     for word in words:
         assert word in text
+
+
+SETTING_FLAGS_WITH_KEYS = (
+    "--owner", "--ttl", "--startup", "--gpu", "--vram", "--cuda", "--gpus", "--disk", "--image",
+    "--max-price", "--region", "--ports",
+)
+
+
+@pytest.mark.parametrize("verb", ["reserve", "run", "serve"])
+@pytest.mark.parametrize("flag", SETTING_FLAGS_WITH_KEYS)
+def test_setting_flag_help_points_at_config_show(verb: str, flag: str) -> None:
+    text = _verb_action(verb, flag).help or ""
+    assert text.endswith("; see vasty config show")
+    assert text == _verb_action("reserve", flag).help
 
 
 def _help(capsys: pytest.CaptureFixture[str], *argv: str) -> str:

@@ -134,7 +134,7 @@ def test_reserve_owner_flag_sets_owner(h: Harness) -> None:
 
 
 def test_reserve_human_summary(h: Harness) -> None:
-    code, out, _ = h.run("reserve", "--name", "trainer", "--plain")
+    code, out, _ = h.run("reserve", "--name", "trainer", tty=True)
     assert code == 0
     lines = out.splitlines()
     assert lines[0].startswith("l-abababab  trainer  running  RTX 4090  $0.38/hr")
@@ -182,12 +182,21 @@ def test_offers_filtered_by_gpu_vram_and_count(h: Harness) -> None:
     assert (query.gpu, query.vram_min_gb, query.gpus, query.disk_gb) == ("4090", 24.0, 1, 50)
 
 
+@pytest.mark.parametrize("value", ["any", ""])
+def test_gpu_any_clears_a_configured_pin(h: Harness, value: str) -> None:
+    write_user(h, '[defaults]\ngpu = "A100"\nregion = "US"\n')
+    code, data = run_json(h, "reserve", "--gpu", value, "--region", value)
+    assert code == 0, data
+    query = calls(h, "search_offers")[0]
+    assert (query.gpu, query.region) == (None, None)
+
+
 def test_no_offers_names_constraints_and_hint(h: Harness) -> None:
     code, data = run_json(h, "reserve", "--gpu", "4090", "--max-price", "0.30")
     assert code == 1
     assert data["error"] == "no_offers"
-    assert data["message"] == "No offers match gpu=4090 cuda>=12.6 under $0.30/hr."
-    assert "--max-price 0.45" in data["hint"]
+    assert data["message"] == "No offers match gpu=4090 disk>=50GB cuda>=12.6 under $0.30/hr."
+    assert data["hint"] == "Try a higher --max-price, another --gpu, a lower --disk, or a lower --cuda."
     assert calls(h, "create") == []
 
 
@@ -260,6 +269,14 @@ def test_custom_image_without_cuda_sends_no_filter(h: Harness) -> None:
     code, _ = run_json(h, "reserve", "--image", "ubuntu:24.04")
     assert code == 0
     assert "cuda_max_good" not in build_offer_query(calls(h, "search_offers")[0])
+
+
+def test_no_offers_names_disk(h: Harness) -> None:
+    h.provider.offers = []
+    code, data = run_json(h, "reserve", "--disk", "200")
+    assert code == 1
+    assert "disk>=200GB" in data["message"]
+    assert "a lower --disk" in data["hint"]
 
 
 def test_no_offers_names_cuda(h: Harness) -> None:
@@ -347,6 +364,18 @@ def test_onstart_has_startup_script(h: Harness) -> None:
     run_json(h, "reserve", "--startup", str(script))
     request = h.provider.created[0]
     assert "pip install -U peft" in decode_onstart(request.onstart)
+
+
+def test_onstart_has_startup_script_from_stdin(h: Harness) -> None:
+    code, out, _ = h.run("reserve", "--startup", "-", stdin="echo from stdin\n")
+    assert code == 0, out
+    assert "echo from stdin" in decode_onstart(h.provider.created[0].onstart)
+
+
+def test_startup_key_in_config_is_script_text(h: Harness) -> None:
+    write_user(h, '[defaults]\nstartup = "echo from config"\n')
+    run_json(h, "reserve")
+    assert "echo from config" in decode_onstart(h.provider.created[0].onstart)
 
 
 def test_startup_failure_ends_wait_with_warning(h: Harness) -> None:
@@ -455,31 +484,6 @@ def test_image_unsupported_destroys_box(h: Harness) -> None:
 # Waiting.
 
 
-def test_no_wait_returns_pending_with_nulls(h: Harness) -> None:
-    code, data = run_json(h, "reserve", "--no-wait")
-    assert code == 0
-    assert data["state"] == "pending"
-    for key in ("expires_at", "ttl_remaining_s", "ssh", "ssh_port", "rsync_target", "ports"):
-        assert data[key] is None, key
-    (iid,) = h.provider.instances
-    assert label_of(h, iid).expires is None
-
-
-def test_no_wait_lease_is_partial_with_every_layer_and_no_warning(h: Harness) -> None:
-    _, data = run_json(h, "reserve", "--no-wait")
-    assert "guard_partial" not in [w["code"] for w in data["warnings"]]
-    cached = h.context().cache.load().leases[data["lease"]]
-    assert cached.guard_missing == ["watchdog", "destroy_key", "clock_file"]
-
-
-def test_no_wait_lease_turns_full_once_the_probe_answers(h: Harness) -> None:
-    _, data = run_json(h, "reserve", "--no-wait")
-    _, status = run_json(h, "status", data["lease"])
-    (entry,) = status["leases"]
-    assert "guard" not in entry
-    assert status["warnings"] == []
-
-
 def test_wait_timeout_destroys_box(h: Harness) -> None:
     h.provider.on_create = None
     code, data = run_json(h, "reserve", "--ttl", "5m")
@@ -498,6 +502,54 @@ def test_wait_ends_with_box_unreachable_when_loading_never_ends(h: Harness) -> N
     assert code == 2
     assert data["error"] == "box_unreachable"
     assert len(h.provider.destroyed) == 1
+
+
+def test_wait_gives_up_on_a_created_box_with_no_ssh(h: Harness) -> None:
+    h.provider.on_create = None
+    code, data = run_json(h, "reserve", "--ttl", "30m")
+    assert code == 2
+    assert data["error"] == "box_unreachable"
+    assert data["message"] == (
+        "Lease l-abababab answered no SSH for 5m after Vast reported it running."
+    )
+    assert data["hint"] == "Run vasty reserve again."
+    assert data["details"] == {"lease": "l-abababab", "destroyed": True}
+    assert h.provider.instances == {}
+    assert NOW + 300 <= h.time.wall_now < NOW + 300 + reserve.WAIT_POLL_S + 1
+
+
+def test_wait_gives_up_on_a_reused_box_with_no_ssh_and_keeps_it(h: Harness) -> None:
+    row = add_lease(h, label={"name": "ft", "expires": NOW + 1800}, reachable=False)
+    code, data = run_json(h, "reserve", "--name", "ft")
+    assert code == 2
+    assert data["error"] == "box_unreachable"
+    assert data["details"] == {"lease": "l-0000a001", "destroyed": False}
+    assert h.provider.destroyed == []
+    assert row.id in h.provider.instances
+
+
+def test_wait_passes_a_box_that_answers_ssh_at_4_minutes(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_sleep = h.time.sleep
+    states: dict[int, CreateRequest] = {}
+
+    def late_boot(inst: Instance, req: CreateRequest) -> None:
+        states[inst.id] = req
+
+    def sleep(seconds: float) -> None:
+        real_sleep(seconds)
+        if h.time.wall_now >= NOW + 240:
+            for iid, req in states.items():
+                if h.box.boxes.get(iid) is None:
+                    boot(h, h.provider.instances[iid], req)
+
+    h.provider.on_create = late_boot
+    monkeypatch.setattr(h.time, "sleep", sleep)
+    code, data = run_json(h, "reserve", "--ttl", "30m")
+    assert code == 0
+    assert data["state"] == "running"
+    assert h.provider.destroyed == []
 
 
 def cached_lease(h: Harness) -> Any:
@@ -911,7 +963,7 @@ def test_create_timeout_failed_duplicate_destroy_names_release_fix(h: Harness) -
     kept = min(h.provider.instances)
     assert (
         f"vasty: could not destroy duplicate instance {kept + 1}: boom"
-        f" Run vasty release i-{kept + 1} --yes."
+        f" Run vasty release i-{kept + 1}."
     ) in err
 
 
@@ -962,7 +1014,7 @@ def test_create_rejected_failed_destroy_names_release_fix(h: Harness) -> None:
     data = json.loads(out)
     assert code == 2
     assert (data["details"]["instance_id"], data["details"]["destroyed"]) == (1001, False)
-    assert "vasty: could not destroy instance 1001 for l-abababab: boom. Run vasty release i-1001 --yes." in err
+    assert "vasty: could not destroy instance 1001 for l-abababab: boom. Run vasty release i-1001." in err
 
 
 def test_create_error_other_than_timeout_is_not_retried(h: Harness) -> None:
@@ -983,7 +1035,7 @@ def test_reserve_lease_accepts_sparse_args(h: Harness) -> None:
 
     ctx = h.context()
     snap = engine.refresh(ctx)
-    reserved = reserve.reserve_lease(ctx, argparse.Namespace(), snap, ttl=7200, wait=True)
+    reserved = reserve.reserve_lease(ctx, argparse.Namespace(), snap, ttl=7200)
     assert reserved.result.state == "running"
     assert reserved.lease.label.ttl == 7200
     assert reserved.result.ttl_remaining_s == 7200
@@ -1045,6 +1097,25 @@ def _sleep_error(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(h.time, "sleep", sleep)
 
 
+def test_lease_gone_after_running_reports_ended_before_ready(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h.provider.on_create = None
+    real_sleep = h.time.sleep
+
+    def sleep(seconds: float) -> None:
+        real_sleep(seconds)
+        if h.time.wall_now > NOW + 60:
+            h.provider.instances.clear()
+
+    monkeypatch.setattr(h.time, "sleep", sleep)
+    code, data = run_json(h, "reserve", "--ttl", "30m")
+    assert code == 2
+    assert data["error"] == "box_unreachable"
+    assert data["message"] == "Lease l-abababab ended before it became ready."
+    assert data["details"] == {"lease": "l-abababab", "destroyed": True}
+
+
 @pytest.mark.parametrize(("setup", "error", "destroyed"), [
     (_rejected_with_row, "provider_error", True),
     (_rejected_without_row, "provider_error", False),
@@ -1053,7 +1124,7 @@ def _sleep_error(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     (_port_missing, "port_mapping_missing", True),
     (_never_ready, "box_unreachable", True),
     (_refresh_always_fails, "box_unreachable", True),
-    (_ended_before_ready, "box_unreachable", False),
+    (_ended_before_ready, "box_unreachable", True),
     (_sleep_error, "provider_error", True),
 ])
 def test_every_error_after_create_names_lease_and_destroyed(
@@ -1065,3 +1136,54 @@ def test_every_error_after_create_names_lease_and_destroyed(
     assert data["error"] == error
     assert data["details"]["lease"] == "l-abababab"
     assert data["details"]["destroyed"] is destroyed
+
+
+def test_wait_writes_each_milestone_once(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    h.provider.start_status = "loading"
+    h.provider.offers = [make_offer(1, dph_total=Decimal("0.06296296296296297"))]
+    real_sleep = h.time.sleep
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        real_sleep(seconds)
+        if len(sleeps) == 2:
+            for inst in h.provider.instances.values():
+                inst.actual_status = "running"
+
+    monkeypatch.setattr(h.time, "sleep", sleep)
+    code, _out, err = h.run("reserve", "--json")
+    assert code == 0
+    prefix = "vasty: l-abababab "
+    said = [line.removeprefix(prefix) for line in err.splitlines() if line.startswith(prefix)]
+    assert said[0].startswith("created on instance ")
+    assert said[0].endswith("RTX 4090 at $0.063/hr")
+    assert said[1:] == [
+        "running on Vast; waiting for SSH",
+        "answers SSH; waiting for startup",
+        "startup done",
+    ]
+
+
+@pytest.mark.parametrize(("fail", "destroyed"), [(False, True), (True, False)])
+def test_lease_swept_by_the_follower_during_wait_reports_destroyed(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, fail: bool, destroyed: bool
+) -> None:
+    h.provider.start_status = "loading"
+    h.provider.keep_rows = fail
+    real_sleep = h.time.sleep
+
+    def sleep(seconds: float) -> None:
+        real_sleep(7)
+        if h.time.wall_now > NOW + 120 and not h.provider.destroyed:
+            if fail:
+                h.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
+            engine.refresh(h.context(), probe=False)
+
+    monkeypatch.setattr(h.time, "sleep", sleep)
+    code, data = run_json(h, "reserve", "--ttl", "2m")
+    assert code == 2
+    assert data["message"] == (
+        "Lease l-abababab did not become ready before its clock ran out; Vast last reported it loading."
+    )
+    assert data["details"] == {"lease": "l-abababab", "destroyed": destroyed}

@@ -122,21 +122,32 @@ def test_owner_selects_and_filters(fleet: Harness) -> None:
     ]
 
 
-def test_everyone_removes_owner_filter(fleet: Harness) -> None:
-    assert target(fleet, ["release", "--group", "exp42", "--everyone"], write=True) == [
-        "l-0000a001", "l-0000a002", "l-0000b001"
+def test_owner_flag_selects_every_lease_of_that_owner(fleet: Harness) -> None:
+    assert target(fleet, ["release", "--owner", "claude"], write=True) == [
+        "l-0000a001", "l-0000a002"
     ]
-    assert len(target(fleet, ["release", "--all", "--everyone"], write=True)) == 4
+    assert target(fleet, ["status", "--owner", "claude"], write=False) == [
+        "l-0000a001", "l-0000a002"
+    ]
 
 
-def test_all_means_current_owner(fleet: Harness) -> None:
-    assert target(fleet, ["release", "--all"], write=True) == ["l-0000a001", "l-0000a002"]
-    assert target(fleet, ["status", "--all"], write=False) == ["l-0000a001", "l-0000a002"]
-    assert len(target(fleet, ["status", "--all", "--everyone"], write=False)) == 4
+def test_no_selector_is_invalid(fleet: Harness) -> None:
+    ctx = fleet.context()
+    snap = engine.refresh(ctx)
+    with pytest.raises(VastyError) as exc:
+        resolve_target(ctx, snap, parse(["release"]), write=True)
+    assert exc.value.code == "invalid_arguments"
 
 
-def test_status_everyone_alone_reads_as_all_everyone(fleet: Harness) -> None:
-    assert len(target(fleet, ["status", "--everyone"], write=False)) == 4
+def test_lease_with_selector_is_invalid(fleet: Harness) -> None:
+    ctx = fleet.context()
+    snap = engine.refresh(ctx)
+    for argv in (["release", "l-7f3a", "--group", "g"], ["status", "l-7f3a", "--owner", "claude"]):
+        with pytest.raises(VastyError) as exc:
+            resolve_target(ctx, snap, parse(argv), write=True)
+        assert exc.value.code == "invalid_arguments"
+    code, out, _ = fleet.run("release", "l-7f3a", "--owner", "claude")
+    assert code == 1 and "invalid_arguments" in out
 
 
 def test_other_owners_name_lists_matches(fleet: Harness) -> None:
@@ -159,7 +170,7 @@ def test_bulk_never_includes_orphans_or_history(fleet: Harness) -> None:
     snap = engine.refresh(ctx)
     del fleet.provider.instances[snap.leases["l-0000a002"].instance_id]
     snap = engine.refresh(ctx)
-    resolved = resolve_target(ctx, snap, parse(["release", "--all", "--everyone"]), write=True)
+    resolved = resolve_target(ctx, snap, parse(["release", "--group", "exp42"]), write=True)
     assert resolved.bulk and resolved.orphans == []
     assert "l-0000a002" not in ids_of(resolved.leases)
 

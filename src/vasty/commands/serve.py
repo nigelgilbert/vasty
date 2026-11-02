@@ -1,7 +1,7 @@
 """`vasty serve`.
 
 Without `--on`, `serve` resolves settings the same way `reserve` does and
-reserves a box with `run_ttl` (or `--ttl`). With `--on` it serves on that box.
+reserves a box with the `ttl` setting. With `--on` it serves on that box.
 `--model` is any name or box path `vllm serve` accepts.
 
 Tokens after `--` are appended to the `vllm serve` argv. `serve` owns the
@@ -44,7 +44,7 @@ from vasty.config import VLLM_IMAGE
 from vasty.context import Context
 from vasty.errors import VastyError, invalid
 from vasty.models import SERVE_PORT, CachedLease, Job, ServeResult, WarningItem
-from vasty.remote import LOG_LINES, SshTarget
+from vasty.remote import LOG_LINES, SshTarget, tail_lines
 from vasty.state import effective_expiry
 from vasty.timeutil import iso
 
@@ -53,7 +53,6 @@ POLL_INTERVAL_S = 5.0
 HTTP_TIMEOUT_S = 5.0
 PREFLIGHT_TIMEOUT_S = 30.0
 PREFLIGHT_COMMAND = "command -v vllm"
-LOG_TAIL_BYTES = 64 * 1024
 # vLLM flags that `serve` sets itself.
 OWNED_FLAGS = ("--host", "--port", "--api-key")
 
@@ -75,9 +74,8 @@ def server_argv(model: str, host: str, extra: list[str]) -> list[str]:
 
 
 def redact_tail(lines: list[str], key: str) -> list[str]:
-    """Replace `key` with `<redacted>` and keep the last `LOG_TAIL_BYTES` bytes of the lines."""
-    text = "\n".join(line.replace(key, "<redacted>") for line in lines)
-    return text.encode("utf-8")[-LOG_TAIL_BYTES:].decode("utf-8", errors="ignore").splitlines()
+    """Replace `key` with `<redacted>` and return `tail_lines` of the result."""
+    return tail_lines("\n".join(line.replace(key, "<redacted>") for line in lines), LOG_LINES)
 
 
 def probe_command(key: str) -> str:
@@ -121,9 +119,8 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     created = False
     if auto:
         from vasty.commands import reserve
-        from vasty.commands.run import auto_ttl
 
-        reserved = reserve.reserve_lease(ctx, args, snap, ttl=auto_ttl(ctx), wait=True)
+        reserved = reserve.reserve_lease(ctx, args, snap, ttl=ctx.settings.ttl)
         lease = reserved.lease
         warnings = list(reserved.result.warnings)
         swept = merge_swept(swept, reserved.result.swept)
@@ -174,13 +171,17 @@ def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Pl
     started = ctx.box.start_job(target, job, command)
     save_lease(ctx, lease, lambda record: put_job(record, started))
     _wait_ready(ctx, target, lease, started.id, url, key, plan)
+    expiry = effective_expiry(lease.label)
     return ServeResult(
         lease=lease.lease,
         job=started.id,
         model=plan.model,
         url=url,
         api_key=key,
-        expires_at=iso(effective_expiry(lease.label)),
+        gpu=lease.gpu,
+        price_per_hr=lease.price_per_hr,
+        expires_at=iso(expiry),
+        ttl_remaining_s=max(0, expiry - ctx.clock.now()),
         warnings=[],
         swept=[],
     )
@@ -227,9 +228,15 @@ def _wait_ready(
     plan: _Plan,
 ) -> None:
     deadline = ctx.mono() + READY_DEADLINE_S
-    log_hint = f"Read the log: vasty ssh {lease.lease} -- tail -n 100 /workspace/.vasty/jobs/{job_id}/log"
+    tail = f"vasty ssh {lease.lease} -- tail -n 100 /workspace/.vasty/jobs/{job_id}/log"
+    log_hint = f"Read the log: {tail}"
+    ctx.warn(
+        f"vasty: {lease.lease} vllm started as {job_id}; polling /v1/models, "
+        f"up to {int(READY_DEADLINE_S // 60)}m. Log: {tail}"
+    )
     while True:
         if _ready(ctx, target, url, key, plan.bind_local):
+            ctx.warn(f"vasty: {lease.lease} /v1/models answers")
             return
         status = ctx.box.job_status(target, job_id)
         if status.exit is not None or status.state == "exited":

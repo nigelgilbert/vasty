@@ -3,7 +3,7 @@
 `show` returns `{values, api_key_source}`. `values` maps each key to
 `{value, source}`. `api_key_source` names the env var or key file the API key
 comes from, or is null when neither holds one; the key itself never prints.
-`set` returns `{key, value}` and writes the user config file. `profiles`
+`set` writes the user config file and returns `{key, value, path}`. `profiles`
 returns `{profiles}`, each name mapped to its merged fields.
 """
 
@@ -26,7 +26,7 @@ from vasty.config import (
 from vasty.context import Context
 from vasty.timeutil import format_duration_exact
 
-DURATION_KEYS = ("ttl", "run_ttl", "warn_before_expiry")
+DURATION_KEYS = ("ttl",)
 
 
 @dataclass
@@ -45,6 +45,7 @@ class ConfigShowResult:
 class ConfigSetResult:
     key: str
     value: Any
+    path: str
 
 
 @dataclass
@@ -79,11 +80,9 @@ def _human_value(key: str, value: Any, settings: Settings) -> str:
 
 
 def _show(ctx: Context, args: argparse.Namespace) -> Outcome:
-    if getattr(args, "owner", None) is not None:
-        ctx.flags["owner"] = args.owner
     settings = ctx.settings
     values = show_values(settings)
-    found = api_key(ctx.env, ctx.home, settings.api_key_env)
+    found = api_key(ctx.env, ctx.home)
     key_source = found[1] if found is not None else None
     rows = [(k, _human_value(k, v.value, settings), v.source) for k, v in values.items()]
     rows.append(("api_key_source", key_source or "-", ""))
@@ -97,7 +96,7 @@ def _set(ctx: Context, args: argparse.Namespace) -> Outcome:
     value = set_value(ctx.home, args.key, args.value)
     path = user_config_path(ctx.home)
     human = f"{args.key} = {toml_value(value)}  (written to {path})"
-    return Outcome(ConfigSetResult(args.key, value), human=human)
+    return Outcome(ConfigSetResult(args.key, value, str(path)), human=human)
 
 
 def _profiles(ctx: Context, args: argparse.Namespace) -> Outcome:

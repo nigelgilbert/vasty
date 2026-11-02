@@ -29,7 +29,7 @@ VERBS = (
 # Flags that set up a new lease; `--on` rejects them.
 CREATION_FLAGS = (
     "name", "group", "owner", "profile", "ttl", "gpu", "vram", "cuda", "gpus", "disk",
-    "image", "max_price", "region", "ports", "startup", "no_wait",
+    "image", "max_price", "region", "ports", "startup",
 )
 
 # Flags that feed config resolution as the `flag` layer.
@@ -49,11 +49,34 @@ class Outcome:
     emit: bool = True
 
 
+# Replacements for removed flags, shown in the hint when argparse rejects one.
+REMOVED_FLAGS = {
+    "--no-wait": "drop it",
+    "--plain": "drop it",
+    "--cached": "drop it",
+    "--yes": "drop it",
+    "--everyone": "use plain vasty status",
+    "--until": "use --by D to add D to the clock, or --to D to end it D from now",
+    "--all": 'use --owner "$VASTY_OWNER"',
+}
+
+
+def removed_flag_hint(message: str) -> str | None:
+    """Return the hint for removed flags named in an `unrecognized arguments:` message."""
+    prefix = "unrecognized arguments:"
+    if not message.startswith(prefix):
+        return None
+    flags = [token.split("=", 1)[0] for token in message[len(prefix):].split()]
+    hits = [f"{flag} was removed: {REMOVED_FLAGS[flag]}." for flag in flags
+            if flag in REMOVED_FLAGS]
+    return " ".join(hits) or None
+
+
 class Parser(argparse.ArgumentParser):
     """Raise `invalid_arguments` in place of printing usage and exiting."""
 
     def error(self, message: str) -> NoReturn:
-        raise invalid(message, f"Run {self.prog} --help.")
+        raise invalid(message, removed_flag_hint(message) or f"Run {self.prog} --help.")
 
 
 class _Version(argparse.Action):
@@ -75,45 +98,53 @@ def _output_flags() -> Parser:
     parent = Parser(add_help=False)
     parent.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
                         help="print JSON; default when stdout is not a terminal")
-    parent.add_argument("--plain", action="store_true", default=argparse.SUPPRESS,
-                        help="print human text; default when stdout is a terminal")
     parent.add_argument("--verbose", action="store_true", default=argparse.SUPPRESS,
                         help="include extra fields in the output")
     return parent
 
 
-def _setting_help(ttl_default: str) -> dict[str, str]:
-    """Return help lines for the setting flags, with defaults read from `config.BUILTIN`."""
-    from vasty.config import BUILTIN
+def _setting_help() -> dict[str, str]:
+    """Return help lines for the setting flags, with defaults read from `config.BUILTIN`.
 
+    Config files, profiles and `VASTY_*` variables can replace a builtin
+    default, so each line with a config key points at `vasty config show`.
+    """
+    from vasty.config import BUILTIN
+    from vasty.timeutil import format_duration_exact
+
+    see = "; see vasty config show"
     return {
-        "owner": "owner label for a new lease; default: VASTY_OWNER, config, then $USER",
-        "ttl": f"lease clock as a duration such as 45m or 2h; default: {ttl_default}",
+        "owner": "owner label for a new lease; default: VASTY_OWNER, config, then $USER" + see,
+        "ttl": "lease clock as a duration such as 45m or 2h; "
+               f"builtin default: {format_duration_exact(BUILTIN['ttl'])}" + see,
         "profile": "config profile to apply; default: none",
-        "startup": "script that runs once on the box after setup, or - for stdin; default: none",
-        "config_stdin": "pass - to read config JSON from stdin",
-        "gpu": "GPU model name such as 4090 or A100; default: any",
-        "vram": "minimum GPU memory in GB; default: any",
+        "startup": "script file that runs once on the box after setup, or - for stdin; "
+                   "default: none" + see,
+        "gpu": "GPU model name such as 4090 or A100, or any; default: any" + see,
+        "vram": "minimum GPU memory in GB; default: any" + see,
         "cuda": "minimum CUDA version the host driver supports, such as 12.6; "
-                "default: the image's floor, 13 for the vllm image and 12.6 for the base image",
-        "gpus": f"number of GPUs; default: {BUILTIN['gpus']}",
-        "disk": f"disk size in GB; default: {BUILTIN['disk']}",
-        "image": f"Docker image; default: {BUILTIN['image']}",
-        "max_price": f"offer price cap in dollars per hour; default: {BUILTIN['max_price']}",
-        "region": "region code or name such as US or Europe; default: any",
-        "ports": "comma-separated ports to open such as 8000,8080; default: none",
+                "builtin default: the image's floor, 13 for the vllm image and 12.6 for the "
+                "base image" + see,
+        "gpus": f"number of GPUs; builtin default: {BUILTIN['gpus']}" + see,
+        "disk": f"disk size in GB; builtin default: {BUILTIN['disk']}" + see,
+        "image": f"Docker image; builtin default: {BUILTIN['image']}" + see,
+        "max_price": "offer price cap in dollars per hour; "
+                     f"builtin default: {BUILTIN['max_price']}" + see,
+        "region": "region code or name such as US or Europe, or any; default: any" + see,
+        "ports": "comma-separated ports to open such as 8000,8080; default: none" + see,
     }
 
 
-def _target_flags(p: argparse.ArgumentParser, lease_optional: bool = True) -> None:
+def _target_flags(p: argparse.ArgumentParser, lease_optional: bool = True,
+                  filters: bool = False) -> None:
     p.add_argument("target", nargs="?" if lease_optional else None, metavar="LEASE",
                    help="lease id or name")
-    p.add_argument("--group", help="select the leases in group G")
-    p.add_argument("--owner", help="select the leases of owner O")
-    p.add_argument("--all", action="store_true", help="select every lease of the current owner")
-    p.add_argument("--everyone", action="store_true",
-                   help="select every owner's leases; status takes it alone, "
-                        "other verbs with --all or --group")
+    if filters:
+        p.add_argument("--group", help="filter the account view to group G")
+        p.add_argument("--owner", help="filter the account view to owner O")
+    else:
+        p.add_argument("--group", help="select the leases in group G")
+        p.add_argument("--owner", help="select the leases of owner O")
 
 
 def _hardware_flags(p: argparse.ArgumentParser, h: dict[str, str]) -> None:
@@ -135,22 +166,15 @@ def _reserve_flags(p: argparse.ArgumentParser, h: dict[str, str]) -> None:
     p.add_argument("--ttl", metavar="DURATION", help=h["ttl"])
     p.add_argument("--profile", help=h["profile"])
     p.add_argument("--startup", metavar="FILE|-", help=h["startup"])
-    p.add_argument("--no-wait", action="store_true", dest="no_wait",
-                   help="return once the box is created without waiting for it to run")
-    p.add_argument("--config", dest="config_stdin", metavar="-", help=h["config_stdin"])
     _hardware_flags(p, h)
 
 
 def build_parser() -> Parser:
-    from vasty.config import BUILTIN
-    from vasty.timeutil import format_duration_exact
-
     out = _output_flags()
     root = Parser(prog="vasty", description="Leased GPU compute for agents.", parents=[out])
     root.add_argument("--version", action=_Version, help="print the vasty version and exit")
     sub = root.add_subparsers(dest="verb", parser_class=Parser, metavar="VERB")
-    reserve_help = _setting_help(format_duration_exact(BUILTIN["ttl"]))
-    run_help = _setting_help(f"run_ttl, {format_duration_exact(BUILTIN['run_ttl'])}")
+    reserve_help = _setting_help()
 
     p = sub.add_parser("reserve", parents=[out], help="rent a box with a clock")
     _reserve_flags(p, reserve_help)
@@ -161,18 +185,12 @@ def build_parser() -> Parser:
                    help="add a duration such as 30m to the clock; default: none")
     p.add_argument("--to", metavar="DURATION",
                    help="set the clock to a duration from now such as 2h; default: none")
-    p.add_argument("--until", metavar="TIME",
-                   help="set the clock to an ISO time such as 2026-11-01T18:00Z; default: none")
 
     p = sub.add_parser("release", parents=[out], help="destroy a box now")
     _target_flags(p)
-    p.add_argument("--yes", action="store_true",
-                   help="skip the confirmation for an orphan instance id")
 
     p = sub.add_parser("status", parents=[out], help="show leases, spend and warnings")
-    _target_flags(p)
-    p.add_argument("--cached", action="store_true",
-                   help="read the local cache and skip provider calls")
+    _target_flags(p, filters=True)
 
     p = sub.add_parser("run", parents=[out], help="run a command on a box",
                        usage="%(prog)s [options] -- COMMAND...")
@@ -180,8 +198,8 @@ def build_parser() -> Parser:
     p.add_argument("--detach", action="store_true",
                    help="return once the job starts and leave the box up")
     p.add_argument("--sync", dest="sync_dir", metavar="DIR",
-                   help="push DIR to the box before the command; default: none")
-    _reserve_flags(p, run_help)
+                   help="push DIR's contents into /workspace before the command; default: none")
+    _reserve_flags(p, reserve_help)
 
     p = sub.add_parser("serve", parents=[out], help="serve a model behind an OpenAI endpoint",
                        usage="%(prog)s [options] --model MODEL [-- VLLM_ARGS...]")
@@ -190,7 +208,7 @@ def build_parser() -> Parser:
     p.add_argument("--model", required=True, help="model name or box path for vllm serve")
     p.add_argument("--bind-local", action="store_true", dest="bind_local",
                    help="bind vLLM to 127.0.0.1 for use through vasty ssh -L")
-    _reserve_flags(p, run_help)
+    _reserve_flags(p, reserve_help)
 
     p = sub.add_parser("stop", parents=[out], help="stop a job on a box")
     p.add_argument("lease", metavar="LEASE", help="lease id or name")
@@ -221,10 +239,10 @@ def build_parser() -> Parser:
                    help="forward a port as ssh -L SPEC; repeatable")
 
     p = sub.add_parser("tag", parents=[out], help="set labels or adopt an orphan")
-    _target_flags(p)
-    p.add_argument("--set-name", dest="set_name", metavar="NAME", help="set the lease name")
-    p.add_argument("--set-group", dest="set_group", metavar="G", help="set the group label")
-    p.add_argument("--set-owner", dest="set_owner", metavar="O", help="set the owner label")
+    p.add_argument("target", metavar="LEASE", help="lease id or name, or an orphan's i- id")
+    p.add_argument("--name", metavar="NAME", help="set the lease name; empty clears it")
+    p.add_argument("--group", metavar="G", help="set the group label; empty clears it")
+    p.add_argument("--owner", metavar="O", help="set the owner label")
     p.add_argument("--ttl", metavar="DURATION",
                    help="clock for an adopted orphan as a duration such as 30m; default: none")
 
@@ -236,12 +254,6 @@ def build_parser() -> Parser:
     action = p.add_subparsers(dest="action", parser_class=Parser, required=True)
     show = action.add_parser("show", parents=[out], help="print the effective settings")
     show.add_argument("--profile", help=reserve_help["profile"])
-    show.add_argument("--config", dest="config_stdin", metavar="-",
-                      help=reserve_help["config_stdin"])
-    show.add_argument("--owner", help=reserve_help["owner"])
-    show.add_argument("--ttl", metavar="DURATION", help=reserve_help["ttl"])
-    show.add_argument("--startup", metavar="FILE|-", help=reserve_help["startup"])
-    _hardware_flags(show, reserve_help)
     cset = action.add_parser("set", parents=[out], help="write one key to the user config")
     cset.add_argument("key", metavar="KEY", help="dotted key such as defaults.ttl or owner")
     cset.add_argument("value", metavar="VALUE", help="value in the key's unit, such as 45m")
@@ -269,7 +281,7 @@ def parse(argv: Sequence[str]) -> argparse.Namespace:
     if ns.verb is None:
         raise invalid("No verb given.", "Run vasty --help.")
     ns.command = command
-    for flag in ("json", "plain", "verbose"):
+    for flag in ("json", "verbose"):
         if not hasattr(ns, flag):
             setattr(ns, flag, False)
     check_combinations(ns)
@@ -278,41 +290,17 @@ def parse(argv: Sequence[str]) -> argparse.Namespace:
 
 def check_combinations(ns: argparse.Namespace) -> None:
     """Apply the flag-combination rules."""
-    if ns.json and ns.plain:
-        raise invalid("--json and --plain conflict.", "Pass one of --json or --plain.")
     verb = ns.verb
     if verb == "run" and not ns.command:
         raise invalid("run needs a command after --.", "vasty run -- COMMAND")
     if verb not in ("run", "serve", "ssh") and ns.command is not None:
         raise invalid(f"{verb} takes no command after --.", f"Run vasty {verb} --help.")
-    config_stdin = getattr(ns, "config_stdin", None)
-    if config_stdin is not None and config_stdin != "-":
-        raise invalid("--config takes only '-'.", "Pass --config - and JSON on stdin.")
-    if config_stdin == "-" and getattr(ns, "startup", None) == "-":
-        raise invalid("--config - and --startup - both read stdin.", "Pass --startup FILE.")
     if verb in ("run", "serve"):
         if ns.on is not None:
             given = [f for f in CREATION_FLAGS if getattr(ns, f, None) not in (None, False)]
-            if config_stdin is not None:
-                given.append("config")
             if given:
                 flags = ", ".join("--" + f.replace("_", "-") for f in given)
                 raise invalid(f"--on takes no creation flags: {flags}.", f"Drop {flags}.")
-        elif ns.no_wait:
-            raise invalid(f"{verb} without --on waits for the box.", "Drop --no-wait.")
-    if hasattr(ns, "everyone"):
-        _check_target(ns)
-
-
-def _check_target(ns: argparse.Namespace) -> None:
-    if ns.target is not None and (ns.group or ns.owner or ns.all or ns.everyone):
-        raise invalid("A LEASE takes no selector.", "Pass a LEASE or a selector.")
-    if ns.all and (ns.group or ns.owner):
-        raise invalid("--all takes no --group or --owner.", "Pass --all or a selector.")
-    if ns.everyone and ns.owner:
-        raise invalid("--everyone takes no --owner.", "Drop --owner or --everyone.")
-    if ns.everyone and not (ns.all or ns.group) and ns.verb != "status":
-        raise invalid("--everyone needs --all or --group.", "vasty status --all --everyone")
 
 
 def setting_flags(ns: argparse.Namespace) -> dict[str, Any]:
@@ -336,29 +324,15 @@ def build_context(ns: argparse.Namespace) -> Context:
 
     ctx = Context()
     ctx.stdout_tty = sys.stdout.isatty()
-    ctx.stdin_tty = sys.stdin.isatty()
     configure(ctx, ns)
     return ctx
 
 
 def configure(ctx: Context, ns: argparse.Namespace) -> None:
-    """Fill the parsed flags, output mode and stdin JSON into a context."""
+    """Fill the parsed flags and output mode into a context."""
     ctx.flags = setting_flags(ns)
     ctx.profile = getattr(ns, "profile", None)
-    if ns.json:
-        ctx.mode = "json"
-    elif ns.plain:
-        ctx.mode = "human"
-    else:
-        ctx.mode = "human" if ctx.stdout_tty else "json"
-    if getattr(ns, "config_stdin", None) == "-":
-        try:
-            data = json.loads(ctx.stdin.read())
-        except json.JSONDecodeError as exc:
-            raise invalid(f"--config - read invalid JSON: {exc}.", "Pass a JSON object on stdin.")
-        if not isinstance(data, dict):
-            raise invalid("--config - needs a JSON object.", "Pass a JSON object on stdin.")
-        ctx.stdin_json = data
+    ctx.mode = "json" if ns.json or not ctx.stdout_tty else "human"
 
 
 def emit(ctx: Context, outcome: Outcome) -> None:
@@ -393,11 +367,7 @@ def _report_swept(ctx: Context) -> None:
 
 def _guess_mode(argv: Sequence[str], tty: bool) -> str:
     head, _ = split_command(argv)
-    if "--json" in head:
-        return "json"
-    if "--plain" in head:
-        return "human"
-    return "human" if tty else "json"
+    return "json" if "--json" in head or not tty else "human"
 
 
 def run(
