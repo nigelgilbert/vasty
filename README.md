@@ -69,6 +69,11 @@ vasty serve     [--on LEASE | reserve flags] --model MODEL [--bind-local] [-- VL
 vasty stop      LEASE [JOB]
 vasty sync      LEASE (push [--delete] SRC DEST | pull SRC DEST)
 vasty ssh       LEASE [-- COMMAND...]
+```
+
+Ops verbs, rarely needed:
+
+```
 vasty tag       LEASE [--name NAME] [--group G] [--owner O] [--ttl 30m]
 vasty sweep     [--follow LEASE]
 vasty config    (show [--profile P] | set KEY VALUE | profiles)
