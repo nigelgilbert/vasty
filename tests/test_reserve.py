@@ -20,6 +20,7 @@ from vasty.labels import format_label, parse
 from vasty.models import CreateRequest, Instance, Label
 from vasty.onstart import decode_onstart
 from vasty.provider import build_offer_query
+from vasty.state import LOAD_WAIT_S
 
 RESULT_KEYS = {
     "lease", "name", "owner", "group", "state", "reused", "gpu",
@@ -502,6 +503,43 @@ def test_wait_ends_with_box_unreachable_when_loading_never_ends(h: Harness) -> N
     assert code == 2
     assert data["error"] == "box_unreachable"
     assert len(h.provider.destroyed) == 1
+
+
+def test_wait_gives_up_on_a_created_box_still_loading_at_the_load_deadline(h: Harness) -> None:
+    h.provider.start_status = "loading"
+    code, data = run_json(h, "reserve", "--ttl", "15m")
+    assert code == 2
+    assert data["error"] == "box_unreachable"
+    assert data["message"] == "Lease l-abababab stayed loading on Vast for 10m after create."
+    assert data["hint"] == "Run vasty reserve again; another offer boots faster."
+    assert data["details"] == {"lease": "l-abababab", "destroyed": True}
+    assert len(h.provider.destroyed) == 1
+    assert NOW + LOAD_WAIT_S <= h.time.wall_now < NOW + LOAD_WAIT_S + reserve.WAIT_POLL_S + 1
+
+
+def test_wait_keeps_a_box_that_leaves_loading_before_the_load_deadline(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h.provider.start_status = "loading"
+    real_sleep = h.time.sleep
+
+    def sleep(seconds: float) -> None:
+        real_sleep(seconds)
+        if h.time.wall_now >= NOW + LOAD_WAIT_S - 60:
+            for inst in h.provider.instances.values():
+                inst.actual_status = "running"
+
+    monkeypatch.setattr(h.time, "sleep", sleep)
+    code, data = run_json(h, "reserve", "--ttl", "15m")
+    assert code == 0
+    assert data["state"] == "running"
+    assert h.provider.destroyed == []
+
+
+def test_wait_hint_on_a_short_clock_names_reserve(h: Harness) -> None:
+    h.provider.start_status = "loading"
+    _, data = run_json(h, "reserve", "--ttl", "2m")
+    assert data["hint"] == "Run vasty reserve again, or pick another offer with --gpu or --region."
 
 
 def test_wait_gives_up_on_a_created_box_with_no_ssh(h: Harness) -> None:
@@ -1035,7 +1073,7 @@ def test_reserve_lease_accepts_sparse_args(h: Harness) -> None:
 
     ctx = h.context()
     snap = engine.refresh(ctx)
-    reserved = reserve.reserve_lease(ctx, argparse.Namespace(), snap, ttl=7200)
+    reserved = reserve.reserve_lease(ctx, argparse.Namespace(), snap, ttl=7200, verb="run")
     assert reserved.result.state == "running"
     assert reserved.lease.label.ttl == 7200
     assert reserved.result.ttl_remaining_s == 7200

@@ -12,8 +12,9 @@ seconds.
 A refresh error during the wait writes one stderr line and the wait goes on.
 The wait writes one stderr line at each milestone: created, Vast `running`,
 SSH answering and startup done. The wait gives up with `box_unreachable`
-when SSH has not answered `SSH_WAIT_S` seconds after Vast reports `running`,
-and at the lease's effective expiry.
+when Vast has not reported `running` `LOAD_WAIT_S` seconds after create, when
+SSH has not answered `SSH_WAIT_S` seconds after Vast reports `running`, and at
+the lease's effective expiry.
 Once SSH answers, every required port has `PORT_GRACE_S` seconds to show a
 mapping before `port_mapping_missing`; on a direct offer the required ports
 are every requested port, and a proxy offer has none. A box this call created
@@ -51,6 +52,7 @@ from vasty.models import (
 from vasty.output import json_money
 from vasty.state import (
     GUARD_LAYERS,
+    LOAD_WAIT_S,
     SSH_WAIT_S,
     effective_expiry,
     gpu_matches,
@@ -87,11 +89,13 @@ def reserve_lease(
     snap: Snapshot,
     *,
     ttl: int,
+    verb: str,
 ) -> Reserved:
     """Reserve a box from the creation flags in `args` and `ctx.settings`.
 
     Apply name idempotency, offer search, create with recovery and the
-    readiness wait. `run` and `serve` call this for auto-reserve. Raise
+    readiness wait. `run` and `serve` call this for auto-reserve. `verb` names
+    the calling command in the wait's retry hints. Raise
     `VastyError` on failure; a box this call created and then gave up on is
     destroyed before the error propagates.
 
@@ -155,7 +159,7 @@ def reserve_lease(
     not_spawned = spawn_follow(ctx, lease.lease)
 
     if lease.state == "pending":
-        lease, more_swept, account = wait_ready(ctx, lease, required, created)
+        lease, more_swept, account = wait_ready(ctx, lease, required, created, verb)
         swept = merge_swept(swept, more_swept)
         warnings = account + warnings
     else:
@@ -509,12 +513,20 @@ def _milestones(lease: CachedLease) -> set[str]:
     return reached
 
 
-def _not_ready(lease: CachedLease) -> VastyError:
+def _not_ready(lease: CachedLease, verb: str) -> VastyError:
     status = f"; Vast last reported it {lease.actual_status}" if lease.actual_status else ""
     return VastyError(
         "box_unreachable",
         f"Lease {lease.lease} did not become ready before its clock ran out{status}.",
-        "Run vasty reserve again, or pick another offer with --gpu or --region.",
+        f"Run vasty {verb} again, or pick another offer with --gpu or --region.",
+    )
+
+
+def _stalled(lease: CachedLease, verb: str) -> VastyError:
+    return VastyError(
+        "box_unreachable",
+        f"Lease {lease.lease} stayed loading on Vast for {format_duration(LOAD_WAIT_S)} after create.",
+        f"Run vasty {verb} again; another offer boots faster.",
     )
 
 
@@ -528,7 +540,7 @@ def _no_ssh(lease: CachedLease) -> VastyError:
 
 
 def wait_ready(
-    ctx: Context, lease: CachedLease, required: list[int], created: bool
+    ctx: Context, lease: CachedLease, required: list[int], created: bool, verb: str
 ) -> tuple[CachedLease, list[SweptEntry], list[WarningItem]]:
     """Refresh until the lease leaves `pending` and the `required` ports are mapped.
 
@@ -537,7 +549,8 @@ def wait_ready(
     `port_mapping_missing`. A refresh error writes one stderr line and the
     wait goes on until the lease's effective expiry. Ctrl-C during the wait
     destroys a box this call created and re-raises. Each milestone writes one
-    stderr line when a refresh first shows it.
+    stderr line when a refresh first shows it. `verb` names the calling command
+    in the retry hints.
     """
     swept: list[SweptEntry] = []
     ready_at: int | None = None
@@ -550,14 +563,14 @@ def wait_ready(
         except VastyError as err:
             ctx.warn(f"vasty: refresh failed while waiting for {lease.lease}: {err.message}")
             if ctx.clock.now() >= effective_expiry(lease.label):
-                raise _give_up(ctx, lease, created, _not_ready(lease)) from None
+                raise _give_up(ctx, lease, created, _not_ready(lease, verb)) from None
             _pause(ctx, lease, created)
             continue
         swept = merge_swept(swept, snap.swept)
         now = snap.now
         fresh = snap.leases.get(lease.lease)
         if (fresh is None or fresh.state in HISTORY_STATES) and lease.running_at is None:
-            raise _name_lease(_not_ready(fresh or lease), lease, _box_gone(fresh))
+            raise _name_lease(_not_ready(fresh or lease, verb), lease, _box_gone(fresh))
         if fresh is None or fresh.state in HISTORY_STATES:
             raise _name_lease(VastyError(
                 "box_unreachable",
@@ -598,8 +611,10 @@ def wait_ready(
             and now - lease.running_at >= SSH_WAIT_S
         ):
             raise _give_up(ctx, lease, created, _no_ssh(lease))
+        elif lease.running_at is None and now - lease.label.created >= LOAD_WAIT_S:
+            raise _give_up(ctx, lease, created, _stalled(lease, verb))
         elif now >= deadline:
-            raise _give_up(ctx, lease, created, _not_ready(lease))
+            raise _give_up(ctx, lease, created, _not_ready(lease, verb))
         _pause(ctx, lease, created)
 
 
@@ -666,6 +681,6 @@ def render(result: ReserveResult) -> str:
 
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     snap = engine.refresh(ctx)
-    reserved = reserve_lease(ctx, args, snap, ttl=ctx.settings.ttl)
+    reserved = reserve_lease(ctx, args, snap, ttl=ctx.settings.ttl, verb="reserve")
     human = render(reserved.result) if ctx.mode == "human" else None
     return Outcome(reserved.result, human=human)

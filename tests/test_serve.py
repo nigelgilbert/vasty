@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 import pytest
-from fakes import NOW, FakeReserve, Harness, add_lease
+from fakes import NOW, FakeReserve, Harness, add_lease, make_offer
 
 from vasty.commands import serve
 from vasty.errors import VastyError
@@ -557,3 +557,10 @@ def test_serve_failure_reports_failed_sweep_on_stderr(harness: Harness, box: int
         "vasty: SWEPT  l-0000a009 old  expired 2026-10-29T00:59:50Z  destroy failed (provider_error)"
     ]
 
+
+def test_auto_serve_wait_hint_names_serve(harness: Harness) -> None:
+    harness.provider.offers = [make_offer(1)]
+    harness.provider.start_status = "loading"
+    code, data, _ = run_serve(harness, "--model", QWEN, "--ttl", "2m")
+    assert code == 2
+    assert data["hint"] == "Run vasty serve again, or pick another offer with --gpu or --region."

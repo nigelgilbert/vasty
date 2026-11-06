@@ -580,7 +580,7 @@ class FakeReserve:
         return self
 
     def __call__(
-        self, ctx: Context, args: Any, snap: Any, *, ttl: int,
+        self, ctx: Context, args: Any, snap: Any, *, ttl: int, verb: str,
     ) -> Any:
         from vasty import engine
         from vasty.commands.reserve import Reserved

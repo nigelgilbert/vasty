@@ -115,7 +115,9 @@ def _setting_help() -> dict[str, str]:
     see = "; see vasty config show"
     return {
         "owner": "owner label for a new lease; default: VASTY_OWNER, config, then $USER" + see,
-        "ttl": "lease clock from boot, as a duration such as 45m or 2h; "
+        "ttl": "lease clock from boot, as a duration such as 45m or 2h; a box a waiting "
+               "command created ends 10m after create if still loading, and any other box "
+               "that never boots ends at created + ttl; "
                f"builtin default: {format_duration_exact(BUILTIN['ttl'])}" + see,
         "profile": "config profile to apply; default: none",
         "startup": "script file that runs once on the box after setup, or - for stdin; "

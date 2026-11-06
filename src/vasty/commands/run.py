@@ -163,7 +163,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     if auto:
         from vasty.commands import reserve
 
-        reserved = reserve.reserve_lease(ctx, args, snap, ttl=ttl)
+        reserved = reserve.reserve_lease(ctx, args, snap, ttl=ttl, verb="run")
         lease = reserved.lease
         warnings = list(reserved.result.warnings)
         swept = merge_swept(list(snap.swept), reserved.result.swept)

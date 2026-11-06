@@ -35,6 +35,8 @@ SSH_WAIT_S = 5 * 60
 
 The status warning and the `reserve` give-up share it.
 """
+LOAD_WAIT_S = 10 * 60
+"""A waiting command gives up on a lease Vast has not reported `running` this long after create."""
 LIVE_JOB_STATES: frozenset[str] = frozenset({"running", "serving"})
 
 _PENDING_STATUSES = frozenset({"created", "loading"})

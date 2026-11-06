@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 import pytest
-from fakes import NOW, FakeReserve, Harness, add_lease
+from fakes import NOW, FakeReserve, Harness, add_lease, make_offer
 
 from vasty import engine
 from vasty.context import Context
@@ -104,6 +104,22 @@ def test_run_detach_returns_job_immediately(harness: Harness, box: int) -> None:
     }
     assert attached == []
     assert cached(harness, "l-0000a001").jobs[0].state == "running"
+
+
+def test_auto_run_wait_hint_names_run(harness: Harness) -> None:
+    harness.provider.offers = [make_offer(1)]
+    harness.provider.start_status = "loading"
+    code, data, _ = run(harness, "--ttl", "2m", "--", "ls")
+    assert code == 2
+    assert data["hint"] == "Run vasty run again, or pick another offer with --gpu or --region."
+
+
+def test_auto_run_load_stall_hint_names_run(harness: Harness) -> None:
+    harness.provider.offers = [make_offer(1)]
+    harness.provider.start_status = "loading"
+    code, data, _ = run(harness, "--ttl", "15m", "--", "ls")
+    assert code == 2
+    assert data["hint"] == "Run vasty run again; another offer boots faster."
 
 
 def test_run_warns_when_clock_is_short(harness: Harness) -> None:
@@ -366,9 +382,9 @@ def test_sigint_reports_release_refresh_sweep(harness: Harness, reserve: FakeRes
 def _expire_other_lease_during_wait(
     harness: Harness, reserve: FakeReserve, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def wait(ctx: Any, args: Any, snap: Any, *, ttl: int) -> Any:
+    def wait(ctx: Any, args: Any, snap: Any, *, ttl: int, verb: str) -> Any:
         add_lease(harness, "l-0000a009", label={"name": "old", "expires": NOW - 10})
-        return reserve(ctx, args, snap, ttl=ttl)
+        return reserve(ctx, args, snap, ttl=ttl, verb=verb)
 
     monkeypatch.setattr("vasty.commands.reserve.reserve_lease", wait)
 
