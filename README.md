@@ -80,7 +80,7 @@ vasty config    (show [--profile P] | set KEY VALUE | profiles)
 vasty completion (bash | zsh | fish)
 ```
 
-Hardware flags on `reserve`, `run` and `serve`: `--gpu NAME`, `--vram MIN_GB`, `--cuda FLOOR`, `--gpus N`, `--disk GB`, `--image IMAGE`, `--max-price $/HR`, `--region R`, `--ports N[,N...]`. A profile or config file supplies defaults for any of them. `--cuda` is the minimum CUDA version the host driver supports. With no `cuda` set, Vasty applies the floor of an image it names: 13 for `vllm/vllm-openai:v0.32.0`, 12.6 for `vastai/base-image:cuda-12.6.3-auto`. For any other image, read its floor from `NVIDIA_REQUIRE_CUDA` in `docker inspect IMAGE`. `run --on` and `serve --on` reuse a box and reject creation flags.
+Hardware flags on `reserve`, `run` and `serve`: `--gpu NAME`, `--vram MIN_GB`, `--cuda FLOOR`, `--gpus N`, `--disk GB`, `--image IMAGE`, `--max-price $/HR`, `--region R`, `--ports N[,N...]`. Ports 22, 8000 and 8080 map by default, and `--ports` adds to them. A profile or config file supplies defaults for any of them. `--cuda` is the minimum CUDA version the host driver supports. With no `cuda` set, Vasty applies the floor of an image it names: 13 for `vllm/vllm-openai:v0.32.0`, 12.6 for `vastai/base-image:cuda-12.6.3-auto`. For any other image, read its floor from `NVIDIA_REQUIRE_CUDA` in `docker inspect IMAGE`. `run --on` and `serve --on` reuse a box and reject creation flags.
 
 A new box comes from the matching offer with the highest reliability, then the highest download bandwidth, then the lowest price, then the lowest offer id.
 
@@ -151,12 +151,12 @@ Every JSON result except `config`, `completion` and error objects carries `warni
 |---|---|
 | `reserve` | the lease: `lease`, `name`, `owner`, `group`, `state`, `reused`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `expires_at`, `ttl_remaining_s`, `ssh`, `rsync_target`, `ssh_port`, `ports` |
 | `extend` on one lease | `lease`, `previous_expires_at`, `expires_at`, `ttl_remaining_s`. The label's `ttl` keeps the reserve's value |
-| `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending` while true, and `already_absent` when the lease was already gone. `destroy_pending` is true from the destroy call until a refresh sees the instance gone from the provider listing |
-| bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error`; `extend` adds `previous_expires_at` and `expires_at`; `release` adds `name`, `uptime_s`, `cost`, `jobs`, `destroy_pending` while true and `already_absent` when the lease was already gone, or `name` and `message` when it fails |
+| `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, and `already_absent` when the lease was already gone |
+| bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error`; `extend` adds `previous_expires_at` and `expires_at`; `release` adds `name`, `uptime_s`, `cost`, `jobs` and `already_absent` when the lease was already gone, or `name` and `message` when it fails |
 | `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s` |
-| `status` | `leases`, `totals`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`, and `destroy_pending` while true, with the meaning it has on release. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
+| `status` | `leases`, `totals`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`, and `destroy_pending` while true, from the destroy call until a refresh sees the instance gone from the provider listing. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
 | job entry in `status` and `release` `jobs` | `job`, `cmd`, `state`, `exit`, `duration_s`. `state` is `running`, `serving`, `exited`, `killed` or `unknown`. `release` marks live jobs `killed` with a null `exit` and freezes `duration_s`. A job on a history lease stops its `duration_s` at the lease's end. `stop` marks its job `killed` with the job's exit code |
-| attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `expires_at`, `ttl_remaining_s`, `uptime_s`, `cost`, `error`. The clock fields are null when `released` is true. `uptime_s` and `cost` are null unless `released` is true. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
+| attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `expires_at`, `ttl_remaining_s`, `uptime_s`, `cost`, `error`. `expires_at` holds the box's final clock when `released` is true, and `ttl_remaining_s` is null. `uptime_s` and `cost` are null unless `released` is true. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
 | `run --detach` | `lease`, `job`, `state`, `exit`, `gpu`, `price_per_hr`, `log_path`, `expires_at`, `ttl_remaining_s`. `state` and `exit` come from one read 2 seconds after the start: `running` and null while the job runs, `exited` and the code when it has ended |
 | `serve` | `lease`, `job`, `model`, `url`, `api_key`, `gpu`, `price_per_hr`, `expires_at`, `ttl_remaining_s` |
 | `stop` | `lease`, `job`, `cmd`, `state`, `exit`, `duration_s`. `stop` sends TERM to the job's process group, waits up to 10s, then KILL and waits up to 5s. JOB is required when several jobs run. A job still live after KILL keeps its `state` and `stop` exits 2 |
@@ -166,7 +166,7 @@ Every JSON result except `config`, `completion` and error objects carries `warni
 
 `reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at` and `ttl_remaining_s`.
 
-`busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. `uptime_s` counts from the first sample where Vast reports `running` and is null before it. An orphan's `uptime_s` counts from Vast's `start_date`. `--verbose` shows that sample as `running_at`, and `reachable_at` as the last probe that got an answer.
+`busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. `uptime_s` counts from the first sample where Vast reports `running` and is null before it. An orphan's `uptime_s` counts from Vast's `start_date`, and adoption with `tag` restarts it at the adoption time. `--verbose` shows that sample as `running_at`, and `reachable_at` as the last probe that got an answer.
 
 ### Error codes
 
@@ -180,7 +180,7 @@ Every JSON result except `config`, `completion` and error objects carries `warni
 | `lease_not_found` | 1 | unknown id or name |
 | `ambiguous_target` | 1 | a name or id matches more than one active lease |
 | `orphan_unmanaged` | 1 | an orphan id is passed to `extend`, `run`, `serve`, `sync`, `ssh` or `stop` |
-| `lease_expired` | 1 | the lease is in history |
+| `lease_expired` | 1 | the lease is in history. `release` on a history lease exits 0 with `already_absent` once Vast no longer lists it |
 | `lease_pending` | 1 | `extend`, `run --on`, `serve --on`, `sync`, `ssh` or `stop` on a lease SSH cannot reach yet |
 | `name_conflict` | 1 | a new name matches another active lease of the same owner |
 | `image_unsupported` | 1 | the image lacks bash, root or apt-get |
@@ -279,7 +279,7 @@ Per-box spend is `max_price` times `ttl`, since the clock ends the box. Storage 
 
 For runway, read `credit` over `burn_per_hr`. When the balance or charges are unavailable, those totals are null and `status` warns with `spend_unavailable`.
 
-A lease's `cost` sums the Vast charge rows available for its instance. A box adopted with `tag`, or an orphan, can show partial history. On `release`, `cost` sums the charge rows posted so far. Vast posts charges in arrears, so `status <id>` later reads the rows posted since. Charges are cached 60 s. `cost` is null when no charge row is available, and `status` warns `spend_unavailable` when the read failed. `price_per_hr` times `uptime_s` approximates it.
+A lease's `cost` sums the Vast charge rows available for its instance. A box adopted with `tag`, or an orphan, can show partial history. On `release`, `cost` sums the charge rows posted so far. Vast posts charges in arrears, so `status <id>` later reads the rows posted since. Charges are cached 60 s. `cost` reads `0.0` when Vast has posted a zero charge row. It is null when no charge row is available, and `status` warns `spend_unavailable` when the read failed. `price_per_hr` times `uptime_s` approximates it.
 
 ## State
 

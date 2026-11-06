@@ -356,7 +356,6 @@ class ReleaseSummary:
     uptime_s: int | None
     cost: Decimal | None
     jobs: list[JobView]
-    destroy_pending: bool | None = field(default=True, metadata=OMIT_NONE)
     already_absent: bool | None = field(default=None, metadata=OMIT_NONE)
     warnings: list[WarningItem] | None = field(default=None, metadata=OMIT_NONE)
     swept: list[SweptEntry] | None = field(default=None, metadata=OMIT_NONE)

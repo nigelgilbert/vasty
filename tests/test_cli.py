@@ -359,6 +359,8 @@ def _verb_action(verb: str, flag: str) -> argparse.Action:
         ("reserve", "--vram", ["GB", "default: any"]),
         ("reserve", "--gpu", ["or any", "default: any"]),
         ("reserve", "--region", ["or any", "default: any"]),
+        ("reserve", "--ports", ["22, 8000 and 8080 map by default"]),
+        ("reserve", "--ttl", ["10m after create if still loading", "created + ttl"]),
         ("extend", "--by", ["duration", "default: none"]),
     ],
 )

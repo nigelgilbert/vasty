@@ -153,7 +153,6 @@ def summarize(
         uptime_s=views.uptime_s(lease, now),
         cost=views.lease_cost(lease.instance_id, snap.charges),
         jobs=jobs,
-        destroy_pending=True if lease.destroy_pending else None,
         already_absent=True if already_absent else None,
     )
 
@@ -171,8 +170,6 @@ def _entry_data(summary: ReleaseSummary) -> dict[str, Any]:
         "cost": summary.cost,
         "jobs": summary.jobs,
     }
-    if summary.destroy_pending is not None:
-        data["destroy_pending"] = summary.destroy_pending
     if summary.already_absent is not None:
         data["already_absent"] = summary.already_absent
     return data
@@ -189,10 +186,7 @@ def _summary_lines(summary: ReleaseSummary) -> list[str]:
     name = f" ({summary.name})" if summary.name else ""
     verb = "already gone" if summary.already_absent else "released"
     uptime = "?" if summary.uptime_s is None else format_duration(summary.uptime_s)
-    head = f"{summary.lease}{name} {verb}  uptime {uptime}  cost {_cost(summary.cost)}"
-    if summary.destroy_pending:
-        head += "  destroy pending"
-    lines = [head]
+    lines = [f"{summary.lease}{name} {verb}  uptime {uptime}  cost {_cost(summary.cost)}"]
     for job in summary.jobs:
         code = job.state if job.exit is None else f"exit {job.exit}"
         took = "" if job.duration_s is None else f"  {format_duration(job.duration_s)}"
@@ -223,7 +217,6 @@ def _render_bulk(result: BulkResult) -> str:
                 uptime_s=entry.data.get("uptime_s"),
                 cost=entry.data.get("cost"),
                 jobs=entry.data.get("jobs", []),
-                destroy_pending=entry.data.get("destroy_pending"),
                 already_absent=entry.data.get("already_absent"),
             )
             lines += _summary_lines(summary)

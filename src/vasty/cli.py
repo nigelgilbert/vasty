@@ -133,7 +133,7 @@ def _setting_help() -> dict[str, str]:
         "max_price": "offer price cap in dollars per hour; "
                      f"builtin default: {BUILTIN['max_price']}" + see,
         "region": "region code or name such as US or Europe, or any; default: any" + see,
-        "ports": "comma-separated ports to open such as 8000,8080; default: none" + see,
+        "ports": "comma-separated ports to open such as 9000,9001; 22, 8000 and 8080 map by default" + see,
     }
 
 

@@ -43,7 +43,7 @@ def test_release_returns_summary_and_marks_cache(harness: Harness) -> None:
     assert data["name"] == "trainer"
     assert data["uptime_s"] == 4620
     assert data["cost"] is None
-    assert data["destroy_pending"] is True
+    assert "destroy_pending" not in data
     assert "already_absent" not in data
     assert data["jobs"] == [
         {"job": "j-1", "cmd": "python train.py", "state": "exited", "exit": 0, "duration_s": 5400},
@@ -160,7 +160,7 @@ def test_release_freezes_uptime_while_destroy_pending(harness: Harness) -> None:
     harness.run("status")
     harness.time.advance(118)
     code, data, _ = release(harness, "l-0000a001")
-    assert (code, data["uptime_s"], data["destroy_pending"]) == (0, 118, True)
+    assert (code, data["uptime_s"]) == (0, 118)
     harness.time.advance(60)
     _, out, _ = harness.run("status", "l-0000a001")
     [row] = json.loads(out)["leases"]
@@ -214,7 +214,6 @@ def test_release_after_failed_sweep_destroy_sends_destroy(harness: Harness) -> N
     code, data, _ = release(harness, "l-0000a001")
     assert code == 0
     assert harness.provider.destroyed == [row.id]
-    assert data["destroy_pending"] is True
     assert "already_absent" not in data
     assert [s["ok"] for s in data["swept"]] == [False]
     lease = cached(harness, "l-0000a001")
@@ -228,7 +227,6 @@ def test_release_of_released_lease_still_listed_resends_destroy(harness: Harness
     code, data, _ = release(harness, "l-0000a001")
     assert code == 0
     assert harness.provider.destroyed == [row.id, row.id]
-    assert data["destroy_pending"] is True
     assert "already_absent" not in data
     lease = cached(harness, "l-0000a001")
     assert (lease.state, lease.destroy_attempts) == ("released", 2)
@@ -238,10 +236,9 @@ def test_release_unreachable_lease(harness: Harness) -> None:
     row = add_lease(harness)
     harness.run("status")
     harness.box.state(row.id).reachable = False
-    code, data, _ = release(harness, "l-0000a001")
+    code, _, _ = release(harness, "l-0000a001")
     assert code == 0
     assert harness.provider.destroyed == [row.id]
-    assert data["destroy_pending"] is True
 
 
 def test_release_failed_destroy_is_provider_error(harness: Harness) -> None:
@@ -349,7 +346,8 @@ def test_bulk_release_group(harness: Harness) -> None:
     first = data["results"][0]
     assert first["ok"] is True and first["error"] is None
     assert first["name"] == "eval-0"
-    assert set(first) >= {"uptime_s", "cost", "jobs", "destroy_pending"}
+    assert set(first) >= {"uptime_s", "cost", "jobs"}
+    assert "destroy_pending" not in first
     assert sorted(harness.provider.destroyed) == [a.id, b.id]
     assert other.id in harness.provider.instances and keep.id in harness.provider.instances
     assert 55120 in harness.provider.instances

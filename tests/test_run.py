@@ -544,10 +544,10 @@ def test_auto_run_named_box_reports_its_clock(harness: Harness, reserve: FakeRes
     assert (data["expires_at"], data["ttl_remaining_s"]) == ("2026-10-29T01:30:00Z", 1800)
 
 
-def test_auto_run_released_box_reports_no_clock(harness: Harness, reserve: FakeReserve) -> None:
+def test_auto_run_released_box_reports_its_final_clock(harness: Harness, reserve: FakeReserve) -> None:
     code, data, _ = run(harness, "--", "ls")
     assert code == 0 and data["released"] is True
-    assert data["expires_at"] is None and data["ttl_remaining_s"] is None
+    assert data["expires_at"] == "2026-10-29T01:30:00Z" and data["ttl_remaining_s"] is None
 
 
 def test_auto_run_released_box_reports_uptime_and_cost(harness: Harness, reserve: FakeReserve) -> None:

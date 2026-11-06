@@ -21,8 +21,8 @@ and propagates. SIGINT forwards `INT` to the job, waits
 up to 10s for it to exit, and exits 130. After the job exits or SIGINT
 arrives, an auto-reserved box is released even when saving the job or the
 10s wait raises, and the exception then propagates. A box this call
-released reports the release's `uptime_s` and `cost`, read the way
-`release` reads them. `swept` lists the
+released reports its final `expires_at` and the release's `uptime_s` and
+`cost`, read the way `release` reads them. `swept` lists the
 entries of every refresh this call made: the first one, the reserve wait, and
 the lost-attach or release refresh.
 """
@@ -254,11 +254,9 @@ def _attach(
 
 
 def _clock(ctx: Context, lease: CachedLease, released: bool) -> tuple[str | None, int | None]:
-    """Return the lease's `expires_at` and `ttl_remaining_s`, or None for both when the box was released."""
-    if released:
-        return None, None
+    """Return the lease's `expires_at` and `ttl_remaining_s`, with a None `ttl_remaining_s` when the box was released."""
     expiry = effective_expiry(lease.label)
-    return iso(expiry), max(0, expiry - ctx.clock.now())
+    return iso(expiry), None if released else max(0, expiry - ctx.clock.now())
 
 
 def _box_finished(ctx: Context, target: SshTarget, job_id: str) -> int | None:
