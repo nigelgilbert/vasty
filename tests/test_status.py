@@ -322,6 +322,14 @@ def test_swept_lease_in_status(harness: Harness) -> None:
     assert [(j["job"], j["state"]) for j in row["jobs"]] == [("j-1", "unknown")]
 
 
+def test_swept_lease_shows_destroy_pending_until_the_listing_drops_it(harness: Harness) -> None:
+    add_lease(harness, label={"name": "ft", "expires": NOW - 30})
+    [row] = status(harness, "ft")["leases"]
+    assert (row["state"], row["destroy_pending"]) == ("expired", True)
+    [row] = status(harness, "ft")["leases"]
+    assert row["state"] == "expired" and "destroy_pending" not in row
+
+
 def test_swept_line_in_human_mode(harness: Harness) -> None:
     add_lease(harness, label={"name": "ft", "expires": NOW - 30})
     _, out, _ = harness.run("status", tty=True)

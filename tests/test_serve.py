@@ -191,6 +191,19 @@ def test_serve_deadline_is_serve_failed(harness: Harness, box: int) -> None:
     assert state.signals == [("j-1", "TERM")]
 
 
+def test_serve_wait_stops_at_the_lease_clock(harness: Harness) -> None:
+    box = add_lease(harness, label={"name": "ft", "expires": NOW + 1200}).id
+    harness.http_status = 503
+    state = harness.box.state(box)
+    start = harness.time.mono_now
+    code, data, err = run_serve(harness, "--on", "ft", "--model", QWEN)
+    assert code == 2 and data["error"] == "serve_failed"
+    assert data["message"] == "/v1/models did not answer before the lease clock ran out at 1200s."
+    assert 1200 <= harness.time.mono_now - start < 1200 + serve.POLL_INTERVAL_S
+    assert "polling /v1/models, up to 20m, the lease clock. Log:" in err
+    assert state.signals == [("j-1", "TERM")]
+
+
 def test_serve_failed_without_log_tail_when_read_fails(harness: Harness, box: int) -> None:
     harness.http_status = 0
     exit_job(harness, box)

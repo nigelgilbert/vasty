@@ -126,14 +126,16 @@ def test_serve_failure_releases_reserved_box(h: Harness) -> None:
 
 
 def test_spending_commands_make_no_balance_or_charges_call(h: Harness) -> None:
-    """`reserve`, `extend`, `run`, `serve` and `tag` leave Vast's billing endpoints alone."""
+    """`reserve`, `extend`, `run --on`, `serve` and `tag` leave Vast's billing endpoints alone.
+
+    An auto-reserved `run` reads charges once for its release's `cost`.
+    """
     orphan = h.provider.add_instance(id=55120)
     h.box.state(orphan.id)
     steps = [
         ["reserve", "--name", "ft", "--ttl", "1h"],
         ["extend", "ft", "--by", "30m"],
         ["run", "--on", "ft", "--", "true"],
-        ["run", "--", "true"],
         ["serve", "--on", "ft", "--model", "Qwen/Qwen3-14B-AWQ"],
         ["tag", "ft", "--group", "exp"],
         ["tag", "i-55120", "--ttl", "30m"],
@@ -142,6 +144,9 @@ def test_spending_commands_make_no_balance_or_charges_call(h: Harness) -> None:
         code, data = run_json(h, *argv)
         assert code == 0, (argv, data)
     assert [call for call, _ in h.provider.calls if call in ("balance", "charges")] == []
+    code, data = run_json(h, "run", "--", "true")
+    assert code == 0 and data["released"] is True, data
+    assert [call for call, _ in h.provider.calls if call in ("balance", "charges")] == ["charges"]
 
 
 def test_post_training_workflow(h: Harness, tmp_path: Any) -> None:

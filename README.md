@@ -151,12 +151,12 @@ Every JSON result except `config`, `completion` and error objects carries `warni
 |---|---|
 | `reserve` | the lease: `lease`, `name`, `owner`, `group`, `state`, `reused`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `expires_at`, `ttl_remaining_s`, `ssh`, `rsync_target`, `ssh_port`, `ports` |
 | `extend` on one lease | `lease`, `previous_expires_at`, `expires_at`, `ttl_remaining_s`. The label's `ttl` keeps the reserve's value |
-| `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending`, and `already_absent` when the lease was already gone. `destroy_pending` is true from the destroy call until a refresh sees the instance gone from the provider listing |
-| bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error`; `extend` adds `previous_expires_at` and `expires_at`; `release` adds `name`, `uptime_s`, `cost`, `jobs`, `destroy_pending` and `already_absent`, true when the lease was already gone, or `name` and `message` when it fails |
+| `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, `destroy_pending` while true, and `already_absent` when the lease was already gone. `destroy_pending` is true from the destroy call until a refresh sees the instance gone from the provider listing |
+| bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error`; `extend` adds `previous_expires_at` and `expires_at`; `release` adds `name`, `uptime_s`, `cost`, `jobs`, `destroy_pending` while true and `already_absent` when the lease was already gone, or `name` and `message` when it fails |
 | `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s` |
-| `status` | `leases`, `totals`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
+| `status` | `leases`, `totals`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`, and `destroy_pending` while true, with the meaning it has on release. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
 | job entry in `status` and `release` `jobs` | `job`, `cmd`, `state`, `exit`, `duration_s`. `state` is `running`, `serving`, `exited`, `killed` or `unknown`. `release` marks live jobs `killed` with a null `exit` and freezes `duration_s`. A job on a history lease stops its `duration_s` at the lease's end. `stop` marks its job `killed` with the job's exit code |
-| attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `expires_at`, `ttl_remaining_s`, `error`. The clock fields are null when `released` is true. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
+| attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `expires_at`, `ttl_remaining_s`, `uptime_s`, `cost`, `error`. The clock fields are null when `released` is true. `uptime_s` and `cost` are null unless `released` is true. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
 | `run --detach` | `lease`, `job`, `gpu`, `price_per_hr`, `log_path`, `expires_at`, `ttl_remaining_s` |
 | `serve` | `lease`, `job`, `model`, `url`, `api_key`, `gpu`, `price_per_hr`, `expires_at`, `ttl_remaining_s` |
 | `stop` | `lease`, `job`, `cmd`, `state`, `exit`, `duration_s`. `stop` sends TERM to the job's process group, waits up to 10s, then KILL and waits up to 5s. JOB is required when several jobs run. A job still live after KILL keeps its `state` and `stop` exits 2 |
@@ -299,12 +299,12 @@ Any machine with the API key sees the same leases, owners and groups. An instanc
 | `running` | Healthy and reachable. |
 | `unreachable` | The provider lists it, but the box stopped responding. The clock keeps running. |
 | `stopped` | The provider stopped the instance, for example at $0 credit. The sweep still destroys it past its clock. |
-| `expired` | The clock ran out. Destroyed or being destroyed. Kept in history for 24h. |
+| `expired` | The clock ran out. Destroyed or being destroyed. `destroy_pending` marks a row Vast still lists. Kept in history for 24h. |
 | `released` | Destroyed by `release`. Kept in history for 24h. |
 | `gone` | Vanished with time left on its clock. Kept in history for 24h. |
 | `orphan` | An instance vasty did not create. No clock until `tag` gives it one. |
 
-`status` with no target is the account view: every owner's active leases, then orphans. `--owner O` and `--group G` filter the active leases. `totals` ignore the filters: `live` and `burn_per_hr` cover the account, and `live_mine` and `burn_per_hr_mine` the caller's leases. `--verbose` adds fields to each row. A named lease shows in any state. A lease with the watchdog running, its destroy key present and the clock file matching the label has no `guard_partial` warning. Otherwise the warning names `watchdog`, `destroy_key` or `clock_file`.
+`status` with no target is the account view: every owner's active leases, then orphans. `--owner O` and `--group G` filter the active leases. `totals` ignore the filters: `live` and `burn_per_hr` cover the account, and `live_mine` and `burn_per_hr_mine` the caller's leases. `live` counts active leases, `pending` ones included, and leaves out orphans. `--verbose` adds fields to each row. A named lease shows in any state. A lease with the watchdog running, its destroy key present and the clock file matching the label has no `guard_partial` warning. Otherwise the warning names `watchdog`, `destroy_key` or `clock_file`.
 
 ## Configuration
 

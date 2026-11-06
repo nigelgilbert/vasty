@@ -18,7 +18,9 @@ the lease, job id, expiry and recovery commands on stderr, leaves the box up
 and propagates. SIGINT forwards `INT` to the job, waits
 up to 10s for it to exit, and exits 130. After the job exits or SIGINT
 arrives, an auto-reserved box is released even when saving the job or the
-10s wait raises, and the exception then propagates. `swept` lists the
+10s wait raises, and the exception then propagates. A box this call
+released reports the release's `uptime_s` and `cost`, read the way
+`release` reads them. `swept` lists the
 entries of every refresh this call made: the first one, the reserve wait, and
 the lost-attach or release refresh.
 """
@@ -55,12 +57,14 @@ from vasty.models import (
     HISTORY_STATES,
     CachedLease,
     Job,
+    ReleaseSummary,
     RunAttachedResult,
     RunDetachedResult,
     SweptEntry,
     WarningItem,
 )
 from vasty.onstart import WORKDIR
+from vasty.output import money
 from vasty.remote import SshTarget
 from vasty.state import EXPIRY_WARN_S, effective_expiry, fix_for
 from vasty.timeutil import format_duration, format_minutes_up, iso
@@ -70,11 +74,12 @@ INTERRUPT_EXIT = 130
 LOST_EXIT = 2
 
 
-def release_quietly(ctx: Context, lease: CachedLease) -> tuple[bool, list[SweptEntry]]:
+def release_quietly(ctx: Context, lease: CachedLease) -> tuple[ReleaseSummary | None, list[SweptEntry]]:
     """Refresh, then release the lease.
 
-    Return whether this call destroyed the lease and the `swept` entries of
-    the refresh. A failure prints one stderr line naming the lease and the fix.
+    Return the release summary when this call destroyed the lease, else None,
+    and the `swept` entries of the refresh. A failure prints one stderr line
+    naming the lease and the fix.
     """
     from vasty.commands.release import release_lease
 
@@ -83,11 +88,13 @@ def release_quietly(ctx: Context, lease: CachedLease) -> tuple[bool, list[SweptE
         snap = engine.refresh(ctx, probe=False)
         swept = list(snap.swept)
         fresh = snap.leases.get(lease.lease, lease)
+        engine.read_charges(ctx, snap)
         summary = release_lease(ctx, snap, fresh)
     except VastyError as err:
         ctx.warn(f"vasty: could not release {lease.lease}: {err.message} Run vasty release {lease.lease}.")
-        return False, swept
-    return not summary.already_absent or any(e.lease == lease.lease and e.ok for e in swept), swept
+        return None, swept
+    released = not summary.already_absent or any(e.lease == lease.lease and e.ok for e in swept)
+    return (summary if released else None), swept
 
 
 @contextmanager
@@ -103,12 +110,12 @@ def _release_on_error(ctx: Context, lease: CachedLease, flag: bool) -> Iterator[
 
 def _released_swept(
     ctx: Context, lease: CachedLease, release_on_exit: bool, swept: list[SweptEntry]
-) -> tuple[bool, list[SweptEntry]]:
+) -> tuple[ReleaseSummary | None, list[SweptEntry]]:
     """Release the lease when `release_on_exit` is set and add its refresh's new entries to `swept`."""
     if not release_on_exit:
-        return False, swept
-    released, more = release_quietly(ctx, lease)
-    return released, merge_swept(swept, more)
+        return None, swept
+    summary, more = release_quietly(ctx, lease)
+    return summary, merge_swept(swept, more)
 
 
 def push_dir(ctx: Context, target: SshTarget, directory: str) -> None:
@@ -225,11 +232,13 @@ def _attach(
     with _release_on_error(ctx, lease, release_on_exit):
         finished = _box_finished(ctx, target, job.id) or now
         save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, finished))
-    released, swept = _released_swept(ctx, lease, release_on_exit, swept)
+    summary, swept = _released_swept(ctx, lease, release_on_exit, swept)
+    released = summary is not None
     expires_at, ttl_remaining_s = _clock(ctx, lease, released)
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=code, duration_s=max(0, finished - started_at),
         released=released, expires_at=expires_at, ttl_remaining_s=ttl_remaining_s,
+        uptime_s=summary.uptime_s if summary else None, cost=summary.cost if summary else None,
         warnings=warnings, swept=swept,
     )
     return Outcome(result, exit_code=code, human=_human(result))
@@ -302,7 +311,7 @@ def _lost(
     expires_at, ttl_remaining_s = _clock(ctx, lease, False)
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=None, duration_s=duration, released=False,
-        expires_at=expires_at, ttl_remaining_s=ttl_remaining_s,
+        expires_at=expires_at, ttl_remaining_s=ttl_remaining_s, uptime_s=None, cost=None,
         warnings=warnings, swept=swept, error=error,
     )
     return Outcome(result, exit_code=LOST_EXIT, human=_human(result))
@@ -330,11 +339,13 @@ def _interrupted(
             code = exit_code = status.exit
             end = status.finished_at or end
             save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, end))
-    released, swept = _released_swept(ctx, lease, release_on_exit, swept)
+    summary, swept = _released_swept(ctx, lease, release_on_exit, swept)
+    released = summary is not None
     expires_at, ttl_remaining_s = _clock(ctx, lease, released)
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=exit_code, duration_s=max(0, end - started_at),
         released=released, expires_at=expires_at, ttl_remaining_s=ttl_remaining_s,
+        uptime_s=summary.uptime_s if summary else None, cost=summary.cost if summary else None,
         warnings=warnings, swept=swept,
     )
     return Outcome(result, exit_code=INTERRUPT_EXIT, human=_human(result))
@@ -349,4 +360,6 @@ def _human(result: RunAttachedResult) -> str:
     else:
         head = f"{result.job} on {result.lease} exited {result.exit} after {took}"
     tail = f"; released {result.lease}" if result.released else f"; {result.lease} stays up"
+    if result.released and result.uptime_s is not None and result.cost is not None:
+        tail += f" after {format_duration(result.uptime_s)} up, ${money(result.cost):.2f}"
     return head + tail

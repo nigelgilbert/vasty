@@ -407,6 +407,8 @@ class RunAttachedResult:
     released: bool
     expires_at: str | None
     ttl_remaining_s: int | None
+    uptime_s: int | None
+    cost: Decimal | None
     warnings: list[WarningItem]
     swept: list[SweptEntry]
     error: str | None = None

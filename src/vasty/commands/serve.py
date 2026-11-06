@@ -11,7 +11,8 @@ endpoint and the key, so `--host`, `--port` and `--api-key` among them raise
 The box's image supplies vLLM. On the box, `serve` checks for `vllm` on PATH
 and raises `vllm_missing` when it is absent. It then starts `vllm serve` as a
 `serve` job on port 8000 with a fresh `vasty-` key, and polls `/v1/models`
-with that key until it answers 200. The job script exports the key as
+with that key until it answers 200, for up to 30m or the lease's remaining
+clock when that is shorter. The job script exports the key as
 `VLLM_API_KEY`, so the `vllm serve` command line carries no secret. With
 `--bind-local` vLLM listens on 127.0.0.1 and the poll runs on the box with
 curl. `serve_failed` carries the job's last log lines with the key redacted.
@@ -227,12 +228,16 @@ def _wait_ready(
     key: str,
     plan: _Plan,
 ) -> None:
-    deadline = ctx.mono() + READY_DEADLINE_S
+    remaining = effective_expiry(lease.label) - ctx.clock.now()
+    by_lease = remaining < READY_DEADLINE_S
+    wait = max(0.0, float(remaining)) if by_lease else READY_DEADLINE_S
+    deadline = ctx.mono() + wait
     tail = f"vasty ssh {lease.lease} -- tail -n 100 /workspace/.vasty/jobs/{job_id}/log"
     log_hint = f"Read the log: {tail}"
+    bound = f"up to {int(wait // 60)}m, the lease clock" if by_lease else f"up to {int(wait // 60)}m"
     ctx.warn(
         f"vasty: {lease.lease} vllm started as {job_id}; polling /v1/models, "
-        f"up to {int(READY_DEADLINE_S // 60)}m. Log: {tail}"
+        f"{bound}. Log: {tail}"
     )
     while True:
         if _ready(ctx, target, url, key, plan.bind_local):
@@ -245,7 +250,10 @@ def _wait_ready(
             message = f"vLLM exited {code} before /v1/models answered."
             raise _serve_failed(ctx, target, lease, job_id, key, message, log_hint, code, plan)
         if ctx.mono() >= deadline:
-            message = f"/v1/models did not answer within {int(READY_DEADLINE_S)}s."
+            if by_lease:
+                message = f"/v1/models did not answer before the lease clock ran out at {int(wait)}s."
+            else:
+                message = f"/v1/models did not answer within {int(wait)}s."
             error = _serve_failed(
                 ctx, target, lease, job_id, key, message, log_hint, None, plan
             )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -45,7 +46,7 @@ def test_run_on_streams_to_stderr_in_json_and_passes_exit(harness: Harness, box:
     assert data == {
         "lease": "l-0000a001", "job": "j-1", "exit": 3, "duration_s": 0, "released": False,
         "expires_at": "2026-10-29T01:50:00Z", "ttl_remaining_s": 3000,
-        "warnings": [], "swept": [], "error": None,
+        "uptime_s": None, "cost": None, "warnings": [], "swept": [], "error": None,
     }
     assert "started python train.py --lr 1e-4" in err
     lease = cached(harness, "l-0000a001")
@@ -489,6 +490,20 @@ def test_auto_run_released_box_reports_no_clock(harness: Harness, reserve: FakeR
     code, data, _ = run(harness, "--", "ls")
     assert code == 0 and data["released"] is True
     assert data["expires_at"] is None and data["ttl_remaining_s"] is None
+
+
+def test_auto_run_released_box_reports_uptime_and_cost(harness: Harness, reserve: FakeReserve) -> None:
+    harness.provider.billed = {1001: Decimal("0.42")}
+    harness.box.state(1001).job_runtime = 120
+    code, data, _ = run(harness, "--", "ls")
+    assert code == 0 and data["released"] is True
+    assert (data["uptime_s"], data["cost"]) == (120, 0.42)
+
+
+def test_kept_box_reports_no_uptime_or_cost(harness: Harness, box: int) -> None:
+    code, data, _ = run(harness, "--on", "ft", "--", "ls")
+    assert code == 0 and data["released"] is False
+    assert data["uptime_s"] is None and data["cost"] is None
 
 
 def test_lost_attach_reports_the_clock(harness: Harness, box: int) -> None:
