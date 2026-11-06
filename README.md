@@ -34,7 +34,7 @@ export VASTY_OWNER=claude-code                         # names the boxes you mak
 vasty config show
 ```
 
-The default image is `vastai/base-image:cuda-12.6.3-auto`. Vasty installs what it needs at boot, which slows the first start. Any image works given Linux, bash, root and apt-get.
+The default image is `vastai/base-image:cuda-12.6.3-auto`. Its interpreter is `python3`, and it has no `python`. Vasty installs what it needs at boot, which slows the first start. Any image works given Linux, bash, root and apt-get.
 
 Run one command on a fresh box:
 
@@ -130,7 +130,7 @@ Errors are one object:
 }
 ```
 
-Exit codes: 0 success, 1 bad input or lookup, 2 provider or box failure. Once a job has started, attached `run` exits with the remote command's code, 2 when the clock or a dropped connection kills the job, and 130 on SIGINT. `run --detach` exits 0 as soon as the job starts. `ssh -- COMMAND` passes through ssh's own exit status.
+Exit codes: 0 success, 1 bad input or lookup, 2 provider or box failure. Once a job has started, attached `run` exits with the remote command's code, 2 when the clock or a dropped connection kills the job, and 130 on SIGINT. `run --detach` exits 0 once the job has started, and its `exit` field holds the code of a job that ended within 2 seconds. `ssh -- COMMAND` passes through ssh's own exit status.
 
 `status` returns a `warnings` array. Each entry has a code, the lease, a message and `fix`, one runnable `vasty` command. An agent can run the fixes for warnings on its own leases that it means to keep. A `guard_partial` warning names the missing layer, so an agent knows how much to trust that box's clock. `status --verbose` lists each layer under `guard_layers`.
 
@@ -157,7 +157,7 @@ Every JSON result except `config`, `completion` and error objects carries `warni
 | `status` | `leases`, `totals`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`, and `destroy_pending` while true, with the meaning it has on release. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
 | job entry in `status` and `release` `jobs` | `job`, `cmd`, `state`, `exit`, `duration_s`. `state` is `running`, `serving`, `exited`, `killed` or `unknown`. `release` marks live jobs `killed` with a null `exit` and freezes `duration_s`. A job on a history lease stops its `duration_s` at the lease's end. `stop` marks its job `killed` with the job's exit code |
 | attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `expires_at`, `ttl_remaining_s`, `uptime_s`, `cost`, `error`. The clock fields are null when `released` is true. `uptime_s` and `cost` are null unless `released` is true. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
-| `run --detach` | `lease`, `job`, `gpu`, `price_per_hr`, `log_path`, `expires_at`, `ttl_remaining_s` |
+| `run --detach` | `lease`, `job`, `state`, `exit`, `gpu`, `price_per_hr`, `log_path`, `expires_at`, `ttl_remaining_s`. `state` and `exit` come from one read 2 seconds after the start: `running` and null while the job runs, `exited` and the code when it has ended |
 | `serve` | `lease`, `job`, `model`, `url`, `api_key`, `gpu`, `price_per_hr`, `expires_at`, `ttl_remaining_s` |
 | `stop` | `lease`, `job`, `cmd`, `state`, `exit`, `duration_s`. `stop` sends TERM to the job's process group, waits up to 10s, then KILL and waits up to 5s. JOB is required when several jobs run. A job still live after KILL keeps its `state` and `stop` exits 2 |
 | `sync` | `lease`, `direction`, `src`, `dest` |
@@ -199,7 +199,7 @@ A bulk command exits with the highest exit code among its failed entries. Parser
 ```sh
 vasty reserve --name ft --gpu A100 --vram 80 --max-price 2.50 --ttl 3h
 vasty sync ft push ./ /workspace/
-vasty run --on ft --detach -- python train.py --config cfg.yaml
+vasty run --on ft --detach -- python3 train.py --config cfg.yaml
 # ... do other work, poll ...
 vasty status ft                  # expiring_with_running_job? then:
 vasty extend ft --by 1h

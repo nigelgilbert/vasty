@@ -4,6 +4,8 @@ Without `--on`, `run` reserves a box with the `ttl` setting, runs the
 command and releases the box when the command exits. `--detach` and `--name`
 leave the box alive. Any exception before the job is saved to the cache
 releases a box this call created. `--on LEASE` reuses a box and leaves it alive.
+`--detach` reads the job once `DETACH_CHECK_S` seconds after the start and
+reports an exit it finds. A failed read reports the job as running.
 
 Every job starts under tmux in `/workspace` and is recorded in the cache. An
 attached run streams the log to stdout in human mode and to stderr in JSON
@@ -72,6 +74,7 @@ from vasty.timeutil import format_duration, format_minutes_up, iso
 INTERRUPT_WAIT_S = 10.0
 INTERRUPT_EXIT = 130
 LOST_EXIT = 2
+DETACH_CHECK_S = 2
 
 
 def release_quietly(ctx: Context, lease: CachedLease) -> tuple[ReleaseSummary | None, list[SweptEntry]]:
@@ -186,10 +189,14 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
 
     if detach:
         log_path = started.log_path or f"{WORKDIR}/.vasty/jobs/{started.id}/log"
+        ctx.sleep(DETACH_CHECK_S)
+        exit_code = _box_exit(ctx, target, started.id)
         expiry = effective_expiry(lease.label)
         detached = RunDetachedResult(
             lease=lease.lease,
             job=started.id,
+            state="running" if exit_code is None else "exited",
+            exit=exit_code,
             gpu=lease.gpu,
             price_per_hr=lease.price_per_hr,
             log_path=log_path,
@@ -201,6 +208,8 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         human = (
             f"Started {started.id} on {lease.lease}. Log: {log_path}\n"
             f"Follow it with: vasty ssh {lease.lease} -- tail -f {log_path}"
+        ) if exit_code is None else (
+            f"{started.id} exited {exit_code} within {DETACH_CHECK_S}s. Log: {log_path}"
         )
         return Outcome(detached, human=human)
     return _attach(ctx, lease, target, started, release_on_exit, warnings, swept)
@@ -256,6 +265,14 @@ def _box_finished(ctx: Context, target: SshTarget, job_id: str) -> int | None:
     """Return the `finished_at` the box recorded for the job, or None when the read fails."""
     try:
         return ctx.box.job_status(target, job_id).finished_at
+    except VastyError:
+        return None
+
+
+def _box_exit(ctx: Context, target: SshTarget, job_id: str) -> int | None:
+    """Return the exit code the box recorded for the job, or None while it runs or when the read fails."""
+    try:
+        return ctx.box.job_status(target, job_id).exit
     except VastyError:
         return None
 

@@ -70,7 +70,7 @@ ROWS: dict[str, Row] = {
         prose=frozenset({"running", "serving", "exited", "killed", "unknown", "release", "stop"}),
     ),
     "attached `run`": Row((RunAttachedResult,), prose=frozenset({"box_unreachable", "lease_expired"})),
-    "`run --detach`": Row((RunDetachedResult,)),
+    "`run --detach`": Row((RunDetachedResult,), prose=frozenset({"running", "exited"})),
     "`serve`": Row((ServeResult,)),
     "`stop`": Row((StopResult,), prose=frozenset({"stop"})),
     "`sync`": Row((SyncResult,)),

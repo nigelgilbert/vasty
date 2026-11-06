@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from fakes import Harness, add_lease, make_offer
 
+from vasty.commands import run
 from vasty.labels import parse
 from vasty.models import CreateRequest, Instance, Label
 from vasty.provider import build_offer_query
@@ -161,7 +162,7 @@ def test_post_training_workflow(h: Harness, tmp_path: Any) -> None:
     assert code == 0, job
     code, ext = run_json(h, "extend", "ft", "--by", "1h")
     assert code == 0, ext
-    assert ext["ttl_remaining_s"] == 4 * 3600
+    assert ext["ttl_remaining_s"] == 4 * 3600 - run.DETACH_CHECK_S
     code, rel = run_json(h, "release", "ft")
     assert code == 0, rel
     assert rel["jobs"][0]["job"] == "j-1" and "id" not in rel["jobs"][0]

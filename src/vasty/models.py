@@ -389,6 +389,8 @@ class TagResult:
 class RunDetachedResult:
     lease: str
     job: str
+    state: str
+    exit: int | None
     gpu: str | None
     price_per_hr: Decimal
     log_path: str

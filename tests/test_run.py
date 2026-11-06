@@ -98,12 +98,54 @@ def test_run_detach_returns_job_immediately(harness: Harness, box: int) -> None:
     code, data, _ = run(harness, "--on", "ft", "--detach", "--", "python", "train.py")
     assert code == 0
     assert data == {
-        "lease": "l-0000a001", "job": "j-1", "gpu": "RTX 3090", "price_per_hr": 0.22,
+        "lease": "l-0000a001", "job": "j-1", "state": "running", "exit": None,
+        "gpu": "RTX 3090", "price_per_hr": 0.22,
         "log_path": "/workspace/.vasty/jobs/j-1/log", "expires_at": "2026-10-29T01:50:00Z",
-        "ttl_remaining_s": 3000, "warnings": [], "swept": [],
+        "ttl_remaining_s": 2998, "warnings": [], "swept": [],
     }
     assert attached == []
     assert cached(harness, "l-0000a001").jobs[0].state == "running"
+
+
+def _exit_at_once(harness: Harness, monkeypatch: pytest.MonkeyPatch, code: int) -> None:
+    real_status = harness.box.job_status
+
+    def job_status(target: SshTarget, job_id: str) -> Job:
+        job = real_status(target, job_id)
+        job.exit, job.state = code, "exited"
+        return job
+
+    monkeypatch.setattr(harness.box, "job_status", job_status)
+
+
+def test_run_detach_reports_an_instant_exit(
+    harness: Harness, box: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _exit_at_once(harness, monkeypatch, 127)
+    code, data, _ = run(harness, "--on", "ft", "--detach", "--", "python", "train.py")
+    assert code == 0
+    assert (data["state"], data["exit"]) == ("exited", 127)
+
+
+def test_run_detach_human_line_names_an_instant_exit(
+    harness: Harness, box: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _exit_at_once(harness, monkeypatch, 127)
+    code, out, _ = harness.run("run", "--on", "ft", "--detach", "--", "python", "train.py", tty=True)
+    assert code == 0
+    assert out.strip() == "j-1 exited 127 within 2s. Log: /workspace/.vasty/jobs/j-1/log"
+
+
+def test_run_detach_failed_read_reports_running(
+    harness: Harness, box: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def job_status(target: SshTarget, job_id: str) -> Job:
+        raise VastyError("box_unreachable", "no answer", "retry")
+
+    monkeypatch.setattr(harness.box, "job_status", job_status)
+    code, data, _ = run(harness, "--on", "ft", "--detach", "--", "python", "train.py")
+    assert code == 0
+    assert (data["state"], data["exit"]) == ("running", None)
 
 
 def test_auto_run_wait_hint_names_run(harness: Harness) -> None:
