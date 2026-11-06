@@ -68,7 +68,8 @@ from vasty.models import (
 from vasty.onstart import WORKDIR
 from vasty.output import money
 from vasty.remote import SshTarget
-from vasty.state import EXPIRY_WARN_S, effective_expiry, fix_for
+from vasty.state import EXPIRING_CODES, EXPIRY_WARN_S, effective_expiry, fix_for
+from vasty.state import lease_warnings as state_warnings
 from vasty.timeutil import format_duration, format_minutes_up, iso
 
 INTERRUPT_WAIT_S = 10.0
@@ -243,6 +244,7 @@ def _attach(
         save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, finished))
     summary, swept = _released_swept(ctx, lease, release_on_exit, swept)
     released = summary is not None
+    warnings = _expiry_after_job(warnings, lease, released, ctx.clock.now())
     expires_at, ttl_remaining_s = _clock(ctx, lease, released)
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=code, duration_s=max(0, finished - started_at),
@@ -251,6 +253,17 @@ def _attach(
         warnings=warnings, swept=swept,
     )
     return Outcome(result, exit_code=code, human=_human(result))
+
+
+def _expiry_after_job(
+    warnings: list[WarningItem], lease: CachedLease, released: bool, now: int
+) -> list[WarningItem]:
+    """Replace the lease's expiry warning with one read after the job ended. Drop it when the box was released."""
+    kept = [w for w in warnings if w.lease != lease.lease or w.code not in EXPIRING_CODES]
+    if released:
+        return kept
+    fresh = [w for w in state_warnings(lease, now) if w.code in EXPIRING_CODES]
+    return merge_warnings(kept, fresh)
 
 
 def _clock(ctx: Context, lease: CachedLease, released: bool) -> tuple[str | None, int | None]:

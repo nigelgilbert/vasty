@@ -440,6 +440,7 @@ def _sweep(
         _copy_row(lease, inst, label)
         lease.state = "expired"
         lease.expired_at = effective_expiry(label)
+        lease.destroyed_by = "sweep"
         lease.history_since = None
         freeze_jobs(lease, now)
         mark_destroy_sent(lease, now, error)
@@ -462,6 +463,7 @@ def _to_history(lease: CachedLease, now: int) -> None:
         elif now > effective_expiry(lease.label):
             lease.state = "expired"
             lease.expired_at = effective_expiry(lease.label)
+            lease.destroyed_by = "watchdog"
         else:
             lease.state = "gone"
     _clear_destroy(lease)
@@ -689,6 +691,7 @@ def refresh(ctx: Context, probe: bool = True) -> Snapshot:
                 lease.state = "pending"
                 lease.history_since = None
                 lease.expired_at = None
+                lease.destroyed_by = None
             running = (inst.actual_status or "").strip().lower() == "running"
             if running and lease.running_at is None:
                 lease.running_at = now

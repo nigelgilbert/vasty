@@ -169,7 +169,13 @@ def test_run_warns_when_clock_is_short(harness: Harness) -> None:
     code, data, err = run(harness, "--on", "ft", "--", "ls")
     assert code == 0
     assert "vasty: lease l-0000a001 expires in 3m. Extend it: vasty extend l-0000a001 --by 1h" in err
-    assert [w["code"] for w in data["warnings"]] == ["expiring_with_running_job"]
+    assert [w["code"] for w in data["warnings"]] == ["expiring_soon"]
+
+
+def test_auto_run_release_drops_the_expiry_warning(harness: Harness, reserve: FakeReserve) -> None:
+    code, data, _ = run(harness, "--ttl", "2m", "--", "ls")
+    assert code == 0 and data["released"] is True
+    assert [w["code"] for w in data["warnings"]] == []
 
 
 def test_run_on_orphan_is_unmanaged(harness: Harness) -> None:

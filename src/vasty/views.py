@@ -194,6 +194,7 @@ def lease_view(
         jobs=[job_view(job, now, lease) for job in lease.jobs],
         log_tail=log_tail,
         destroy_pending=True if lease.destroy_pending else None,
+        destroyed_by=lease.destroyed_by if lease.state == "expired" else None,
         verbose=lease_verbose(lease) if verbose else None,
     )
 

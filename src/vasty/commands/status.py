@@ -36,13 +36,12 @@ from vasty.models import (
 )
 from vasty.output import money
 from vasty.remote import LOG_LINES
-from vasty.state import LIVE_JOB_STATES, make_warning
+from vasty.state import EXPIRING_CODES, LIVE_JOB_STATES, make_warning
 from vasty.targeting import has_target, resolve_target
 from vasty.timeutil import format_duration
 
 DASH = "—"
 WARN_MARK = "⚠ "
-EXPIRING_CODES = frozenset({"expiring_soon", "expiring_with_running_job"})
 SHORT_SKIP = frozenset({"python", "python3", "uv", "uvx", "run", "bash", "sh", "exec", "env"})
 
 

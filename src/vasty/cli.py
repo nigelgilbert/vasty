@@ -162,7 +162,7 @@ def _hardware_flags(p: argparse.ArgumentParser, h: dict[str, str]) -> None:
 
 
 def _reserve_flags(p: argparse.ArgumentParser, h: dict[str, str]) -> None:
-    p.add_argument("--name", help="lease name, unique per owner; default: none")
+    p.add_argument("--name", help=h.get("name", "lease name, unique per owner; default: none"))
     p.add_argument("--group", help="group label for the lease; default: none")
     p.add_argument("--owner", help=h["owner"])
     p.add_argument("--ttl", metavar="DURATION", help=h["ttl"])
@@ -201,7 +201,10 @@ def build_parser() -> Parser:
                    help="return once the job starts and leave the box up")
     p.add_argument("--sync", dest="sync_dir", metavar="DIR",
                    help="push DIR's contents into /workspace before the command; default: none")
-    _reserve_flags(p, reserve_help)
+    _reserve_flags(p, {
+        **reserve_help,
+        "name": "lease name, unique per owner; the box stays up after the command; default: none",
+    })
 
     p = sub.add_parser("serve", parents=[out], help="serve a model behind an OpenAI endpoint",
                        usage="%(prog)s [options] --model MODEL [-- VLLM_ARGS...]",

@@ -139,6 +139,16 @@ def test_no_selector_is_invalid(fleet: Harness) -> None:
     assert exc.value.code == "invalid_arguments"
 
 
+def test_empty_owner_is_invalid(fleet: Harness) -> None:
+    ctx = fleet.context()
+    snap = engine.refresh(ctx)
+    for argv in (["release", "--owner", ""], ["extend", "--owner", "", "--by", "5m"]):
+        with pytest.raises(VastyError) as exc:
+            resolve_target(ctx, snap, parse(argv), write=True)
+        assert exc.value.code == "invalid_arguments"
+        assert exc.value.message == "No target given."
+
+
 def test_lease_with_selector_is_invalid(fleet: Harness) -> None:
     ctx = fleet.context()
     snap = engine.refresh(ctx)

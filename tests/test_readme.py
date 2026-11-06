@@ -63,7 +63,7 @@ ROWS: dict[str, Row] = {
     "`tag`": Row((TagResult, TagEntry)),
     "`status`": Row(
         (StatusResult, LeaseView),
-        prose=frozenset({"pending", "released", "expired", "gone", "[]"}),
+        prose=frozenset({"pending", "released", "expired", "gone", "[]", "sweep", "watchdog"}),
     ),
     "job entry in `status` and `release` `jobs`": Row(
         (JobView,),

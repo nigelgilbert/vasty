@@ -203,6 +203,8 @@ class CachedLease:
     """When the last destroy call was sent."""
     history_since: int | None = None
     expired_at: int | None = None
+    destroyed_by: str | None = None
+    """`sweep` when a vasty sweep sent the destroy, `watchdog` when the box left the listing past its clock with no sweep call."""
     last_provider_error: str | None = None
     startup_interrupted: bool = False
     adopted: bool = False
@@ -278,6 +280,7 @@ class LeaseView:
     jobs: list[JobView]
     log_tail: list[str] | None = field(default=None, metadata=OMIT_NONE)
     destroy_pending: bool | None = field(default=None, metadata=OMIT_NONE)
+    destroyed_by: str | None = field(default=None, metadata=OMIT_NONE)
     verbose: dict[str, Any] | None = field(default=None, metadata=OMIT_NONE)
 
 

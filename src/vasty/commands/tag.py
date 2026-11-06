@@ -212,10 +212,13 @@ def adopt(
     lease.adopted = True
     lease.guard_missing = list(GUARD_LAYERS)
     lease.state = derive_state(row.actual_status, None, False)
+    running = (row.actual_status or "").strip().lower() == "running"
+    if running:
+        lease.running_at = now
     try:
         _guard_steps(ctx, lease)
         lease.reachable_at = now
-        if (row.actual_status or "").strip().lower() == "running":
+        if running:
             lease.state = "running"
         _record_miss(ctx, lease)
     except (VastyError, OSError) as err:

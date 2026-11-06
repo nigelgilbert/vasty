@@ -330,6 +330,21 @@ def test_swept_lease_shows_destroy_pending_until_the_listing_drops_it(harness: H
     assert row["state"] == "expired" and "destroy_pending" not in row
 
 
+def test_swept_lease_names_the_sweep(harness: Harness) -> None:
+    add_lease(harness, label={"name": "ft", "expires": NOW - 30})
+    [row] = status(harness, "ft")["leases"]
+    assert (row["state"], row["destroyed_by"]) == ("expired", "sweep")
+
+
+def test_lease_gone_past_its_clock_names_the_watchdog(harness: Harness) -> None:
+    row = add_lease(harness, label={"name": "ft", "expires": NOW + 30})
+    harness.run("status")
+    del harness.provider.instances[row.id]
+    harness.time.advance(60)
+    [row] = status(harness, "ft")["leases"]
+    assert (row["state"], row["destroyed_by"]) == ("expired", "watchdog")
+
+
 def test_swept_line_in_human_mode(harness: Harness) -> None:
     add_lease(harness, label={"name": "ft", "expires": NOW - 30})
     _, out, _ = harness.run("status", tty=True)

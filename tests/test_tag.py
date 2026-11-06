@@ -201,6 +201,7 @@ def test_adopt_orphan_writes_label_clock_and_key(h: Harness) -> None:
     lease = h.context().cache.load().leases["l-abababab"]
     assert lease.adopted is True
     assert lease.state == "running"
+    assert lease.running_at == NOW
     assert data["warnings"] == []
 
 

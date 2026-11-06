@@ -154,7 +154,7 @@ Every JSON result except `config`, `completion` and error objects carries `warni
 | `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, and `already_absent` when the lease was already gone |
 | bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error`; `extend` adds `previous_expires_at` and `expires_at`; `release` adds `name`, `uptime_s`, `cost`, `jobs` and `already_absent` when the lease was already gone, or `name` and `message` when it fails |
 | `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s` |
-| `status` | `leases`, `totals`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`, and `destroy_pending` while true, from the destroy call until a refresh sees the instance gone from the provider listing. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
+| `status` | `leases`, `totals`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`, and `destroy_pending` while true, from the destroy call until a refresh sees the instance gone from the provider listing. An `expired` lease adds `destroyed_by`, `sweep` or `watchdog`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
 | job entry in `status` and `release` `jobs` | `job`, `cmd`, `state`, `exit`, `duration_s`. `state` is `running`, `serving`, `exited`, `killed` or `unknown`. `release` marks live jobs `killed` with a null `exit` and freezes `duration_s`. A job on a history lease stops its `duration_s` at the lease's end. `stop` marks its job `killed` with the job's exit code |
 | attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `expires_at`, `ttl_remaining_s`, `uptime_s`, `cost`, `error`. `expires_at` holds the box's final clock when `released` is true, and `ttl_remaining_s` is null. `uptime_s` and `cost` are null unless `released` is true. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
 | `run --detach` | `lease`, `job`, `state`, `exit`, `gpu`, `price_per_hr`, `log_path`, `expires_at`, `ttl_remaining_s`. `state` and `exit` come from one read 2 seconds after the start: `running` and null while the job runs, `exited` and the code when it has ended |
@@ -279,7 +279,7 @@ Per-box spend is `max_price` times `ttl`, since the clock ends the box. Storage 
 
 For runway, read `credit` over `burn_per_hr`. When the balance or charges are unavailable, those totals are null and `status` warns with `spend_unavailable`.
 
-A lease's `cost` sums the Vast charge rows available for its instance. A box adopted with `tag`, or an orphan, can show partial history. On `release`, `cost` sums the charge rows posted so far. Vast posts charges in arrears, so `status <id>` later reads the rows posted since. Charges are cached 60 s. `cost` reads `0.0` when Vast has posted a zero charge row. It is null when no charge row is available, and `status` warns `spend_unavailable` when the read failed. `price_per_hr` times `uptime_s` approximates it.
+A lease's `cost` sums the Vast charge rows available for its instance. A box adopted with `tag`, or an orphan, can show partial history. On `release`, `cost` sums the charge rows posted so far. Vast posts charges in arrears, so `status <id>` later reads the rows posted since. Charges are cached 60 s. `cost` reads `0.0` when Vast has posted a zero charge row. It is null when no charge row is available, and `status` warns `spend_unavailable` when the read failed. `price_per_hr` times `uptime_s` approximates it. Storage and bandwidth bill outside the rent, so on a short box `cost` can read several times that product.
 
 ## State
 
@@ -289,7 +289,7 @@ The lease lives on the provider, in the instance's label:
 vasty:v1;lease=l-7f3a2b1c;name=ft;owner=claude-code;created=1793235840;ttl=10800;expires=1793247000
 ```
 
-Any machine with the API key sees the same leases, owners and groups. An instance without a `vasty:` label is an **orphan**: shown in `status`, left alone until `tag ID --ttl 30m` adopts it or `release ID` destroys it. `release` takes the typed `i-` id as the confirmation and destroys the box without a prompt. One local file, `~/.local/state/vasty/leases.json`, caches label data plus job records. Losing it loses job history for destroyed boxes and nothing else.
+Any machine with the API key sees the same leases, owners and groups. An instance without a `vasty:` label is an **orphan**: shown in `status`, left alone until `tag ID --ttl 30m` adopts it under a new `l-` id or `release ID` destroys it. `release` takes the typed `i-` id as the confirmation and destroys the box without a prompt. One local file, `~/.local/state/vasty/leases.json`, caches label data plus job records. Losing it loses job history for destroyed boxes and nothing else.
 
 ### Lease states
 
@@ -299,7 +299,7 @@ Any machine with the API key sees the same leases, owners and groups. An instanc
 | `running` | Healthy and reachable. |
 | `unreachable` | The provider lists it, but the box stopped responding. The clock keeps running. |
 | `stopped` | The provider stopped the instance, for example at $0 credit. The sweep still destroys it past its clock. |
-| `expired` | The clock ran out. Destroyed or being destroyed. `destroy_pending` marks a row Vast still lists. Kept in history for 24h. |
+| `expired` | The clock ran out. Destroyed or being destroyed. `destroy_pending` marks a row Vast still lists. `destroyed_by` reads `sweep` when a vasty sweep sent the destroy and `watchdog` when the box left Vast's listing past its clock with no sweep call. Kept in history for 24h. |
 | `released` | Destroyed by `release`. Kept in history for 24h. |
 | `gone` | Vanished with time left on its clock. Kept in history for 24h. |
 | `orphan` | An instance vasty did not create. No clock until `tag` gives it one. |

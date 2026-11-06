@@ -238,6 +238,9 @@ def startup_failed(lease: CachedLease) -> bool:
     return lease.startup_exit is None and lease.startup_interrupted
 
 
+EXPIRING_CODES = frozenset({"expiring_soon", "expiring_with_running_job"})
+
+
 def lease_warnings(lease: CachedLease, now: int) -> list[WarningItem]:
     """Return the per-lease warnings with their fixes.
 
