@@ -18,6 +18,7 @@ Read @docs/principles.md before proposing or reviewing a change. Reviewers work 
 ## Workflow
 
 - Stay on the named task or defect list. Raise anything else as a one-line note.
+- Changes to the API surface, meaning verbs, flags, config keys, JSON fields, error codes, exit codes and hint text, go to Nigel as options. Implement one after Nigel picks.
 - Name branches `<type>/<description>`.
 - Squash merge PRs with `gh pr merge N --squash`.
 - Delete loop outputs, validation reports and test plans from the branch before squash merging.

@@ -1,10 +1,11 @@
 # Principles
 
-Vasty does two things: provisioning comes with a TTL and cleans up after itself, and the API doesn't suck. Measure every change against those two lines.
+Vasty does two things: provisioning comes with a TTL and cleans up after itself, and the API is thin and tuned for agents. Every verb, flag and field costs an agent tokens on each call, so the surface stays small and each piece earns its place with a live caller. Measure every change against those two lines.
 
 ## Build for the caller in front of you
 
 - Name the caller, input or failing test that needs a change today. Without one, drop it.
+- This applies to the API surface first. Less code is easier to verify and build on. Prefer a deletion to an addition.
 - Make the smallest change that serves that caller. Reuse the local, branch or helper already in reach.
 - Ground scope in a real scenario from a live run. Cut speculative items.
 

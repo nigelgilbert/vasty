@@ -16,6 +16,7 @@ Brief for any reviewer of a vasty plan or diff: swarm validate, Codex, Astra, or
 - A doc that disagrees with the code. Judge the code on its merits and update the doc line in the fix.
 - Cosmetic changes outside the defect or task in scope.
 - Test hardening with no regression behind it.
+- Items on the decided list below. Reopen one only with a new argument, and name it.
 
 ## Each finding
 
@@ -29,3 +30,16 @@ Brief for any reviewer of a vasty plan or diff: swarm validate, Codex, Astra, or
 - Run the full validate swarm on a branch's first review pass. Later passes get a single code review.
 - Astra is billed. Run it only when Nigel asks.
 - A finding list is input to a decision. Accept, decline or defer each one by name.
+
+## Decided
+
+Nigel moves items on and off this list.
+
+- `ttl_s` is the reserve ttl and stays fixed after `extend`. `ttl_remaining_s` is the clock.
+- `cost` reads 0.0 at release until Vast posts the charge. No final-cost field.
+- `expiring_soon` fires on a box with no running job. The fix costs no command.
+- No sort or cheapest flag. `--max-price` reaches the cheapest offer.
+- No `config unset`. `config set` prints the file to edit.
+- No warning for a job that will outlast the clock. That needs a runtime estimate.
+- The 5 minute no SSH cutoff and the 10 minute loading cutoff stay.
+- Removed flags stay removed. Each hint names the replacement.
