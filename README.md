@@ -140,7 +140,7 @@ Warning codes: `expiring_soon`, `expiring_with_running_job`, `box_unreachable`, 
 | Warning | Fix |
 |---|---|
 | `expiring_soon`, `expiring_with_running_job` | `vasty extend LEASE --by TTL`, with the lease's reserve ttl; the message rounds time left up to the minute |
-| `box_unreachable` | `vasty status LEASE`; on a `pending` lease that has not answered SSH 5 minutes after Vast reports it `running`, `vasty release LEASE` |
+| `box_unreachable` | `vasty status LEASE`; from a failed `extend`, the same `extend` command, since the clock is unchanged; on a `pending` lease that has not answered SSH 5 minutes after Vast reports it `running`, `vasty release LEASE` |
 
 When `reserve`, or `run` or `serve` without `--on`, creates a box, it warns `idle_box_available` for up to three idle leases that would have fit.
 

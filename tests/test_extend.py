@@ -305,8 +305,26 @@ def test_unreachable_lease_changes_nothing(h: Harness) -> None:
     h.box.state(row.id).reachable = False
     code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
     assert (code, data["error"]) == (2, "box_unreachable")
+    assert data["hint"] == "vasty extend l-0000a001 --by 30m"
     assert label_of(h, row.id).expires == NOW + 600
     assert h.box.clock_writes == []
+
+
+def test_unreachable_to_hint_repeats_the_flag_as_given(h: Harness) -> None:
+    row = add_lease(h, label={"expires": NOW + 600})
+    h.run("status")
+    h.box.state(row.id).reachable = False
+    _, data = run_json(h, "extend", "l-0000a001", "--to", "1h30m")
+    assert data["hint"] == "vasty extend l-0000a001 --to 1h30m"
+
+
+def test_failed_clock_write_hint_repeats_the_extend(h: Harness) -> None:
+    row = add_lease(h, label={"expires": NOW + 600})
+    h.run("status")
+    h.box.state(row.id).clock_write_fails = True
+    code, data = run_json(h, "extend", "l-0000a001", "--by", "30m")
+    assert (code, data["error"]) == (2, "box_unreachable")
+    assert data["hint"] == "vasty extend l-0000a001 --by 30m"
 
 
 def test_never_answered_lease_is_pending(h: Harness) -> None:
@@ -545,6 +563,8 @@ def test_bulk_reports_per_lease_errors_with_highest_exit(h: Harness) -> None:
         "lease": "l-0000a002", "ok": False, "error": "box_unreachable",
         "previous_expires_at": "2026-10-29T01:10:00Z", "expires_at": "2026-10-29T01:10:00Z",
     }
+    fixes = {(w["code"], w["lease"]): w["fix"] for w in data["warnings"]}
+    assert fixes[("box_unreachable", "l-0000a002")] == "vasty extend l-0000a002 --by 10m"
 
 
 def test_bulk_skips_other_owners(h: Harness) -> None:

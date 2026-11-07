@@ -13,7 +13,10 @@ released since `refresh` returns `lease_expired` and keeps its cache entry.
 A lease is writable when the refresh's probe reached it. `extend` checks the
 snapshot copy and again the copy reloaded under the lock. A `pending` lease
 that SSH has never answered returns `lease_pending`. An `unreachable` or
-`stopped` lease returns `box_unreachable` and changes nothing.
+`stopped` lease returns `box_unreachable` and changes nothing. The hint on
+that error, and the `fix` on the warning a bulk result carries for it, name the
+same `extend` command, since the clock is unchanged and the box may answer the
+next probe.
 
 Each extended lease gets a detached `vasty sweep --follow` for its new expiry.
 
@@ -59,11 +62,17 @@ class Change:
     by: int | None = None
     to: int | None = None
     after: int | None = None
+    flags: tuple[str, ...] = ()
+    """The `--by` or `--to` flag and its value as given, for the retry hint."""
 
     def at(self, now: int) -> Change:
         if self.after is None:
             return self
-        return Change(to=now + self.after)
+        return Change(to=now + self.after, flags=self.flags)
+
+    def again(self, lease: str) -> str:
+        """Return the same `extend` command for `lease`."""
+        return shlex.join(["vasty", "extend", lease, *self.flags])
 
 
 def parse_change(args: argparse.Namespace) -> Change:
@@ -72,8 +81,8 @@ def parse_change(args: argparse.Namespace) -> Change:
     if len(given) != 1:
         raise invalid("extend takes exactly one of --by or --to.", "vasty extend LEASE --by 30m")
     if given[0] == "by":
-        return Change(by=parse_duration(args.by))
-    return Change(after=parse_duration(args.to))
+        return Change(by=parse_duration(args.by), flags=("--by", args.by))
+    return Change(after=parse_duration(args.to), flags=("--to", args.to))
 
 
 def new_expiry(lease: CachedLease, change: Change) -> int:
@@ -228,6 +237,25 @@ def _both_failed(
     )
 
 
+def _with_retry_hint(err: VastyError, change: Change, lease: str) -> VastyError:
+    """Return `err` with the same `extend` command as its hint when it is `box_unreachable`."""
+    if err.code != "box_unreachable":
+        return err
+    return VastyError(err.code, err.message, change.again(lease), err.details)
+
+
+def _retry_warnings(
+    warnings: list[WarningItem], errors: Mapping[str, VastyError], change: Change
+) -> list[WarningItem]:
+    """Replace each failed lease's `box_unreachable` warning with one whose fix is the same `extend`."""
+    failed = {lease: err for lease, err in errors.items() if err.code == "box_unreachable"}
+    kept = [w for w in warnings if not (w.code == "box_unreachable" and w.lease in failed)]
+    return kept + [
+        WarningItem("box_unreachable", lease, err.message, change.again(lease))
+        for lease, err in failed.items()
+    ]
+
+
 def _spawn(ctx: Context, leases: list[CachedLease], warnings: list[WarningItem]) -> None:
     """Start a follower for each extended lease. Add a warning for each spawn that fails."""
     for lease in leases:
@@ -258,14 +286,17 @@ def _single(
     ctx: Context, snap: engine.Snapshot, lease: CachedLease, change: Change
 ) -> Outcome:
     now = snap.now
-    check_writable(lease)
-    with ctx.cache.lock():
-        lease = _reload(ctx.cache.load().leases, lease)
-        previous = effective_expiry(lease.label)
-        expires = new_expiry(lease, change)
-        if expires <= now:
-            raise _past(lease.lease)
-        apply(ctx, lease, expires)
+    try:
+        check_writable(lease)
+        with ctx.cache.lock():
+            lease = _reload(ctx.cache.load().leases, lease)
+            previous = effective_expiry(lease.label)
+            expires = new_expiry(lease, change)
+            if expires <= now:
+                raise _past(lease.lease)
+            apply(ctx, lease, expires)
+    except VastyError as err:
+        raise _with_retry_hint(err, change, lease.lease) from err
     warnings = views.warnings_for([lease], now)
     warnings += snap.warnings
     _spawn(ctx, [lease], warnings)
@@ -330,7 +361,7 @@ def _bulk(
                     "expires_at": iso(effective_expiry(lease.label)),
                 },
             ))
-    warnings = views.warnings_for(leases, now)
+    warnings = _retry_warnings(views.warnings_for(leases, now), errors, change)
     warnings += snap.warnings
     _spawn(ctx, [lease for lease in leases if lease.lease not in errors], warnings)
     exit_code = max((EXIT_CODES[err.code] for err in errors.values()), default=0)
