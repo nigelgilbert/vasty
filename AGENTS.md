@@ -9,19 +9,16 @@ Read @docs/principles.md before proposing or reviewing a change. Reviewers work 
 - Ask questions that make sense without reading the code.
 - Use consistent units and numbers across one explanation.
 - When you disagree, say so once with the reason, then follow Nigel's call. Change position only on a new argument, and name it.
-- Treat a decided question as decided. Don't reopen it or redesign around it.
 - Apply a recommendation Nigel left unopposed. Skip confirmation on a cut that is plainly warranted.
 - Answer a message that reads as a question. Act once Nigel confirms.
-- Explain the options before implementing a fix to a design problem.
 - Call the project vasty.
 
 ## Workflow
 
 - Stay on the named task or defect list. Raise anything else as a one-line note.
-- Changes to the API surface, meaning verbs, flags, config keys, JSON fields, error codes, exit codes and hint text, go to Nigel as options. Implement one after Nigel picks.
+- A design problem or a change to the API surface gets options first. Implement one after Nigel picks.
 - Name branches `<type>/<description>`.
-- Squash merge PRs with `gh pr merge N --squash`.
-- Delete loop outputs, validation reports and test plans from the branch before squash merging.
+- Squash merge PRs with `gh pr merge N --squash`, after deleting loop outputs, validation reports and test plans from the branch.
 - Write PR descriptions that stand alone, with no pointers to internal docs.
 - Don't propose a merge while fix items remain on the branch.
 - Check for a live run before starting one. Live runs share one account.
