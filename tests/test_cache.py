@@ -67,9 +67,9 @@ def test_missing_file_is_empty(cache: Cache) -> None:
 
 def test_round_trip(cache: Cache) -> None:
     lease = full_lease()
-    cache.save(CacheData(leases={lease.lease: lease}, cached_at=1793236500))
+    cache.save(CacheData(leases={lease.lease: lease}, charges_at=1793236500))
     data = cache.load()
-    assert data.cached_at == 1793236500
+    assert data.charges_at == 1793236500
     assert not data.rebuilt
     assert data.leases == {lease.lease: lease}
     restored = data.leases[lease.lease]
@@ -97,7 +97,7 @@ def test_round_trip_billing(cache: Cache) -> None:
 
 def test_billing_fields_default_when_absent(cache: Cache) -> None:
     cache.path.parent.mkdir(parents=True)
-    cache.path.write_text(json.dumps({"version": 1, "cached_at": None, "leases": {}}))
+    cache.path.write_text(json.dumps({"version": 1, "leases": {}}))
     data = cache.load()
     assert not data.rebuilt
     assert (data.balance, data.credit, data.balance_at, data.charges_start) == (
@@ -107,10 +107,10 @@ def test_billing_fields_default_when_absent(cache: Cache) -> None:
 
 def test_file_shape(cache: Cache) -> None:
     lease = full_lease()
-    cache.save(CacheData(leases={lease.lease: lease}, cached_at=5))
+    cache.save(CacheData(leases={lease.lease: lease}, charges_at=5))
     body = json.loads(cache.path.read_text())
     assert body["version"] == 1
-    assert body["cached_at"] == 5
+    assert body["charges_at"] == 5
     entry = body["leases"][lease.lease]
     assert entry["price_per_hr"] == "2.4012"
     assert entry["ports"] == {"22": 41022, "8000": 41080}
@@ -125,7 +125,7 @@ def test_defaults_fill_absent_fields(cache: Cache) -> None:
         "label": {"lease": "l-1", "owner": "o", "created": 1, "ttl": 60},
         "future_field": 1,
     }
-    cache.path.write_text(json.dumps({"version": 1, "cached_at": None, "leases": {"l-1": minimal}}))
+    cache.path.write_text(json.dumps({"version": 1, "leases": {"l-1": minimal}}))
     data = cache.load()
     assert not data.rebuilt
     assert data.leases["l-1"] == CachedLease(
@@ -143,7 +143,7 @@ def test_defaults_fill_absent_fields(cache: Cache) -> None:
         "[]",
         json.dumps({"version": 2, "leases": {}}),
         json.dumps({"version": 1, "leases": []}),
-        json.dumps({"version": 1, "cached_at": "yesterday", "leases": {}}),
+        json.dumps({"version": 1, "charges_at": "yesterday", "leases": {}}),
         json.dumps({"version": 1, "leases": {"l-1": {"lease": "l-1"}}}),
         json.dumps({"version": 1, "leases": {"l-1": {
             "lease": "l-1", "instance_id": "7", "state": "pending",
@@ -165,7 +165,7 @@ def test_corrupt_file_rebuilds(cache: Cache, text: str) -> None:
     data = cache.load()
     assert data.rebuilt
     assert data.leases == {}
-    assert data.cached_at is None
+    assert data.charges_at is None
 
 
 def test_non_utf8_file_rebuilds(cache: Cache) -> None:
@@ -208,10 +208,10 @@ def test_lock_is_reentrant_and_nests_with_load_save(cache: Cache) -> None:
     with cache.lock():
         with cache.lock():
             data = cache.load()
-            data.cached_at = 9
+            data.charges_at = 9
             cache.save(data)
         assert not _try_flock(lock_path)
-        assert cache.load().cached_at == 9
+        assert cache.load().charges_at == 9
     assert _try_flock(lock_path)
 
 
@@ -240,33 +240,33 @@ def test_lock_blocks_other_threads(cache: Cache) -> None:
 
 
 def test_save_replaces_by_rename(cache: Cache) -> None:
-    cache.save(CacheData(cached_at=1))
+    cache.save(CacheData(charges_at=1))
     first = os.stat(cache.path).st_ino
-    cache.save(CacheData(cached_at=2))
+    cache.save(CacheData(charges_at=2))
     assert os.stat(cache.path).st_ino != first
-    assert cache.load().cached_at == 2
+    assert cache.load().charges_at == 2
     assert sorted(p.name for p in cache.path.parent.iterdir()) == ["leases.json", "leases.json.lock"]
     assert os.stat(cache.path).st_mode & 0o077 == 0
 
 
 def test_failed_replace_keeps_old_file(cache: Cache, monkeypatch: pytest.MonkeyPatch) -> None:
-    cache.save(CacheData(cached_at=1))
+    cache.save(CacheData(charges_at=1))
 
     def fail(src: str, dst: object) -> None:
         raise OSError("disk full")
 
     monkeypatch.setattr(os, "replace", fail)
     with pytest.raises(OSError):
-        cache.save(CacheData(cached_at=2))
+        cache.save(CacheData(charges_at=2))
     monkeypatch.undo()
-    assert cache.load().cached_at == 1
+    assert cache.load().charges_at == 1
     assert sorted(p.name for p in cache.path.parent.iterdir()) == ["leases.json", "leases.json.lock"]
 
 
 def test_unserializable_value_leaves_file_alone(cache: Cache) -> None:
-    cache.save(CacheData(cached_at=1))
+    cache.save(CacheData(charges_at=1))
     bad = full_lease()
     bad.gpu = object()  # type: ignore[assignment]
     with pytest.raises(TypeError):
         cache.save(CacheData(leases={"l-1": bad}))
-    assert cache.load().cached_at == 1
+    assert cache.load().charges_at == 1

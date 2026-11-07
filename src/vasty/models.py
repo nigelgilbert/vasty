@@ -74,6 +74,8 @@ class Instance:
     runtype: str | None = None
     cuda_max_good: float | None = None
     """The highest CUDA version the host driver supports."""
+    start_date: int | None = None
+    """When the instance started, in epoch seconds."""
 
 
 @dataclass(frozen=True)
@@ -201,6 +203,8 @@ class CachedLease:
     """When the last destroy call was sent."""
     history_since: int | None = None
     expired_at: int | None = None
+    destroyed_by: str | None = None
+    """`sweep` when a vasty sweep sent the destroy, `watchdog` when the box left the listing past its clock with no sweep call."""
     last_provider_error: str | None = None
     startup_interrupted: bool = False
     adopted: bool = False
@@ -270,12 +274,14 @@ class LeaseView:
     price_per_hr: Decimal
     cost: Decimal | None
     uptime_s: int | None
+    ttl_s: int | None
     expires_at: str | None
     ttl_remaining_s: int | None
     busy: bool | None
     jobs: list[JobView]
     log_tail: list[str] | None = field(default=None, metadata=OMIT_NONE)
     destroy_pending: bool | None = field(default=None, metadata=OMIT_NONE)
+    destroyed_by: str | None = field(default=None, metadata=OMIT_NONE)
     verbose: dict[str, Any] | None = field(default=None, metadata=OMIT_NONE)
 
 
@@ -285,6 +291,7 @@ class Totals:
     credit: Decimal | None
     charges_today: Decimal | None
     burn_per_hr: Decimal
+    burn_per_hr_mine: Decimal
     live: int
     live_mine: int
 
@@ -295,7 +302,6 @@ class StatusResult:
     warnings: list[WarningItem]
     totals: Totals
     swept: list[SweptEntry]
-    cached_at: str | None
 
 
 @dataclass
@@ -310,8 +316,9 @@ class ReserveResult:
     gpus: int
     vram_gb: float | None
     price_per_hr: Decimal
-    expires_at: str | None
-    ttl_remaining_s: int | None
+    ttl_s: int
+    expires_at: str
+    ttl_remaining_s: int
     ssh: str | None
     rsync_target: str | None
     ssh_port: int | None
@@ -354,7 +361,6 @@ class ReleaseSummary:
     uptime_s: int | None
     cost: Decimal | None
     jobs: list[JobView]
-    destroy_pending: bool | None = field(default=True, metadata=OMIT_NONE)
     already_absent: bool | None = field(default=None, metadata=OMIT_NONE)
     warnings: list[WarningItem] | None = field(default=None, metadata=OMIT_NONE)
     swept: list[SweptEntry] | None = field(default=None, metadata=OMIT_NONE)
@@ -387,8 +393,14 @@ class TagResult:
 class RunDetachedResult:
     lease: str
     job: str
+    state: str
+    exit: int | None
+    gpu: str | None
+    price_per_hr: Decimal
     log_path: str
+    ttl_s: int
     expires_at: str | None
+    ttl_remaining_s: int | None
     warnings: list[WarningItem]
     swept: list[SweptEntry]
 
@@ -399,7 +411,14 @@ class RunAttachedResult:
     job: str | None
     exit: int | None
     duration_s: int | None
+    gpu: str | None
+    price_per_hr: Decimal
     released: bool
+    ttl_s: int
+    expires_at: str | None
+    ttl_remaining_s: int | None
+    uptime_s: int | None
+    cost: Decimal | None
     warnings: list[WarningItem]
     swept: list[SweptEntry]
     error: str | None = None
@@ -412,7 +431,10 @@ class ServeResult:
     model: str
     url: str
     api_key: str
+    gpu: str | None
+    price_per_hr: Decimal
     expires_at: str | None
+    ttl_remaining_s: int | None
     warnings: list[WarningItem]
     swept: list[SweptEntry]
 

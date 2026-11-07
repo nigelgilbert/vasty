@@ -182,5 +182,5 @@ def merge_swept(*groups: list[SweptEntry]) -> list[SweptEntry]:
 def lease_warnings(ctx: Context, snap: Snapshot, lease: CachedLease, now: int) -> list[WarningItem]:
     """Return the refresh's account warnings plus the lease's own warnings."""
     return merge_warnings(
-        snap.warnings, warnings_for([lease], now, ctx.settings.warn_before_expiry)
+        snap.warnings, warnings_for([lease], now)
     )

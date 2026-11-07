@@ -158,7 +158,7 @@ def _clean_env(home: Path) -> dict[str, str]:
         (["vasty", "completion", "z"], ["zsh"]),
         (["vasty", "extend", "--by", ""], []),
         (["vasty", "tag", "--no"], []),
-        (["vasty", "status", "--ca"], ["--cached"]),
+        (["vasty", "status", "--ow"], ["--owner"]),
     ],
 )
 def test_bash_completes_from_cache(

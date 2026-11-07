@@ -5,6 +5,8 @@
 # watchdog when curl is absent, destroy_key when the env lacks the key or the last conclusive key check was refused.
 # The key check is one authenticated GET of its own row at start and hourly; 401 or 403 marks the key bad,
 # a 2xx marks it good, any other result keeps the last answer. A new process seeds that answer from the file.
+# The GET proves the key reads its row; the delete scope is assumed from Vast's container key.
+# A 401 or 403 from the DELETE at expiry also marks the key bad, so a read-only key shows up in status.
 # VASTY_ROOT, VASTY_API, VASTY_POLL, VASTY_REDESTROY, VASTY_KEYCHECK, VASTY_CURL and VASTY_MAX_LOOPS override the defaults for tests.
 R=${VASTY_ROOT:-/workspace/.vasty}
 API=${VASTY_API:-https://console.vast.ai/api/v0}
@@ -82,14 +84,20 @@ while :; do
       log "clock expired at $exp; no destroy key"
     elif [ "$done_at" -gt 0 ] && [ $((now - done_at)) -lt "$AGAIN" ]; then
       :
-    elif "$CURL" -fsS -m 30 -X DELETE -H "Authorization: Bearer $key" "$API/instances/$id/" >/dev/null; then
+    elif code=$("$CURL" -fsS -m 30 -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $key" "$API/instances/$id/"); then
       log "clock expired at $exp; destroy accepted"
       done_at=$now
       back=0
     else
+      case $code in
+      401 | 403)
+        key_state=bad
+        publish
+        ;;
+      esac
       back=$((back ? back * 2 : 2))
       [ "$back" -gt 60 ] && back=60
-      log "clock expired at $exp; destroy failed; retry in ${back}s"
+      log "clock expired at $exp; destroy failed; HTTP $code; retry in ${back}s"
       s=$back
     fi
     ;;

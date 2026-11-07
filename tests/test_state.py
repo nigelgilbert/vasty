@@ -134,65 +134,85 @@ def codes(items: list[Any]) -> list[str]:
 
 
 def test_expiring_soon() -> None:
-    [w] = lease_warnings(lease(label=label(expires=NOW + 180)), NOW, WARN)
+    [w] = lease_warnings(lease(label=label(expires=NOW + 180)), NOW)
     assert (w.code, w.lease, w.message, w.fix) == ("expiring_soon", "l-8b12", "3m left", "vasty extend l-8b12 --by 30m")
 
 
 def test_expiring_fix_extends_by_the_reserve_ttl_and_rounds_time_up() -> None:
-    [w] = lease_warnings(lease(label=label(ttl=2700, expires=NOW + 170)), NOW, WARN)
+    [w] = lease_warnings(lease(label=label(ttl=2700, expires=NOW + 170)), NOW)
     assert (w.message, w.fix) == ("3m left", "vasty extend l-8b12 --by 45m")
 
 
 @pytest.mark.parametrize("remaining, text", [(60, "1m"), (174, "3m"), (1, "1m"), (240, "4m")])
 def test_expiring_message_rounds_up(remaining: int, text: str) -> None:
-    [w] = lease_warnings(lease(label=label(expires=NOW + remaining)), NOW, WARN)
+    [w] = lease_warnings(lease(label=label(expires=NOW + remaining)), NOW)
     assert w.message == f"{text} left"
 
 
 @pytest.mark.parametrize("remaining", [0, WARN + 1, 3600])
 def test_no_expiring_soon_outside_window(remaining: int) -> None:
-    assert lease_warnings(lease(label=label(expires=NOW + remaining)), NOW, WARN) == []
+    assert lease_warnings(lease(label=label(expires=NOW + remaining)), NOW) == []
 
 
 def test_expiring_soon_at_threshold() -> None:
-    assert codes(lease_warnings(lease(label=label(expires=NOW + WARN)), NOW, WARN)) == ["expiring_soon"]
+    assert codes(lease_warnings(lease(label=label(expires=NOW + WARN)), NOW)) == ["expiring_soon"]
 
 
 def test_expiring_soon_only_on_running() -> None:
-    assert lease_warnings(lease("pending", label=label(expires=NOW + 60)), NOW, WARN) == []
+    assert lease_warnings(lease("pending", label=label(expires=NOW + 60)), NOW) == []
 
 
 @pytest.mark.parametrize("job_state", ["running", "serving"])
 def test_expiring_with_running_job_replaces_expiring_soon(job_state: str) -> None:
     item = lease(label=label(expires=NOW + 120), jobs=[job("j-1", job_state), job("j-2", "exited")])
-    [w] = lease_warnings(item, NOW, WARN)
+    [w] = lease_warnings(item, NOW)
     assert w.code == "expiring_with_running_job"
     assert w.message == "2m left, j-1 running"
     assert w.fix == "vasty extend l-8b12 --by 30m"
 
 
 def test_box_unreachable() -> None:
-    [w] = lease_warnings(lease("unreachable", reachable_at=NOW - 360), NOW, WARN)
+    [w] = lease_warnings(lease("unreachable", reachable_at=NOW - 360), NOW)
     assert (w.code, w.message, w.fix) == ("box_unreachable", "no answer for 6m", "vasty status l-8b12")
 
 
 def test_box_unreachable_never_answered() -> None:
-    [w] = lease_warnings(lease("unreachable"), NOW, WARN)
+    [w] = lease_warnings(lease("unreachable"), NOW)
     assert w.message == "no answer"
+
+
+def test_pending_box_without_ssh_after_running_is_unreachable() -> None:
+    item = lease("pending", label=label(), running_at=NOW - 420)
+    [w] = lease_warnings(item, NOW)
+    assert (w.code, w.message, w.fix) == (
+        "box_unreachable", "no SSH answer for 7m since Vast reported running", "vasty release l-8b12"
+    )
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"running_at": NOW - 299},
+        {"running_at": None},
+        {"running_at": NOW - 900, "reachable_at": NOW - 600},
+    ],
+)
+def test_pending_box_inside_ssh_wait_or_answered_has_no_warning(kw: dict[str, Any]) -> None:
+    assert lease_warnings(lease("pending", label=label(), **kw), NOW) == []
 
 
 def test_unreachable_lease_gets_no_expiring_soon() -> None:
     item = lease("unreachable", label=label(expires=NOW + 60), reachable_at=NOW - 60)
-    assert codes(lease_warnings(item, NOW, WARN)) == ["box_unreachable"]
+    assert codes(lease_warnings(item, NOW)) == ["box_unreachable"]
 
 
 def test_guard_partial() -> None:
-    [w] = lease_warnings(lease(guard_missing=["watchdog"], reachable_at=NOW), NOW, WARN)
+    [w] = lease_warnings(lease(guard_missing=["watchdog"], reachable_at=NOW), NOW)
     assert (w.code, w.message, w.fix) == ("guard_partial", "watchdog not running or without curl", "vasty release l-8b12")
 
 
 def test_guard_partial_names_every_layer() -> None:
-    [w] = lease_warnings(lease(guard_missing=["clock_file", "destroy_key"], reachable_at=NOW), NOW, WARN)
+    [w] = lease_warnings(lease(guard_missing=["clock_file", "destroy_key"], reachable_at=NOW), NOW)
     assert w.message == "destroy key missing, clock file out of sync"
 
 
@@ -202,40 +222,40 @@ ALL_LAYERS = ["watchdog", "destroy_key", "clock_file"]
 def test_unprobed_pending_lease_is_partial_without_warning() -> None:
     item = lease("pending", guard_missing=list(ALL_LAYERS))
     assert guard(item) == ("partial", ALL_LAYERS)
-    assert lease_warnings(item, NOW, WARN) == []
+    assert lease_warnings(item, NOW) == []
 
 
 def test_probed_pending_lease_with_missing_layers_warns() -> None:
     item = lease("pending", guard_missing=["destroy_key"], reachable_at=NOW - 30)
-    assert codes(lease_warnings(item, NOW, WARN)) == ["guard_partial"]
+    assert codes(lease_warnings(item, NOW)) == ["guard_partial"]
 
 
 def test_label_miss_from_another_machine_counts_as_observed() -> None:
     item = lease("pending", label=label(miss=["watchdog"]), guard_missing=["watchdog"])
-    [w] = lease_warnings(item, NOW, WARN)
+    [w] = lease_warnings(item, NOW)
     assert (w.code, w.message) == ("guard_partial", "watchdog not running or without curl")
 
 
 def test_adopted_lease_without_answer_warns() -> None:
     item = lease("pending", guard_missing=list(ALL_LAYERS), adopted=True)
-    assert codes(lease_warnings(item, NOW, WARN)) == ["guard_partial"]
+    assert codes(lease_warnings(item, NOW)) == ["guard_partial"]
 
 
 def test_probed_lease_with_no_missing_layers_is_full() -> None:
     item = lease("running", guard_missing=[], reachable_at=NOW)
     assert guard(item) == ("full", [])
-    assert lease_warnings(item, NOW, WARN) == []
+    assert lease_warnings(item, NOW) == []
 
 
 def test_startup_failed_on_non_zero_exit() -> None:
-    [w] = lease_warnings(lease(startup_started=True, startup_exit=2), NOW, WARN)
+    [w] = lease_warnings(lease(startup_started=True, startup_exit=2), NOW)
     assert w.code == "startup_failed"
     assert w.message == "startup exited 2"
     assert w.fix == "vasty ssh l-8b12 -- cat /workspace/.vasty/startup.log"
 
 
 def test_startup_failed_on_restart_cut_off() -> None:
-    [w] = lease_warnings(lease(startup_started=True, startup_interrupted=True), NOW, WARN)
+    [w] = lease_warnings(lease(startup_started=True, startup_interrupted=True), NOW)
     assert (w.code, w.message) == ("startup_failed", "startup cut off by a restart")
 
 
@@ -245,26 +265,26 @@ def test_startup_failed_on_restart_cut_off() -> None:
 )
 def test_no_startup_failed(started: bool, exit: int | None, interrupted: bool) -> None:
     item = lease(startup_started=started, startup_exit=exit, startup_interrupted=interrupted)
-    assert lease_warnings(item, NOW, WARN) == []
+    assert lease_warnings(item, NOW) == []
 
 
 @pytest.mark.parametrize("state", ["expired", "released", "gone"])
 def test_history_leases_carry_no_warnings(state: LeaseState) -> None:
     item = lease(state, label=label(expires=NOW - 60), guard_missing=["watchdog"], startup_exit=1,
                  jobs=[job("j-1", "running"), job("j-2", "serving")])
-    assert lease_warnings(item, NOW, WARN) == []
+    assert lease_warnings(item, NOW) == []
 
 
 def test_warnings_combine_in_order() -> None:
     item = lease(label=label(expires=NOW + 60), guard_missing=["destroy_key"], startup_exit=1,
                  reachable_at=NOW)
-    assert codes(lease_warnings(item, NOW, WARN)) == ["expiring_soon", "guard_partial", "startup_failed"]
+    assert codes(lease_warnings(item, NOW)) == ["expiring_soon", "guard_partial", "startup_failed"]
 
 
 def test_fixes_use_the_lease_id_and_shell_quote_it() -> None:
     odd = "l-x'; rm -rf ~"
     item = lease(label=label(lease=odd, name="eval-2", expires=NOW + 60))
-    [w] = lease_warnings(item, NOW, WARN)
+    [w] = lease_warnings(item, NOW)
     assert w.lease == odd
     assert w.fix == "vasty extend 'l-x'\"'\"'; rm -rf ~' --by 30m"
 
@@ -304,18 +324,18 @@ def test_expiring_fix_uses_the_ttl(code: str) -> None:
 ])
 def test_clock_skew_warning_past_threshold(skew: int | None, codes_out: list[str]) -> None:
     item = lease(reachable_at=NOW, clock_skew=skew)
-    assert codes(lease_warnings(item, NOW, WARN)) == codes_out
+    assert codes(lease_warnings(item, NOW)) == codes_out
 
 
 def test_clock_skew_message_names_the_direction() -> None:
-    [w] = lease_warnings(lease(reachable_at=NOW, clock_skew=-300), NOW, WARN)
+    [w] = lease_warnings(lease(reachable_at=NOW, clock_skew=-300), NOW)
     assert w.message == "box clock 5m behind the provider"
-    [w] = lease_warnings(lease(reachable_at=NOW, clock_skew=300), NOW, WARN)
+    [w] = lease_warnings(lease(reachable_at=NOW, clock_skew=300), NOW)
     assert w.message == "box clock 5m ahead of the provider"
 
 
 def test_clock_skew_unknown_warning() -> None:
-    [w] = lease_warnings(lease(reachable_at=NOW, clock_skew_unknown=True), NOW, WARN)
+    [w] = lease_warnings(lease(reachable_at=NOW, clock_skew_unknown=True), NOW)
     assert (w.code, w.message) == ("clock_skew_unknown", "the probe read no box time")
 
 
@@ -357,8 +377,8 @@ def test_busy(state: LeaseState, jobs: list[str], expected: bool | None) -> None
 
 def settings(**kw: Any) -> Settings:
     base: dict[str, Any] = {
-        "owner": "claude", "api_key_env": "VAST_API_KEY", "ssh_key": None, "ttl": 1800, "run_ttl": 1800,
-        "max_price": Decimal("1.00"), "warn_before_expiry": WARN, "disk": 50, "gpus": 1, "image": "img:1",
+        "owner": "claude", "ssh_key": None, "ttl": 1800,
+        "max_price": Decimal("1.00"), "disk": 50, "gpus": 1, "image": "img:1",
     }
     base.update(kw)
     return Settings(**base)

@@ -8,6 +8,7 @@ from typing import Any
 
 from fakes import NOW, START, Harness, add_lease
 
+from vasty import views
 from vasty.errors import VastyError
 from vasty.models import Instance, Job
 
@@ -42,7 +43,7 @@ def test_release_returns_summary_and_marks_cache(harness: Harness) -> None:
     assert data["name"] == "trainer"
     assert data["uptime_s"] == 4620
     assert data["cost"] is None
-    assert data["destroy_pending"] is True
+    assert "destroy_pending" not in data
     assert "already_absent" not in data
     assert data["jobs"] == [
         {"job": "j-1", "cmd": "python train.py", "state": "exited", "exit": 0, "duration_s": 5400},
@@ -106,6 +107,15 @@ def test_release_freezes_killed_job_duration(harness: Harness) -> None:
         assert json.loads(out)["leases"][0]["jobs"] == [entry]
 
 
+def test_history_job_duration_stops_at_the_lease_end(harness: Harness) -> None:
+    add_lease(harness)
+    harness.run("status")
+    lease = cached(harness, "l-0000a001")
+    lease.state, lease.history_since = "released", NOW + 426
+    job = Job(id="j-1", cmd="train", started_at=NOW - 60, exit=None, state="running")
+    assert views.job_view(job, NOW + 20_000, lease).duration_s == 486
+
+
 def test_release_while_loading_reports_null_uptime(harness: Harness) -> None:
     add_lease(harness, label={"created": NOW - 1200}, actual_status="loading")
     code, data, _ = release(harness, "l-0000a001")
@@ -150,7 +160,7 @@ def test_release_freezes_uptime_while_destroy_pending(harness: Harness) -> None:
     harness.run("status")
     harness.time.advance(118)
     code, data, _ = release(harness, "l-0000a001")
-    assert (code, data["uptime_s"], data["destroy_pending"]) == (0, 118, True)
+    assert (code, data["uptime_s"]) == (0, 118)
     harness.time.advance(60)
     _, out, _ = harness.run("status", "l-0000a001")
     [row] = json.loads(out)["leases"]
@@ -204,7 +214,6 @@ def test_release_after_failed_sweep_destroy_sends_destroy(harness: Harness) -> N
     code, data, _ = release(harness, "l-0000a001")
     assert code == 0
     assert harness.provider.destroyed == [row.id]
-    assert data["destroy_pending"] is True
     assert "already_absent" not in data
     assert [s["ok"] for s in data["swept"]] == [False]
     lease = cached(harness, "l-0000a001")
@@ -218,7 +227,6 @@ def test_release_of_released_lease_still_listed_resends_destroy(harness: Harness
     code, data, _ = release(harness, "l-0000a001")
     assert code == 0
     assert harness.provider.destroyed == [row.id, row.id]
-    assert data["destroy_pending"] is True
     assert "already_absent" not in data
     lease = cached(harness, "l-0000a001")
     assert (lease.state, lease.destroy_attempts) == ("released", 2)
@@ -228,10 +236,9 @@ def test_release_unreachable_lease(harness: Harness) -> None:
     row = add_lease(harness)
     harness.run("status")
     harness.box.state(row.id).reachable = False
-    code, data, _ = release(harness, "l-0000a001")
+    code, _, _ = release(harness, "l-0000a001")
     assert code == 0
     assert harness.provider.destroyed == [row.id]
-    assert data["destroy_pending"] is True
 
 
 def test_release_failed_destroy_is_provider_error(harness: Harness) -> None:
@@ -275,9 +282,9 @@ def test_release_reports_unreadable_label_on_reread(harness: Harness) -> None:
     assert code == 2
     assert data["error"] == "provider_error"
     assert data["message"] == "Lease l-0000a001's label is unreadable."
-    assert data["hint"] == f"vasty release i-{row.id} --yes"
+    assert data["hint"] == f"vasty release i-{row.id}"
     assert harness.provider.destroyed == []
-    code, data, _ = release(harness, f"i-{row.id}", "--yes")
+    code, data, _ = release(harness, f"i-{row.id}")
     assert code == 0
     assert harness.provider.destroyed == [row.id]
 
@@ -293,19 +300,10 @@ def test_release_by_instance_id_of_managed_lease(harness: Harness) -> None:
 # Orphans.
 
 
-def test_orphan_release_non_tty_needs_yes(harness: Harness) -> None:
-    harness.provider.add_instance(id=55120)
-    code, data, _ = release(harness, "i-55120")
-    assert code == 1
-    assert data["error"] == "confirmation_required"
-    assert "--yes" in data["hint"]
-    assert harness.provider.destroyed == []
-
-
-def test_orphan_release_with_yes(harness: Harness) -> None:
+def test_orphan_release_by_instance_id(harness: Harness) -> None:
     harness.provider.add_instance(id=55120)
     harness.provider.billed = {55120: Decimal("0.44")}
-    code, data, _ = release(harness, "i-55120", "--yes")
+    code, data, _ = release(harness, "i-55120")
     assert code == 0
     assert harness.provider.destroyed == [55120]
     assert data["lease"] == "i-55120"
@@ -314,34 +312,18 @@ def test_orphan_release_with_yes(harness: Harness) -> None:
     assert data["jobs"] == []
 
 
-def test_orphan_release_tty_prompts(harness: Harness) -> None:
+def test_orphan_release_tty_destroys_without_a_prompt(harness: Harness) -> None:
     harness.provider.add_instance(id=55120)
-    code, out, err = release(harness, "i-55120", tty=True, stdin="y\n")
+    code, out, err = release(harness, "i-55120", tty=True)
     assert code == 0
-    assert "Destroy i-55120" in err
+    assert err == ""
     assert harness.provider.destroyed == [55120]
     assert "i-55120 released" in out
 
 
-def test_orphan_release_tty_declined(harness: Harness) -> None:
-    harness.provider.add_instance(id=55120)
-    code, _, err = release(harness, "i-55120", tty=True, stdin="n\n")
-    assert code == 1
-    assert "confirmation_required" in err
-    assert harness.provider.destroyed == []
-
-
-def test_orphan_release_tty_with_yes_skips_prompt(harness: Harness) -> None:
-    harness.provider.add_instance(id=55120)
-    code, _, err = release(harness, "i-55120", "--yes", tty=True)
-    assert code == 0
-    assert "Destroy" not in err
-    assert harness.provider.destroyed == [55120]
-
-
 def test_unreadable_label_releases_by_instance_id(harness: Harness) -> None:
     harness.provider.add_instance(id=777, label="vasty:v9;lease=l-1")
-    code, data, _ = release(harness, "i-777", "--yes")
+    code, data, _ = release(harness, "i-777")
     assert code == 0
     assert harness.provider.destroyed == [777]
     assert data["lease"] == "i-777"
@@ -364,7 +346,8 @@ def test_bulk_release_group(harness: Harness) -> None:
     first = data["results"][0]
     assert first["ok"] is True and first["error"] is None
     assert first["name"] == "eval-0"
-    assert set(first) >= {"uptime_s", "cost", "jobs", "destroy_pending"}
+    assert set(first) >= {"uptime_s", "cost", "jobs"}
+    assert "destroy_pending" not in first
     assert sorted(harness.provider.destroyed) == [a.id, b.id]
     assert other.id in harness.provider.instances and keep.id in harness.provider.instances
     assert 55120 in harness.provider.instances
@@ -381,7 +364,7 @@ def test_bulk_release_reports_failed_entries(harness: Harness) -> None:
     add_lease(harness, "l-0000a001")
     b = add_lease(harness, "l-0000a002")
     harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
-    code, data, _ = release(harness, "--all")
+    code, data, _ = release(harness, "--owner", "claude")
     assert code == 2
     first, second = data["results"]
     assert (first["ok"], first["error"]) == (False, "provider_error")
@@ -391,6 +374,6 @@ def test_bulk_release_reports_failed_entries(harness: Harness) -> None:
 
 def test_bulk_release_human(harness: Harness) -> None:
     add_lease(harness, label={"name": "ft"})
-    code, out, _ = harness.run("release", "--all", "--plain")
+    code, out, _ = harness.run("release", "--owner", "claude", tty=True)
     assert code == 0
     assert "l-0000a001 (ft) released" in out

@@ -56,21 +56,21 @@ ROWS: dict[str, Row] = {
         # Keys from the entry data in extend.py and from `_entry_data` and the failure entry in release.py.
         data_keys=frozenset({
             "previous_expires_at", "expires_at",
-            "name", "uptime_s", "cost", "jobs", "destroy_pending", "already_absent", "message",
+            "name", "uptime_s", "cost", "jobs", "already_absent", "message",
         }),
         prose=frozenset({"extend", "release"}),
     ),
     "`tag`": Row((TagResult, TagEntry)),
     "`status`": Row(
         (StatusResult, LeaseView),
-        prose=frozenset({"pending", "released", "expired", "gone", "[]"}),
+        prose=frozenset({"pending", "released", "expired", "gone", "[]", "sweep", "watchdog"}),
     ),
     "job entry in `status` and `release` `jobs`": Row(
         (JobView,),
         prose=frozenset({"running", "serving", "exited", "killed", "unknown", "release", "stop"}),
     ),
     "attached `run`": Row((RunAttachedResult,), prose=frozenset({"box_unreachable", "lease_expired"})),
-    "`run --detach`": Row((RunDetachedResult,)),
+    "`run --detach`": Row((RunDetachedResult,), prose=frozenset({"running", "exited"})),
     "`serve`": Row((ServeResult,)),
     "`stop`": Row((StopResult,), prose=frozenset({"stop"})),
     "`sync`": Row((SyncResult,)),

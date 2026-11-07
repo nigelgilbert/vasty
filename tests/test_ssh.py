@@ -47,9 +47,8 @@ def test_missing_ssh(harness: Harness, box: int) -> None:
     assert json.loads(out)["error"] == "dependency_missing"
 
 
-@pytest.mark.parametrize("flag", ["--config", "--startup"])
-def test_ssh_rejects_stdin_flags(harness: Harness, box: int, flag: str) -> None:
-    code, out, _ = harness.run("ssh", "ft", flag, "-")
+def test_ssh_rejects_startup_stdin(harness: Harness, box: int) -> None:
+    code, out, _ = harness.run("ssh", "ft", "--startup", "-")
     assert code == 1
     assert json.loads(out)["error"] == "invalid_arguments"
 

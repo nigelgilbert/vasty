@@ -1,7 +1,7 @@
 """`vasty serve`.
 
 Without `--on`, `serve` resolves settings the same way `reserve` does and
-reserves a box with `run_ttl` (or `--ttl`). With `--on` it serves on that box.
+reserves a box with the `ttl` setting. With `--on` it serves on that box.
 `--model` is any name or box path `vllm serve` accepts.
 
 Tokens after `--` are appended to the `vllm serve` argv. `serve` owns the
@@ -11,13 +11,16 @@ endpoint and the key, so `--host`, `--port` and `--api-key` among them raise
 The box's image supplies vLLM. On the box, `serve` checks for `vllm` on PATH
 and raises `vllm_missing` when it is absent. It then starts `vllm serve` as a
 `serve` job on port 8000 with a fresh `vasty-` key, and polls `/v1/models`
-with that key until it answers 200. The job script exports the key as
+with that key until it answers 200, for up to 30m or the lease's remaining
+clock when that is shorter, read once when the wait starts. The job script exports the key as
 `VLLM_API_KEY`, so the `vllm serve` command line carries no secret. With
 `--bind-local` vLLM listens on 127.0.0.1 and the poll runs on the box with
 curl. `serve_failed` carries the job's last log lines with the key redacted.
 When those lines hold `Error 804`, its hint names a serve on a new box at
 `--cuda 13`.
-Any failure after the reserve releases a box this call created.
+Any failure after the reserve releases a box this call created, and its error
+carries `lease` and `destroyed` in its details. `destroyed` is true when the
+release destroyed the box or Vast no longer lists it.
 """
 
 from __future__ import annotations
@@ -44,7 +47,7 @@ from vasty.config import VLLM_IMAGE
 from vasty.context import Context
 from vasty.errors import VastyError, invalid
 from vasty.models import SERVE_PORT, CachedLease, Job, ServeResult, WarningItem
-from vasty.remote import LOG_LINES, SshTarget
+from vasty.remote import LOG_LINES, SshTarget, tail_lines
 from vasty.state import effective_expiry
 from vasty.timeutil import iso
 
@@ -53,7 +56,10 @@ POLL_INTERVAL_S = 5.0
 HTTP_TIMEOUT_S = 5.0
 PREFLIGHT_TIMEOUT_S = 30.0
 PREFLIGHT_COMMAND = "command -v vllm"
-LOG_TAIL_BYTES = 64 * 1024
+RELEASED_HINT = (
+    "This call releases its box, and details.destroyed reads whether it is gone. "
+    "Read details.log_tail for the cause, then serve on a new box."
+)
 # vLLM flags that `serve` sets itself.
 OWNED_FLAGS = ("--host", "--port", "--api-key")
 
@@ -75,9 +81,8 @@ def server_argv(model: str, host: str, extra: list[str]) -> list[str]:
 
 
 def redact_tail(lines: list[str], key: str) -> list[str]:
-    """Replace `key` with `<redacted>` and keep the last `LOG_TAIL_BYTES` bytes of the lines."""
-    text = "\n".join(line.replace(key, "<redacted>") for line in lines)
-    return text.encode("utf-8")[-LOG_TAIL_BYTES:].decode("utf-8", errors="ignore").splitlines()
+    """Replace `key` with `<redacted>` and return `tail_lines` of the result."""
+    return tail_lines("\n".join(line.replace(key, "<redacted>") for line in lines), LOG_LINES)
 
 
 def probe_command(key: str) -> str:
@@ -121,9 +126,8 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     created = False
     if auto:
         from vasty.commands import reserve
-        from vasty.commands.run import auto_ttl
 
-        reserved = reserve.reserve_lease(ctx, args, snap, ttl=auto_ttl(ctx), wait=True)
+        reserved = reserve.reserve_lease(ctx, args, snap, ttl=ctx.settings.ttl, verb="serve")
         lease = reserved.lease
         warnings = list(reserved.result.warnings)
         swept = merge_swept(swept, reserved.result.swept)
@@ -132,16 +136,26 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
         lease = pick_lease(ctx, snap, args.on)
 
     try:
-        result = _bring_up(ctx, snap, lease, plan)
-    except BaseException:
+        result = _bring_up(ctx, snap, lease, plan, created)
+    except BaseException as err:
         if created:
             from vasty.commands.run import release_quietly
 
-            release_quietly(ctx, lease)
+            summary, _ = release_quietly(ctx, lease)
+            if isinstance(err, VastyError):
+                reserve.name_lease(err, lease, summary is not None or _unlisted(ctx, lease))
         raise
     result.swept = swept
     result.warnings = merge_warnings(warnings, lease_warnings(ctx, snap, lease, ctx.clock.now()))
     return Outcome(result, human=_human(result))
+
+
+def _unlisted(ctx: Context, lease: CachedLease) -> bool:
+    """Return True when Vast no longer lists the lease's instance; a failed read returns False."""
+    try:
+        return ctx.provider.get_instance(lease.instance_id) is None
+    except (VastyError, OSError):
+        return False
 
 
 def _public_url(ctx: Context, snap: engine.Snapshot, lease: CachedLease) -> str:
@@ -158,7 +172,9 @@ def _public_url(ctx: Context, snap: engine.Snapshot, lease: CachedLease) -> str:
     return f"http://{host}:{port}/v1"
 
 
-def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Plan) -> ServeResult:
+def _bring_up(
+    ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Plan, created: bool
+) -> ServeResult:
     target = engine.ssh_target(lease)
     url = f"http://127.0.0.1:{SERVE_PORT}/v1" if plan.bind_local else _public_url(ctx, snap, lease)
     _preflight(ctx, target, lease, plan)
@@ -173,14 +189,18 @@ def _bring_up(ctx: Context, snap: engine.Snapshot, lease: CachedLease, plan: _Pl
     )
     started = ctx.box.start_job(target, job, command)
     save_lease(ctx, lease, lambda record: put_job(record, started))
-    _wait_ready(ctx, target, lease, started.id, url, key, plan)
+    _wait_ready(ctx, target, lease, started.id, url, key, plan, created)
+    expiry = effective_expiry(lease.label)
     return ServeResult(
         lease=lease.lease,
         job=started.id,
         model=plan.model,
         url=url,
         api_key=key,
-        expires_at=iso(effective_expiry(lease.label)),
+        gpu=lease.gpu,
+        price_per_hr=lease.price_per_hr,
+        expires_at=iso(expiry),
+        ttl_remaining_s=max(0, expiry - ctx.clock.now()),
         warnings=[],
         swept=[],
     )
@@ -225,11 +245,22 @@ def _wait_ready(
     url: str,
     key: str,
     plan: _Plan,
+    created: bool,
 ) -> None:
-    deadline = ctx.mono() + READY_DEADLINE_S
-    log_hint = f"Read the log: vasty ssh {lease.lease} -- tail -n 100 /workspace/.vasty/jobs/{job_id}/log"
+    remaining = effective_expiry(lease.label) - ctx.clock.now()
+    by_lease = remaining < READY_DEADLINE_S
+    wait = max(0.0, float(remaining)) if by_lease else READY_DEADLINE_S
+    deadline = ctx.mono() + wait
+    tail = f"vasty ssh {lease.lease} -- tail -n 100 /workspace/.vasty/jobs/{job_id}/log"
+    log_hint = RELEASED_HINT if created else f"Read the log: {tail}"
+    bound = f"up to {int(wait // 60)}m, the lease clock" if by_lease else f"up to {int(wait // 60)}m"
+    ctx.warn(
+        f"vasty: {lease.lease} vllm started as {job_id}; polling /v1/models, "
+        f"{bound}. Log: {tail}"
+    )
     while True:
         if _ready(ctx, target, url, key, plan.bind_local):
+            ctx.warn(f"vasty: {lease.lease} /v1/models answers")
             return
         status = ctx.box.job_status(target, job_id)
         if status.exit is not None or status.state == "exited":
@@ -238,7 +269,10 @@ def _wait_ready(
             message = f"vLLM exited {code} before /v1/models answered."
             raise _serve_failed(ctx, target, lease, job_id, key, message, log_hint, code, plan)
         if ctx.mono() >= deadline:
-            message = f"/v1/models did not answer within {int(READY_DEADLINE_S)}s."
+            if by_lease:
+                message = f"/v1/models did not answer in the {int(wait)}s left on the lease clock when serve started."
+            else:
+                message = f"/v1/models did not answer within {int(wait)}s."
             error = _serve_failed(
                 ctx, target, lease, job_id, key, message, log_hint, None, plan
             )

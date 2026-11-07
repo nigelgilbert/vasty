@@ -12,7 +12,8 @@ A LEASE that matches nothing returns `{lease, already_absent: true}`. A lease
 already in history returns its summary with `already_absent: true` once Vast
 no longer lists its row. While the row is listed, `release` sends the destroy
 again and keeps the history state. An orphan or unreadable row released by
-instance id needs `--yes` or a TTY confirmation. Before destroying, `release`
+its `i-` id is destroyed without a prompt; the typed id is the confirmation.
+Before destroying, `release`
 re-reads the row and aborts with `provider_error` when its `expires` moved
 or its label became unreadable. After a destroy, or when the lease is
 already absent, `release` sends TERM to the lease's recorded follower
@@ -47,15 +48,16 @@ from vasty.models import (
     WarningItem,
 )
 from vasty.output import money
-from vasty.targeting import resolve_lease, resolve_target
+from vasty.targeting import check_selector, resolve_lease, resolve_target
 from vasty.timeutil import format_duration
 
 
 def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     snap = engine.refresh(ctx)
     engine.read_charges(ctx, snap)
+    check_selector(args)
     if args.target is not None:
-        return _release_one(ctx, snap, args.target, bool(args.yes))
+        return _release_one(ctx, snap, args.target)
     resolved = resolve_target(ctx, snap, args, write=True)
     entries: list[BulkEntry] = []
     worst = 0
@@ -72,7 +74,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     return Outcome(result, exit_code=worst, human=_render_bulk(result))
 
 
-def _release_one(ctx: Context, snap: Snapshot, ref: str, yes: bool) -> Outcome:
+def _release_one(ctx: Context, snap: Snapshot, ref: str) -> Outcome:
     try:
         found = resolve_lease(ctx, snap, ref)
     except VastyError as err:
@@ -82,7 +84,7 @@ def _release_one(ctx: Context, snap: Snapshot, ref: str, yes: bool) -> Outcome:
         absent = ReleaseAbsent(ref, True, list(snap.warnings), list(snap.swept))
         return Outcome(absent, human=f"{ref} is already absent.")
     if isinstance(found, Instance):
-        summary = _release_orphan(ctx, snap, found, yes)
+        summary = _release_orphan(ctx, snap, found)
     else:
         summary = release_lease(ctx, snap, found)
     summary.warnings = list(snap.warnings)
@@ -117,7 +119,7 @@ def _destroy(ctx: Context, snap: Snapshot, lease: CachedLease) -> ReleaseSummary
                 raise VastyError(
                     "provider_error",
                     f"Lease {lease.lease}'s label is unreadable.",
-                    f"vasty release {orphan_id(lease.instance_id)} --yes",
+                    f"vasty release {orphan_id(lease.instance_id)}",
                 )
             if row is not None:
                 raise VastyError(
@@ -144,40 +146,21 @@ def summarize(
     lease: CachedLease, now: int, snap: Snapshot, already_absent: bool = False
 ) -> ReleaseSummary:
     """Build the release summary from the cached lease."""
-    jobs = [views.job_view(job, now, lease.state) for job in lease.jobs]
+    jobs = [views.job_view(job, now, lease) for job in lease.jobs]
     return ReleaseSummary(
         lease=lease.lease,
         name=lease.label.name,
         uptime_s=views.uptime_s(lease, now),
         cost=views.lease_cost(lease.instance_id, snap.charges),
         jobs=jobs,
-        destroy_pending=True if lease.destroy_pending else None,
         already_absent=True if already_absent else None,
     )
 
 
-def _release_orphan(ctx: Context, snap: Snapshot, inst: Instance, yes: bool) -> ReleaseSummary:
-    ref = orphan_id(inst.id)
-    if not yes:
-        if not ctx.stdin_tty:
-            raise VastyError(
-                "confirmation_required",
-                f"{ref} is an instance vasty did not create.",
-                f"Pass --yes to destroy it: vasty release {ref} --yes.",
-            )
-        gpu = inst.gpu_name or "unknown GPU"
-        ctx.stderr.write(f"Destroy {ref} ({gpu}, ${money(inst.dph_total):.2f}/hr)? [y/N] ")
-        ctx.stderr.flush()
-        answer = ctx.stdin.readline().strip().lower()
-        if answer not in ("y", "yes"):
-            raise VastyError(
-                "confirmation_required",
-                f"Release of {ref} cancelled.",
-                f"Pass --yes to destroy it: vasty release {ref} --yes.",
-            )
+def _release_orphan(ctx: Context, snap: Snapshot, inst: Instance) -> ReleaseSummary:
     ctx.provider.destroy(inst.id)
     cost = views.lease_cost(inst.id, snap.charges)
-    return ReleaseSummary(lease=ref, name=None, uptime_s=None, cost=cost, jobs=[])
+    return ReleaseSummary(lease=orphan_id(inst.id), name=None, uptime_s=None, cost=cost, jobs=[])
 
 
 def _entry_data(summary: ReleaseSummary) -> dict[str, Any]:
@@ -187,8 +170,6 @@ def _entry_data(summary: ReleaseSummary) -> dict[str, Any]:
         "cost": summary.cost,
         "jobs": summary.jobs,
     }
-    if summary.destroy_pending is not None:
-        data["destroy_pending"] = summary.destroy_pending
     if summary.already_absent is not None:
         data["already_absent"] = summary.already_absent
     return data
@@ -205,10 +186,7 @@ def _summary_lines(summary: ReleaseSummary) -> list[str]:
     name = f" ({summary.name})" if summary.name else ""
     verb = "already gone" if summary.already_absent else "released"
     uptime = "?" if summary.uptime_s is None else format_duration(summary.uptime_s)
-    head = f"{summary.lease}{name} {verb}  uptime {uptime}  cost {_cost(summary.cost)}"
-    if summary.destroy_pending:
-        head += "  destroy pending"
-    lines = [head]
+    lines = [f"{summary.lease}{name} {verb}  uptime {uptime}  cost {_cost(summary.cost)}"]
     for job in summary.jobs:
         code = job.state if job.exit is None else f"exit {job.exit}"
         took = "" if job.duration_s is None else f"  {format_duration(job.duration_s)}"
@@ -239,7 +217,6 @@ def _render_bulk(result: BulkResult) -> str:
                 uptime_s=entry.data.get("uptime_s"),
                 cost=entry.data.get("cost"),
                 jobs=entry.data.get("jobs", []),
-                destroy_pending=entry.data.get("destroy_pending"),
                 already_absent=entry.data.get("already_absent"),
             )
             lines += _summary_lines(summary)

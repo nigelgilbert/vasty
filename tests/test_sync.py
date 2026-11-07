@@ -42,6 +42,13 @@ def test_pull(harness: Harness, box: int) -> None:
     assert harness.box.rsyncs == [(box, False, "/workspace/out/", "./out/", False, EXCLUDES)]
 
 
+def test_pull_creates_the_local_parent(harness: Harness, box: int) -> None:
+    dest = harness.home / "runs" / "a" / "out"
+    code, _, _ = sync(harness, "ft", "pull", "/workspace/out", str(dest))
+    assert code == 0
+    assert dest.parent.is_dir() and not dest.exists()
+
+
 def test_pull_rejects_delete(harness: Harness, box: int) -> None:
     code, data, _ = sync(harness, "ft", "pull", "--delete", "a", "b")
     assert code == 1 and data["error"] == "invalid_arguments"

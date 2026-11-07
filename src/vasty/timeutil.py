@@ -7,7 +7,6 @@ parses and `30m1h`, `1h1h`, `1h0m` and `0s` return `invalid_arguments`.
 
 from __future__ import annotations
 
-import calendar
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -18,12 +17,7 @@ from vasty.errors import invalid
 
 UNITS: dict[str, int] = {"d": 86400, "h": 3600, "m": 60, "s": 1}
 _PART = re.compile(r"([0-9]+)([dhms])")
-_RFC3339 = re.compile(
-    r"([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt ]([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?"
-    r"(?:([Zz])|([+-])([0-9]{2}):([0-9]{2}))"
-)
 _DURATION_HINT = "Use a positive duration such as 30m, 2h or 1h30m."
-_TIME_HINT = "Use RFC 3339 with an offset, such as 2026-10-29T01:04:00Z."
 
 
 def parse_duration(text: str) -> int:
@@ -96,28 +90,6 @@ def _two(big: int, big_unit: str, small: int, small_unit: str, pad: bool) -> str
     if small:
         return f"{big}{big_unit}{small}{small_unit}"
     return f"{big}{big_unit}"
-
-
-def parse_time(text: str) -> int:
-    """Parse an RFC 3339 timestamp with an offset into UTC epoch seconds.
-
-    Fractional seconds are dropped. A time without an offset returns `invalid_arguments`.
-    """
-    match = _RFC3339.fullmatch(text)
-    if match is None:
-        raise invalid(f"Invalid time {text!r}.", _TIME_HINT)
-    year, month, day, hour, minute, second = (int(match.group(i)) for i in range(1, 7))
-    try:
-        datetime(year, month, day, hour, minute, second)
-    except ValueError:
-        raise invalid(f"Invalid time {text!r}.", _TIME_HINT) from None
-    offset = 0
-    if match.group(9):
-        off_h, off_m = int(match.group(10)), int(match.group(11))
-        if off_h > 23 or off_m > 59:
-            raise invalid(f"Invalid time {text!r}.", _TIME_HINT)
-        offset = (off_h * 3600 + off_m * 60) * (1 if match.group(9) == "+" else -1)
-    return calendar.timegm((year, month, day, hour, minute, second)) - offset
 
 
 @overload

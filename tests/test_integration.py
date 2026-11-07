@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from fakes import Harness, add_lease, make_offer
 
+from vasty.commands import run
 from vasty.labels import parse
 from vasty.models import CreateRequest, Instance, Label
 from vasty.provider import build_offer_query
@@ -44,7 +45,7 @@ def test_auto_reserved_run_releases_the_box(h: Harness) -> None:
     assert len(h.provider.created) == 1
     label = parse(h.provider.created[0].label)
     assert isinstance(label, Label)
-    assert label.ttl == 7200
+    assert label.ttl == 1800
 
 
 def test_auto_reserved_run_passes_remote_exit_code(h: Harness) -> None:
@@ -84,7 +85,7 @@ def idle(data: dict[str, Any]) -> list[tuple[str, str, str]]:
 
 def test_auto_reserved_run_warns_idle_box_available(h: Harness) -> None:
     add_lease(h, "l-0000a001", gpu_name="RTX 3060", gpu_ram_gb=12.0)
-    code, data = run_json(h, "run", "--", "python", "train.py")
+    code, data = run_json(h, "run", "--ttl", "2h", "--", "python", "train.py")
     assert code == 0, data
     assert idle(data) == [(
         "l-0000a001",
@@ -122,26 +123,32 @@ def test_serve_failure_releases_reserved_box(h: Harness) -> None:
     assert code == 2
     assert data["error"] == "serve_failed"
     assert "log_tail" in data["details"]
+    assert data["details"]["destroyed"] is True
     assert h.provider.instances == {}
 
 
 def test_spending_commands_make_no_balance_or_charges_call(h: Harness) -> None:
-    """`reserve`, `extend`, `run`, `serve` and `tag` leave Vast's billing endpoints alone."""
+    """`reserve`, `extend`, `run --on`, `serve` and `tag` leave Vast's billing endpoints alone.
+
+    An auto-reserved `run` reads charges once for its release's `cost`.
+    """
     orphan = h.provider.add_instance(id=55120)
     h.box.state(orphan.id)
     steps = [
         ["reserve", "--name", "ft", "--ttl", "1h"],
         ["extend", "ft", "--by", "30m"],
         ["run", "--on", "ft", "--", "true"],
-        ["run", "--", "true"],
         ["serve", "--on", "ft", "--model", "Qwen/Qwen3-14B-AWQ"],
-        ["tag", "ft", "--set-group", "exp"],
+        ["tag", "ft", "--group", "exp"],
         ["tag", "i-55120", "--ttl", "30m"],
     ]
     for argv in steps:
         code, data = run_json(h, *argv)
         assert code == 0, (argv, data)
     assert [call for call, _ in h.provider.calls if call in ("balance", "charges")] == []
+    code, data = run_json(h, "run", "--", "true")
+    assert code == 0 and data["released"] is True, data
+    assert [call for call, _ in h.provider.calls if call in ("balance", "charges")] == ["charges"]
 
 
 def test_post_training_workflow(h: Harness, tmp_path: Any) -> None:
@@ -156,7 +163,7 @@ def test_post_training_workflow(h: Harness, tmp_path: Any) -> None:
     assert code == 0, job
     code, ext = run_json(h, "extend", "ft", "--by", "1h")
     assert code == 0, ext
-    assert ext["ttl_remaining_s"] == 4 * 3600
+    assert ext["ttl_remaining_s"] == 4 * 3600 - run.DETACH_CHECK_S
     code, rel = run_json(h, "release", "ft")
     assert code == 0, rel
     assert rel["jobs"][0]["job"] == "j-1" and "id" not in rel["jobs"][0]

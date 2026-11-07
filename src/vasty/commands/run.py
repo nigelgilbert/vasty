@@ -1,9 +1,11 @@
 """`vasty run`.
 
-Without `--on`, `run` reserves a box with `run_ttl` (or `--ttl`), runs the
+Without `--on`, `run` reserves a box with the `ttl` setting, runs the
 command and releases the box when the command exits. `--detach` and `--name`
 leave the box alive. Any exception before the job is saved to the cache
 releases a box this call created. `--on LEASE` reuses a box and leaves it alive.
+`--detach` reads the job once `DETACH_CHECK_S` seconds after the start and
+reports an exit it finds. A failed read reports the job as running.
 
 Every job starts under tmux in `/workspace` and is recorded in the cache. An
 attached run streams the log to stdout in human mode and to stderr in JSON
@@ -18,7 +20,9 @@ the lease, job id, expiry and recovery commands on stderr, leaves the box up
 and propagates. SIGINT forwards `INT` to the job, waits
 up to 10s for it to exit, and exits 130. After the job exits or SIGINT
 arrives, an auto-reserved box is released even when saving the job or the
-10s wait raises, and the exception then propagates. `swept` lists the
+10s wait raises, and the exception then propagates. A box this call
+released reports its final `expires_at` and the release's `uptime_s` and
+`cost`, read the way `release` reads them. `swept` lists the
 entries of every refresh this call made: the first one, the reserve wait, and
 the lost-attach or release refresh.
 """
@@ -55,32 +59,31 @@ from vasty.models import (
     HISTORY_STATES,
     CachedLease,
     Job,
+    ReleaseSummary,
     RunAttachedResult,
     RunDetachedResult,
     SweptEntry,
     WarningItem,
 )
 from vasty.onstart import WORKDIR
+from vasty.output import money
 from vasty.remote import SshTarget
-from vasty.state import effective_expiry, fix_for
+from vasty.state import EXPIRING_CODES, EXPIRY_WARN_S, effective_expiry, fix_for
+from vasty.state import lease_warnings as state_warnings
 from vasty.timeutil import format_duration, format_minutes_up, iso
 
 INTERRUPT_WAIT_S = 10.0
 INTERRUPT_EXIT = 130
 LOST_EXIT = 2
+DETACH_CHECK_S = 2
 
 
-def auto_ttl(ctx: Context) -> int:
-    """Return `--ttl` when given, else the profile's `run_ttl`."""
-    settings = ctx.settings
-    return settings.ttl if settings.sources.get("ttl") == "flag" else settings.run_ttl
-
-
-def release_quietly(ctx: Context, lease: CachedLease) -> tuple[bool, list[SweptEntry]]:
+def release_quietly(ctx: Context, lease: CachedLease) -> tuple[ReleaseSummary | None, list[SweptEntry]]:
     """Refresh, then release the lease.
 
-    Return whether this call destroyed the lease and the `swept` entries of
-    the refresh. A failure prints one stderr line naming the lease and the fix.
+    Return the release summary when this call destroyed the lease, else None,
+    and the `swept` entries of the refresh. A failure prints one stderr line
+    naming the lease and the fix.
     """
     from vasty.commands.release import release_lease
 
@@ -89,11 +92,13 @@ def release_quietly(ctx: Context, lease: CachedLease) -> tuple[bool, list[SweptE
         snap = engine.refresh(ctx, probe=False)
         swept = list(snap.swept)
         fresh = snap.leases.get(lease.lease, lease)
+        engine.read_charges(ctx, snap)
         summary = release_lease(ctx, snap, fresh)
     except VastyError as err:
         ctx.warn(f"vasty: could not release {lease.lease}: {err.message} Run vasty release {lease.lease}.")
-        return False, swept
-    return not summary.already_absent or any(e.lease == lease.lease and e.ok for e in swept), swept
+        return None, swept
+    released = not summary.already_absent or any(e.lease == lease.lease and e.ok for e in swept)
+    return (summary if released else None), swept
 
 
 @contextmanager
@@ -109,12 +114,12 @@ def _release_on_error(ctx: Context, lease: CachedLease, flag: bool) -> Iterator[
 
 def _released_swept(
     ctx: Context, lease: CachedLease, release_on_exit: bool, swept: list[SweptEntry]
-) -> tuple[bool, list[SweptEntry]]:
+) -> tuple[ReleaseSummary | None, list[SweptEntry]]:
     """Release the lease when `release_on_exit` is set and add its refresh's new entries to `swept`."""
     if not release_on_exit:
-        return False, swept
-    released, more = release_quietly(ctx, lease)
-    return released, merge_swept(swept, more)
+        return None, swept
+    summary, more = release_quietly(ctx, lease)
+    return summary, merge_swept(swept, more)
 
 
 def push_dir(ctx: Context, target: SshTarget, directory: str) -> None:
@@ -131,9 +136,9 @@ def push_dir(ctx: Context, target: SshTarget, directory: str) -> None:
 
 
 def warn_if_expiring(ctx: Context, lease: CachedLease, now: int) -> None:
-    """Print a stderr warning and the `extend` command when the clock is under `warn_before_expiry`."""
+    """Print a stderr warning and the `extend` command when the clock is under `EXPIRY_WARN_S`."""
     remaining = effective_expiry(lease.label) - now
-    if remaining < ctx.settings.warn_before_expiry:
+    if remaining < EXPIRY_WARN_S:
         fix = fix_for("expiring_soon", lease.lease, lease.label.ttl)
         ctx.warn(f"vasty: lease {lease.lease} expires in {format_minutes_up(remaining)}. Extend it: {fix}")
 
@@ -154,7 +159,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     auto = args.on is None
     require_tools(ctx, "ssh", *(["rsync"] if args.sync_dir is not None else []))
     sync_dir = _check_sync_dir(ctx, args.sync_dir) if args.sync_dir is not None else None
-    ttl = auto_ttl(ctx) if auto else 0
+    ttl = ctx.settings.ttl if auto else 0
 
     snap = engine.refresh(ctx)
     warnings: list[WarningItem] = []
@@ -162,7 +167,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
     if auto:
         from vasty.commands import reserve
 
-        reserved = reserve.reserve_lease(ctx, args, snap, ttl=ttl, wait=True)
+        reserved = reserve.reserve_lease(ctx, args, snap, ttl=ttl, verb="run")
         lease = reserved.lease
         warnings = list(reserved.result.warnings)
         swept = merge_swept(list(snap.swept), reserved.result.swept)
@@ -185,17 +190,28 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
 
     if detach:
         log_path = started.log_path or f"{WORKDIR}/.vasty/jobs/{started.id}/log"
+        ctx.sleep(DETACH_CHECK_S)
+        exit_code = _box_exit(ctx, target, started.id)
+        expiry = effective_expiry(lease.label)
         detached = RunDetachedResult(
             lease=lease.lease,
             job=started.id,
+            state="running" if exit_code is None else "exited",
+            exit=exit_code,
+            gpu=lease.gpu,
+            price_per_hr=lease.price_per_hr,
             log_path=log_path,
-            expires_at=iso(effective_expiry(lease.label)),
+            ttl_s=lease.label.ttl,
+            expires_at=iso(expiry),
+            ttl_remaining_s=max(0, expiry - ctx.clock.now()),
             warnings=warnings,
             swept=swept,
         )
         human = (
             f"Started {started.id} on {lease.lease}. Log: {log_path}\n"
             f"Follow it with: vasty ssh {lease.lease} -- tail -f {log_path}"
+        ) if exit_code is None else (
+            f"{started.id} exited {exit_code} within {DETACH_CHECK_S}s. Log: {log_path}"
         )
         return Outcome(detached, human=human)
     return _attach(ctx, lease, target, started, release_on_exit, warnings, swept)
@@ -227,18 +243,48 @@ def _attach(
     with _release_on_error(ctx, lease, release_on_exit):
         finished = _box_finished(ctx, target, job.id) or now
         save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, finished))
-    released, swept = _released_swept(ctx, lease, release_on_exit, swept)
+    summary, swept = _released_swept(ctx, lease, release_on_exit, swept)
+    released = summary is not None
+    warnings = _expiry_after_job(warnings, lease, released, ctx.clock.now())
+    expires_at, ttl_remaining_s = _clock(ctx, lease, released)
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=code, duration_s=max(0, finished - started_at),
-        released=released, warnings=warnings, swept=swept,
+        gpu=lease.gpu, price_per_hr=lease.price_per_hr, released=released, ttl_s=lease.label.ttl, expires_at=expires_at, ttl_remaining_s=ttl_remaining_s,
+        uptime_s=summary.uptime_s if summary else None, cost=summary.cost if summary else None,
+        warnings=warnings, swept=swept,
     )
     return Outcome(result, exit_code=code, human=_human(result))
+
+
+def _expiry_after_job(
+    warnings: list[WarningItem], lease: CachedLease, released: bool, now: int
+) -> list[WarningItem]:
+    """Replace the lease's expiry warning with one read after the job ended. Drop it when the box was released."""
+    kept = [w for w in warnings if w.lease != lease.lease or w.code not in EXPIRING_CODES]
+    if released:
+        return kept
+    fresh = [w for w in state_warnings(lease, now) if w.code in EXPIRING_CODES]
+    return merge_warnings(kept, fresh)
+
+
+def _clock(ctx: Context, lease: CachedLease, released: bool) -> tuple[str | None, int | None]:
+    """Return the lease's `expires_at` and `ttl_remaining_s`, with a None `ttl_remaining_s` when the box was released."""
+    expiry = effective_expiry(lease.label)
+    return iso(expiry), None if released else max(0, expiry - ctx.clock.now())
 
 
 def _box_finished(ctx: Context, target: SshTarget, job_id: str) -> int | None:
     """Return the `finished_at` the box recorded for the job, or None when the read fails."""
     try:
         return ctx.box.job_status(target, job_id).finished_at
+    except VastyError:
+        return None
+
+
+def _box_exit(ctx: Context, target: SshTarget, job_id: str) -> int | None:
+    """Return the exit code the box recorded for the job, or None while it runs or when the read fails."""
+    try:
+        return ctx.box.job_status(target, job_id).exit
     except VastyError:
         return None
 
@@ -291,8 +337,11 @@ def _lost(
     if error == "box_unreachable":
         _warn_quietly(ctx, f"vasty: lost the connection to {lease.lease}; the box stays up. "
                            f"Check it with vasty status {lease.lease}.")
+    expires_at, ttl_remaining_s = _clock(ctx, lease, False)
     result = RunAttachedResult(
-        lease=lease.lease, job=job.id, exit=None, duration_s=duration, released=False,
+        lease=lease.lease, job=job.id, exit=None, duration_s=duration,
+        gpu=lease.gpu, price_per_hr=lease.price_per_hr, released=False,
+        ttl_s=lease.label.ttl, expires_at=expires_at, ttl_remaining_s=ttl_remaining_s, uptime_s=None, cost=None,
         warnings=warnings, swept=swept, error=error,
     )
     return Outcome(result, exit_code=LOST_EXIT, human=_human(result))
@@ -320,10 +369,14 @@ def _interrupted(
             code = exit_code = status.exit
             end = status.finished_at or end
             save_lease(ctx, lease, lambda record: finish_job(record, job.id, code, end))
-    released, swept = _released_swept(ctx, lease, release_on_exit, swept)
+    summary, swept = _released_swept(ctx, lease, release_on_exit, swept)
+    released = summary is not None
+    expires_at, ttl_remaining_s = _clock(ctx, lease, released)
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=exit_code, duration_s=max(0, end - started_at),
-        released=released, warnings=warnings, swept=swept,
+        gpu=lease.gpu, price_per_hr=lease.price_per_hr, released=released, ttl_s=lease.label.ttl, expires_at=expires_at, ttl_remaining_s=ttl_remaining_s,
+        uptime_s=summary.uptime_s if summary else None, cost=summary.cost if summary else None,
+        warnings=warnings, swept=swept,
     )
     return Outcome(result, exit_code=INTERRUPT_EXIT, human=_human(result))
 
@@ -337,4 +390,6 @@ def _human(result: RunAttachedResult) -> str:
     else:
         head = f"{result.job} on {result.lease} exited {result.exit} after {took}"
     tail = f"; released {result.lease}" if result.released else f"; {result.lease} stays up"
+    if result.released and result.uptime_s is not None and result.cost is not None:
+        tail += f" after {format_duration(result.uptime_s)} up, ${money(result.cost):.2f}"
     return head + tail
