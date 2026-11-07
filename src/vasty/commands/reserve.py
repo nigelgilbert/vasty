@@ -455,7 +455,7 @@ def _give_up(ctx: Context, lease: CachedLease, created: bool, err: _E) -> _E:
     """
     destroyed = created and _destroy_created(ctx, lease)
     if isinstance(err, VastyError):
-        _name_lease(err, lease, destroyed)
+        name_lease(err, lease, destroyed)
     return err
 
 
@@ -478,7 +478,7 @@ def _destroy_created(ctx: Context, lease: CachedLease) -> bool:
     return True
 
 
-def _name_lease(err: VastyError, lease: CachedLease, destroyed: bool) -> VastyError:
+def name_lease(err: VastyError, lease: CachedLease, destroyed: bool) -> VastyError:
     """Add `lease` and `destroyed` to the details of `err` and return it."""
     err.details = {**(err.details or {}), "lease": lease.lease, "destroyed": destroyed}
     return err
@@ -570,9 +570,9 @@ def wait_ready(
         now = snap.now
         fresh = snap.leases.get(lease.lease)
         if (fresh is None or fresh.state in HISTORY_STATES) and lease.running_at is None:
-            raise _name_lease(_not_ready(fresh or lease, verb), lease, _box_gone(fresh))
+            raise name_lease(_not_ready(fresh or lease, verb), lease, _box_gone(fresh))
         if fresh is None or fresh.state in HISTORY_STATES:
-            raise _name_lease(VastyError(
+            raise name_lease(VastyError(
                 "box_unreachable",
                 f"Lease {lease.lease} ended before it became ready.",
                 f"Run vasty status {lease.lease}, then vasty reserve again.",

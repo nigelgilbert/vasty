@@ -143,7 +143,7 @@ def execute(ctx: Context, args: argparse.Namespace) -> Outcome:
 
             summary, _ = release_quietly(ctx, lease)
             if isinstance(err, VastyError):
-                reserve._name_lease(err, lease, summary is not None or _unlisted(ctx, lease))
+                reserve.name_lease(err, lease, summary is not None or _unlisted(ctx, lease))
         raise
     result.swept = swept
     result.warnings = merge_warnings(warnings, lease_warnings(ctx, snap, lease, ctx.clock.now()))
