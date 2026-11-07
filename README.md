@@ -192,7 +192,7 @@ Every JSON result except `config`, `completion` and error objects carries `warni
 | `provider_error` | 2 | a provider call fails |
 | `box_unreachable` | 2 | the box never became ready or stopped answering SSH |
 | `sync_failed` | 2 | rsync fails |
-| `serve_failed` | 2 | the inference server exits or times out before `/v1/models` answers; `details` carries `exit` and `lease`, plus `log_tail` when the read succeeds. When `log_tail` holds `Error 804`, the host driver is below the image's CUDA, and the hint reads `vasty serve --model M --image IMAGE --cuda 13` with the caller's `--ttl` and `--name` |
+| `serve_failed` | 2 | the inference server exits or times out before `/v1/models` answers; `details` carries `exit` and `lease`, plus `log_tail` when the read succeeds. The wait uses the clock read when it starts, so an `extend` during `serve` leaves the wait where it is. When `log_tail` holds `Error 804`, the host driver is below the image's CUDA, and the hint reads `vasty serve --model M --image IMAGE --cuda 13` with the caller's `--ttl` and `--name` |
 | `port_mapping_missing` | 2 | a required port has no external mapping at the readiness deadline |
 
 A bulk command exits with the highest exit code among its failed entries. Parser errors use the same error object. An error after `reserve`, `run` or `serve` creates a box carries `details.lease` and `details.destroyed`, true when Vast accepted a destroy for the box or no longer lists it.

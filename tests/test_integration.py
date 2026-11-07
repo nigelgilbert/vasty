@@ -123,6 +123,7 @@ def test_serve_failure_releases_reserved_box(h: Harness) -> None:
     assert code == 2
     assert data["error"] == "serve_failed"
     assert "log_tail" in data["details"]
+    assert data["details"]["destroyed"] is True
     assert h.provider.instances == {}
 
 

@@ -198,7 +198,7 @@ def test_serve_wait_stops_at_the_lease_clock(harness: Harness) -> None:
     start = harness.time.mono_now
     code, data, err = run_serve(harness, "--on", "ft", "--model", QWEN)
     assert code == 2 and data["error"] == "serve_failed"
-    assert data["message"] == "/v1/models did not answer before the lease clock ran out at 1200s."
+    assert data["message"] == "/v1/models did not answer in the 1200s left on the lease clock when serve started."
     assert 1200 <= harness.time.mono_now - start < 1200 + serve.POLL_INTERVAL_S
     assert "polling /v1/models, up to 20m, the lease clock. Log:" in err
     assert state.signals == [("j-1", "TERM")]
@@ -517,6 +517,41 @@ def test_serve_preflight_box_unreachable(
     assert code == 2 and data["error"] == "box_unreachable"
     assert started == []
     assert harness.provider.destroyed == ([] if on else [1001])
+
+
+def test_serve_failed_on_created_box_reports_destroyed_and_drops_ssh_hint(
+    harness: Harness, reserve: FakeReserve
+) -> None:
+    harness.http_status = 503
+    code, data, _ = run_serve(harness, "--model", QWEN)
+    assert code == 2 and data["error"] == "serve_failed"
+    assert data["details"]["lease"] == "l-0000b001" and data["details"]["destroyed"] is True
+    assert data["hint"] == serve.RELEASED_HINT
+    assert harness.provider.destroyed == [1001]
+
+
+def test_serve_failed_counts_a_box_vast_no_longer_lists_as_destroyed(
+    harness: Harness, reserve: FakeReserve
+) -> None:
+    harness.http_status = 503
+    real = harness.box.log_tail
+
+    def tail(target: SshTarget, job_id: str | None, lines: int) -> list[str]:
+        harness.provider.instances.pop(1001, None)
+        return real(target, job_id, lines)
+
+    harness.box.log_tail = tail  # type: ignore[method-assign]
+    code, data, _ = run_serve(harness, "--model", QWEN)
+    assert code == 2 and data["details"]["destroyed"] is True
+    assert harness.provider.destroyed == []
+
+
+def test_serve_failed_reports_a_failed_destroy(harness: Harness, reserve: FakeReserve) -> None:
+    harness.http_status = 503
+    harness.provider.fail["destroy"] = VastyError("provider_error", "boom", "retry")
+    code, data, err = run_serve(harness, "--model", QWEN)
+    assert code == 2 and data["details"]["destroyed"] is False
+    assert "could not release l-0000b001" in err
 
 
 def test_serve_failure_keeps_reused_box(harness: Harness, reserve: FakeReserve, box: int) -> None:
