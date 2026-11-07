@@ -274,6 +274,7 @@ class LeaseView:
     price_per_hr: Decimal
     cost: Decimal | None
     uptime_s: int | None
+    ttl_s: int | None
     expires_at: str | None
     ttl_remaining_s: int | None
     busy: bool | None
@@ -315,6 +316,7 @@ class ReserveResult:
     gpus: int
     vram_gb: float | None
     price_per_hr: Decimal
+    ttl_s: int
     expires_at: str
     ttl_remaining_s: int
     ssh: str | None
@@ -396,6 +398,7 @@ class RunDetachedResult:
     gpu: str | None
     price_per_hr: Decimal
     log_path: str
+    ttl_s: int
     expires_at: str | None
     ttl_remaining_s: int | None
     warnings: list[WarningItem]
@@ -409,6 +412,7 @@ class RunAttachedResult:
     exit: int | None
     duration_s: int | None
     released: bool
+    ttl_s: int
     expires_at: str | None
     ttl_remaining_s: int | None
     uptime_s: int | None

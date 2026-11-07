@@ -24,7 +24,7 @@ from vasty.state import LOAD_WAIT_S
 
 RESULT_KEYS = {
     "lease", "name", "owner", "group", "state", "reused", "gpu",
-    "gpus", "vram_gb", "price_per_hr", "expires_at", "ttl_remaining_s", "ssh", "rsync_target",
+    "gpus", "vram_gb", "price_per_hr", "ttl_s", "expires_at", "ttl_remaining_s", "ssh", "rsync_target",
     "ssh_port", "ports", "warnings", "swept",
 }
 PUB = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample test@host"
@@ -80,6 +80,7 @@ def test_reserve_returns_running_lease(h: Harness) -> None:
     assert data["reused"] is False
     assert (data["gpu"], data["gpus"], data["vram_gb"], data["price_per_hr"]) == (
         "RTX 4090", 1, 24.0, 0.38)
+    assert data["ttl_s"] == 1800
     assert data["expires_at"] == "2026-10-29T01:30:00Z"
     assert data["ttl_remaining_s"] == 1800
     assert data["ssh"] == "ssh -p 41022 root@198.51.100.7"

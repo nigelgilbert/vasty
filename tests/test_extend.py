@@ -80,6 +80,8 @@ def test_extend_returns_the_previous_clock_and_keeps_the_label_ttl(h: Harness) -
         "2026-10-29T01:10:00Z", "2026-10-29T01:30:00Z",
     )
     assert label_of(h, row.id).ttl == 2700
+    _, shown = run_json(h, "status", "ft")
+    assert shown["leases"][0]["ttl_s"] == 2700
 
 
 def test_extend_spawns_a_follower(h: Harness) -> None:

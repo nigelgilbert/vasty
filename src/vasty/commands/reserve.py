@@ -647,6 +647,7 @@ def reserve_result(
         gpus=lease.gpus,
         vram_gb=lease.vram_gb,
         price_per_hr=lease.price_per_hr,
+        ttl_s=lease.label.ttl,
         expires_at=iso(expiry),
         ttl_remaining_s=max(0, expiry - now),
         ssh=endpoint.ssh,

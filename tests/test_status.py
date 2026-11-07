@@ -13,7 +13,7 @@ from vasty.timeutil import iso
 
 LEASE_KEYS = {
     "lease", "name", "group", "owner", "state", "gpu", "gpus",
-    "vram_gb", "price_per_hr", "cost", "uptime_s", "expires_at", "ttl_remaining_s", "busy",
+    "vram_gb", "price_per_hr", "cost", "uptime_s", "ttl_s", "expires_at", "ttl_remaining_s", "busy",
     "jobs",
 }
 TOTALS_KEYS = {
@@ -86,6 +86,7 @@ def test_status_json_shape(account: Harness) -> None:
         "lease": "l-8b12", "name": "eval-2", "group": "exp42", "owner": "claude",
         "state": "running", "gpu": "L40S", "gpus": 1,
         "vram_gb": 24.0, "price_per_hr": 0.82, "cost": None, "uptime_s": 0,
+        "ttl_s": 3600,
         "expires_at": "2026-10-29T01:03:00Z", "ttl_remaining_s": 180, "busy": False, "jobs": [],
     }
 
@@ -93,7 +94,7 @@ def test_status_json_shape(account: Harness) -> None:
 def test_status_orphan_row(account: Harness) -> None:
     row = by_lease(status(account))["i-55120"]
     assert row["state"] == "orphan"
-    for key in ("owner", "expires_at", "ttl_remaining_s", "uptime_s", "busy"):
+    for key in ("owner", "ttl_s", "expires_at", "ttl_remaining_s", "uptime_s", "busy"):
         assert row[key] is None
     assert row["gpu"] == "RTX 3090"
     assert row["price_per_hr"] == 0.22
@@ -424,6 +425,7 @@ def test_pending_lease_has_no_clock(harness: Harness) -> None:
     row = status(harness, "ft")["leases"][0]
     assert row["state"] == "pending"
     assert (row["expires_at"], row["ttl_remaining_s"]) == (None, None)
+    assert row["ttl_s"] == 3600
     assert row["log_tail"] == []
     assert by_lease(status(harness))["l-0000a001"]["expires_at"] is None
     _, out, _ = harness.run("status", tty=True)

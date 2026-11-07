@@ -627,7 +627,7 @@ def reserve_result(lease: Any, now: int, reused: bool, warnings: list[Any], swep
     return ReserveResult(
         lease=lease.lease, name=lease.label.name, owner=lease.label.owner,
         group=lease.label.group, state=lease.state, reused=reused, gpu=lease.gpu, gpus=lease.gpus, vram_gb=lease.vram_gb,
-        price_per_hr=lease.price_per_hr, expires_at=iso(expiry),
+        price_per_hr=lease.price_per_hr, ttl_s=lease.label.ttl, expires_at=iso(expiry),
         ttl_remaining_s=max(0, expiry - now), ssh=point.ssh, rsync_target=point.rsync_target,
         ssh_port=point.ssh_port, ports=point.ports, warnings=list(warnings), swept=list(swept),
     )

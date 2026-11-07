@@ -111,6 +111,7 @@ vasty reserve --name ft --gpu A100 --ttl 3h --json
   "state": "running",
   "gpu": "A100",
   "price_per_hr": 1.80,
+  "ttl_s": 10800,
   "expires_at": "2026-10-29T20:04:00Z",
   "ttl_remaining_s": 10800,
   "ssh": "ssh -p 41022 root@198.51.100.7",
@@ -149,22 +150,24 @@ Every JSON result except `config`, `completion` and error objects carries `warni
 
 | Command | Returns |
 |---|---|
-| `reserve` | the lease: `lease`, `name`, `owner`, `group`, `state`, `reused`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `expires_at`, `ttl_remaining_s`, `ssh`, `rsync_target`, `ssh_port`, `ports` |
+| `reserve` | the lease: `lease`, `name`, `owner`, `group`, `state`, `reused`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `ttl_s`, `expires_at`, `ttl_remaining_s`, `ssh`, `rsync_target`, `ssh_port`, `ports` |
 | `extend` on one lease | `lease`, `previous_expires_at`, `expires_at`, `ttl_remaining_s`. The label's `ttl` keeps the reserve's value |
 | `release` on one lease | `lease`, `uptime_s`, `cost`, `jobs`, and `already_absent` when the lease was already gone |
 | bulk `extend`, `release` | `results`, each with `lease`, `ok` and a nullable `error`; `extend` adds `previous_expires_at` and `expires_at`; `release` adds `name`, `uptime_s`, `cost`, `jobs` and `already_absent` when the lease was already gone, or `name` and `message` when it fails |
 | `tag` | `results`, each with `lease`, `name`, `group`, `owner`, `expires_at`, `ttl_remaining_s` |
-| `status` | `leases`, `totals`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`, and `destroy_pending` while true, from the destroy call until a refresh sees the instance gone from the provider listing. An `expired` lease adds `destroyed_by`, `sweep` or `watchdog`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
+| `status` | `leases`, `totals`. Each lease has `lease`, `name`, `group`, `owner`, `state`, `gpu`, `gpus`, `vram_gb`, `price_per_hr`, `cost`, `uptime_s`, `ttl_s`, `expires_at`, `ttl_remaining_s`, `busy` and `jobs`, and `destroy_pending` while true, from the destroy call until a refresh sees the instance gone from the provider listing. An `expired` lease adds `destroyed_by`, `sweep` or `watchdog`. `expires_at` is null while `pending`. `ttl_remaining_s` is null while `pending` and in `released`, `expired` and `gone`. A single-lease target adds `log_tail` in every state, `[]` when empty |
 | job entry in `status` and `release` `jobs` | `job`, `cmd`, `state`, `exit`, `duration_s`. `state` is `running`, `serving`, `exited`, `killed` or `unknown`. `release` marks live jobs `killed` with a null `exit` and freezes `duration_s`. A job on a history lease stops its `duration_s` at the lease's end. `stop` marks its job `killed` with the job's exit code |
-| attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `expires_at`, `ttl_remaining_s`, `uptime_s`, `cost`, `error`. `expires_at` holds the box's final clock when `released` is true, and `ttl_remaining_s` is null. `uptime_s` and `cost` are null unless `released` is true. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
-| `run --detach` | `lease`, `job`, `state`, `exit`, `gpu`, `price_per_hr`, `log_path`, `expires_at`, `ttl_remaining_s`. `state` and `exit` come from one read 2 seconds after the start: `running` and null while the job runs, `exited` and the code when it has ended |
+| attached `run` | `lease`, `job`, `exit`, `duration_s`, `released`, `ttl_s`, `expires_at`, `ttl_remaining_s`, `uptime_s`, `cost`, `error`. `expires_at` holds the box's final clock when `released` is true, and `ttl_remaining_s` is null. `uptime_s` and `cost` are null unless `released` is true. `error` is null unless the attach was lost, then `box_unreachable` or `lease_expired` with a null `exit` |
+| `run --detach` | `lease`, `job`, `state`, `exit`, `gpu`, `price_per_hr`, `log_path`, `ttl_s`, `expires_at`, `ttl_remaining_s`. `state` and `exit` come from one read 2 seconds after the start: `running` and null while the job runs, `exited` and the code when it has ended |
 | `serve` | `lease`, `job`, `model`, `url`, `api_key`, `gpu`, `price_per_hr`, `expires_at`, `ttl_remaining_s` |
 | `stop` | `lease`, `job`, `cmd`, `state`, `exit`, `duration_s`. `stop` sends TERM to the job's process group, waits up to 10s, then KILL and waits up to 5s. JOB is required when several jobs run. A job still live after KILL keeps its `state` and `stop` exits 2 |
 | `sync` | `lease`, `direction`, `src`, `dest` |
 | `sweep` | `swept`, `warnings` |
 | `config` | `values`, `{key, value, path}` or `profiles` |
 
-`reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `expires_at` and `ttl_remaining_s`.
+`ttl_s` is the reserved clock in seconds, from the label's `ttl`. `extend` leaves it unchanged.
+
+`reserve --name X` on an existing active lease returns it with `reused: true`. Orphans appear in `status` with an `i-` id, `state: "orphan"`, and null `owner`, `ttl_s`, `expires_at` and `ttl_remaining_s`.
 
 `busy` is true when a job vasty started is running, serving or unknown, false on a running lease with none, and null in any other state. Jobs started by hand over `ssh` do not count. `uptime_s` counts from the first sample where Vast reports `running` and is null before it. An orphan's `uptime_s` counts from Vast's `start_date`, and adoption with `tag` restarts it at the adoption time. `--verbose` shows that sample as `running_at`, and `reachable_at` as the last probe that got an answer.
 
