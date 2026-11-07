@@ -517,7 +517,7 @@ def _not_ready(lease: CachedLease, verb: str) -> VastyError:
     status = f"; Vast last reported it {lease.actual_status}" if lease.actual_status else ""
     return VastyError(
         "box_unreachable",
-        f"Lease {lease.lease} did not become ready before its clock ran out{status}.",
+        f"Lease {lease.lease} did not become ready before its {format_duration(lease.label.ttl)} ttl ended{status}.",
         f"Run vasty {verb} again, or pick another offer with --gpu or --region.",
     )
 

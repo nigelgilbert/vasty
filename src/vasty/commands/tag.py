@@ -223,6 +223,7 @@ def adopt(
         _record_miss(ctx, lease)
     except (VastyError, OSError) as err:
         lease.last_provider_error = str(err)
+        ctx.warn(f"vasty: could not guard {lease.lease}, a later command retries: {err}")
     finally:
         engine.store_lease(ctx, lease)
     return lease

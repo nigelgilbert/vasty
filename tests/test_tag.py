@@ -350,6 +350,13 @@ def test_failed_key_attach_writes_a_stderr_line(h: Harness) -> None:
     assert "could not attach the SSH key to l-abababab: boom" in err
 
 
+def test_failed_adoption_writes_a_stderr_line(h: Harness) -> None:
+    orphan(h, reachable=False)
+    code, _, err = h.run("tag", "i-55120", "--ttl", "30m")
+    assert code == 0
+    assert "could not guard l-abababab, a later command retries: " in err
+
+
 def test_adoption_retry_survives_cache_loss(h: Harness) -> None:
     iid = orphan(h, reachable=False)
     run_json(h, "tag", "i-55120", "--ttl", "30m")

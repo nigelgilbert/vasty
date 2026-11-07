@@ -506,6 +506,22 @@ def test_wait_ends_with_box_unreachable_when_loading_never_ends(h: Harness) -> N
     assert len(h.provider.destroyed) == 1
 
 
+def test_sweep_at_a_ttl_equal_to_the_load_deadline_names_the_ttl(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h.provider.start_status = "loading"
+    # Poll every 7s so a refresh lands past the deadline and its sweep runs first.
+    monkeypatch.setattr(h.time, "sleep", lambda seconds: h.time.advance(7))
+    code, data = run_json(h, "reserve", "--ttl", "10m")
+    assert code == 2
+    assert data["error"] == "box_unreachable"
+    assert data["message"] == (
+        "Lease l-abababab did not become ready before its 10m ttl ended; "
+        "Vast last reported it loading."
+    )
+    assert data["details"] == {"lease": "l-abababab", "destroyed": True}
+
+
 def test_wait_gives_up_on_a_created_box_still_loading_at_the_load_deadline(h: Harness) -> None:
     h.provider.start_status = "loading"
     code, data = run_json(h, "reserve", "--ttl", "15m")
@@ -1223,6 +1239,6 @@ def test_lease_swept_by_the_follower_during_wait_reports_destroyed(
     code, data = run_json(h, "reserve", "--ttl", "2m")
     assert code == 2
     assert data["message"] == (
-        "Lease l-abababab did not become ready before its clock ran out; Vast last reported it loading."
+        "Lease l-abababab did not become ready before its 2m ttl ended; Vast last reported it loading."
     )
     assert data["details"] == {"lease": "l-abababab", "destroyed": destroyed}
