@@ -411,6 +411,8 @@ class RunAttachedResult:
     job: str | None
     exit: int | None
     duration_s: int | None
+    gpu: str | None
+    price_per_hr: Decimal
     released: bool
     ttl_s: int
     expires_at: str | None

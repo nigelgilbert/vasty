@@ -249,7 +249,7 @@ def _attach(
     expires_at, ttl_remaining_s = _clock(ctx, lease, released)
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=code, duration_s=max(0, finished - started_at),
-        released=released, ttl_s=lease.label.ttl, expires_at=expires_at, ttl_remaining_s=ttl_remaining_s,
+        gpu=lease.gpu, price_per_hr=lease.price_per_hr, released=released, ttl_s=lease.label.ttl, expires_at=expires_at, ttl_remaining_s=ttl_remaining_s,
         uptime_s=summary.uptime_s if summary else None, cost=summary.cost if summary else None,
         warnings=warnings, swept=swept,
     )
@@ -339,7 +339,8 @@ def _lost(
                            f"Check it with vasty status {lease.lease}.")
     expires_at, ttl_remaining_s = _clock(ctx, lease, False)
     result = RunAttachedResult(
-        lease=lease.lease, job=job.id, exit=None, duration_s=duration, released=False,
+        lease=lease.lease, job=job.id, exit=None, duration_s=duration,
+        gpu=lease.gpu, price_per_hr=lease.price_per_hr, released=False,
         ttl_s=lease.label.ttl, expires_at=expires_at, ttl_remaining_s=ttl_remaining_s, uptime_s=None, cost=None,
         warnings=warnings, swept=swept, error=error,
     )
@@ -373,7 +374,7 @@ def _interrupted(
     expires_at, ttl_remaining_s = _clock(ctx, lease, released)
     result = RunAttachedResult(
         lease=lease.lease, job=job.id, exit=exit_code, duration_s=max(0, end - started_at),
-        released=released, ttl_s=lease.label.ttl, expires_at=expires_at, ttl_remaining_s=ttl_remaining_s,
+        gpu=lease.gpu, price_per_hr=lease.price_per_hr, released=released, ttl_s=lease.label.ttl, expires_at=expires_at, ttl_remaining_s=ttl_remaining_s,
         uptime_s=summary.uptime_s if summary else None, cost=summary.cost if summary else None,
         warnings=warnings, swept=swept,
     )

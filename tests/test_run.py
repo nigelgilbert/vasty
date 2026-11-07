@@ -44,7 +44,8 @@ def test_run_on_streams_to_stderr_in_json_and_passes_exit(harness: Harness, box:
     code, data, err = run(harness, "--on", "ft", "--", "python", "train.py", "--lr", "1e-4")
     assert code == 3
     assert data == {
-        "lease": "l-0000a001", "job": "j-1", "exit": 3, "duration_s": 0, "released": False,
+        "lease": "l-0000a001", "job": "j-1", "exit": 3, "duration_s": 0,
+        "gpu": "RTX 3090", "price_per_hr": 0.22, "released": False,
         "ttl_s": 3600, "expires_at": "2026-10-29T01:50:00Z", "ttl_remaining_s": 3000,
         "uptime_s": None, "cost": None, "warnings": [], "swept": [], "error": None,
     }
@@ -555,6 +556,7 @@ def test_auto_run_released_box_reports_its_final_clock(harness: Harness, reserve
     assert code == 0 and data["released"] is True
     assert data["expires_at"] == "2026-10-29T01:30:00Z" and data["ttl_remaining_s"] is None
     assert data["ttl_s"] == 1800
+    assert (data["gpu"], data["price_per_hr"]) == ("RTX 4090", 0.38)
 
 
 def test_auto_run_released_box_reports_uptime_and_cost(harness: Harness, reserve: FakeReserve) -> None:
@@ -577,6 +579,7 @@ def test_lost_attach_reports_the_clock(harness: Harness, box: int) -> None:
     assert code == 2 and data["released"] is False
     assert (data["expires_at"], data["ttl_remaining_s"]) == ("2026-10-29T01:50:00Z", 3000)
     assert data["ttl_s"] == 3600
+    assert (data["gpu"], data["price_per_hr"]) == ("RTX 3090", 0.22)
 
 
 def test_sigint_on_kept_box_reports_the_clock(harness: Harness, box: int) -> None:
@@ -585,6 +588,7 @@ def test_sigint_on_kept_box_reports_the_clock(harness: Harness, box: int) -> Non
     assert code == 130 and data["released"] is False
     assert (data["expires_at"], data["ttl_remaining_s"]) == ("2026-10-29T01:50:00Z", 2990)
     assert data["ttl_s"] == 3600
+    assert (data["gpu"], data["price_per_hr"]) == ("RTX 3090", 0.22)
 
 
 def test_auto_run_reuses_named_box(harness: Harness, reserve: FakeReserve, box: int) -> None:
